@@ -187,6 +187,5 @@ O projeto está pronto para uso em produção e pode ser facilmente mantido e ex
 ---
 
 **Data do Relatório:** 20 de Julho de 2025  
-**Versão:** 2.0 (Corrigida)  
-**Autor:** Manus AI
+**Versão:** 2.0 (Corrigida)
 
