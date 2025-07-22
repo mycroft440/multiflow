@@ -1,0 +1,14 @@
+[package]
+name = "rusty_socks_proxy"
+version = "1.0.0"
+edition = "2021"
+authors = ["MultiFlow Team"]
+description = "A simple SOCKS5 proxy server written in Rust"
+
+[dependencies]
+# No external dependencies needed for basic SOCKS5 functionality
+
+[[bin]]
+name = "rusty_socks_proxy"
+path = "main.rs"
+
