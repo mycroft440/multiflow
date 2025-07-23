@@ -90,7 +90,7 @@ start_dtproxy_menu() {
     
     echo -e "${YELLOW}[INFO]${NC} Iniciando dtproxy na porta $port_choice..."
     
-    nohup "$DTPROXY_EXEC" --port "$port_choice" --http > /dev/null 2>&1 &
+    nohup "$DTPROXY_EXEC" proxy --port "$port_choice" --http > /dev/null 2>&1 &
     local dtproxy_pid=$!
     
     sleep 2
@@ -153,7 +153,7 @@ add_port() {
         echo -e "${RED}[ERRO]${NC} Porta $port_to_add já está em uso por outro processo."
     else
         echo -e "${YELLOW}[INFO]${NC} Iniciando dtproxy na porta $port_to_add..."
-        nohup "$DTPROXY_EXEC" --port "$port_to_add" --http > /dev/null 2>&1 &
+        nohup "$DTPROXY_EXEC" proxy --port "$port_to_add" --http > /dev/null 2>&1 &
         sleep 2
         
         if pgrep -f "dtproxy.*--port $port_to_add" >/dev/null; then
@@ -406,7 +406,7 @@ alter_dtproxy_port() {
     sleep 2
     
     echo -e "${YELLOW}[INFO]${NC} Iniciando dtproxy na nova porta $new_port..."
-    nohup "$DTPROXY_EXEC" --port "$new_port" --http > /dev/null 2>&1 &
+    nohup "$DTPROXY_EXEC" proxy --port "$new_port" --http > /dev/null 2>&1 &
     sleep 2
     
     if pgrep -f "dtproxy.*--port $new_port" >/dev/null; then
@@ -502,5 +502,3 @@ dtproxy_menu() {
 
 # Inicia o menu principal
 main_menu
-
-
