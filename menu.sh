@@ -59,8 +59,8 @@ main_menu() {
         echo ""
         read -p "Digite sua opcao: " main_choice
         case $main_choice in
-            1) sudo ./new_ssh_user_management.sh ;;
-            2) sudo ./dtproxy_project/dtproxy_menu.sh ;;
+            1) sudo /opt/rusty_socks_proxy/new_ssh_user_management.sh ;;
+            2) sudo /usr/local/bin/dtproxy_menu ;;
             3) sudo /usr/local/bin/rusty_socks_proxy_menu.sh ;;
             4) sudo /usr/local/bin/openvpn_manager.sh ;;
             5) sudo /usr/local/bin/ferramentas_otimizacao.sh ;;
@@ -76,5 +76,3 @@ main_menu() {
 
 # Iniciar o menu
 main_menu
-
-
