@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 set -x
 
@@ -20,6 +21,7 @@ readonly DTPROXY_DIR="/opt/dtproxy"
 readonly SSH_USER_MANAGEMENT_SCRIPT="/opt/rusty_socks_proxy/new_ssh_user_management.sh"
 readonly OPENVPN_MANAGER_SCRIPT="/usr/local/bin/openvpn_manager.sh"
 readonly FERRAMENTAS_OTIMIZACAO_SCRIPT="/usr/local/bin/ferramentas_otimizacao.sh"
+readonly SOCKS5_MENU_SCRIPT="/usr/local/bin/rusty_socks_proxy_menu.sh"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Função para exibir mensagens de erro e sair
@@ -181,6 +183,17 @@ install_ferramentas_otimizacao() {
     success_msg "Ferramentas de Otimização instaladas com sucesso."
 }
 
+# Função para instalar o menu SOCKS5
+install_socks5_menu() {
+    info_msg "Instalando menu SOCKS5..."
+    if [[ ! -f "$SCRIPT_DIR/rusty_socks_proxy_menu.sh" ]]; then
+        error_exit "Arquivo rusty_socks_proxy_menu.sh não encontrado em $SCRIPT_DIR."
+    fi
+    sudo cp "$SCRIPT_DIR/rusty_socks_proxy_menu.sh" "$SOCKS5_MENU_SCRIPT" || error_exit "Falha ao copiar script rusty_socks_proxy_menu.sh."
+    sudo chmod +x "$SOCKS5_MENU_SCRIPT" || error_exit "Falha ao dar permissão de execução ao rusty_socks_proxy_menu.sh."
+    success_msg "Menu SOCKS5 instalado com sucesso."
+}
+
 # Função para instalar SOCKS5
 install_socks5_proxy() {
     clear
@@ -211,13 +224,13 @@ install_socks5_proxy() {
     sudo mkdir -p "$SOCKS5_DIR"
     
     info_msg "Copiando executável para $SOCKS5_DIR..."
-    sudo cp "$SCRIPT_DIR/target/release/rusty_socks_proxy" "$SOCKS5_EXEC"
+    sudo cp "$SCRIPT_DIR/target/release/rusty_socks_proxy" "$SOCKS5_EXEC" || error_exit "Falha ao copiar executável rusty_socks_proxy."
     
     info_msg "Copiando arquivo de serviço systemd..."
     if [[ ! -f "$SCRIPT_DIR/rusty_socks_proxy.service" ]]; then
         error_exit "Arquivo rusty_socks_proxy.service não encontrado em $SCRIPT_DIR."
     fi
-    sudo cp "$SCRIPT_DIR/rusty_socks_proxy.service" "$SOCKS5_SERVICE_FILE"
+    sudo cp "$SCRIPT_DIR/rusty_socks_proxy.service" "$SOCKS5_SERVICE_FILE" || error_exit "Falha ao copiar arquivo de serviço systemd."
     
     info_msg "Recarregando daemon systemd, habilitando e iniciando serviço SOCKS5..."
     sudo systemctl daemon-reload
@@ -243,9 +256,12 @@ install_ssh_user_manager
 install_dtproxy
 install_openvpn_manager
 install_ferramentas_otimizacao
+install_socks5_menu
+install_socks5_proxy
 
 # Criar link simbólico para o menu
 info_msg "Criando link simbólico para o menu..."
 sudo ln -sf "$SCRIPT_DIR/menu.sh" /usr/local/bin/menu
 sudo chmod +x /usr/local/bin/menu
 success_msg "Link simbólico criado. Agora você pode acessar o menu digitando 'menu'."
+```
