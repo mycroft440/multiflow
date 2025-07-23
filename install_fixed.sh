@@ -79,7 +79,7 @@ install_ssh_user_manager() {
     info_msg "Instalando gerenciador de usuários SSH..."
     
     if [[ ! -f "$SCRIPT_DIR/new_ssh_user_management.sh" ]]; then
-        error_exit "Arquivo new_ssh_user_management.sh não encontrado."
+        error_exit "Arquivo new_ssh_user_management.sh não encontrado em $SCRIPT_DIR."
     fi
     
     sudo mkdir -p "$PROJECT_DIR" || error_exit "Falha ao criar diretório $PROJECT_DIR."
@@ -89,12 +89,10 @@ install_ssh_user_manager() {
     success_msg "Gerenciador de usuários SSH instalado."
 }
 
-
 # Função para resolver dependência libssl1.1 para dtproxy
 install_libssl1_1() {
     info_msg "Verificando dependência libssl1.1..."
     
-    # Verificar se já está instalada
     if ldconfig -p | grep -q "libssl.so.1.1"; then
         info_msg "libssl1.1 já está instalada."
         return 0
@@ -102,7 +100,6 @@ install_libssl1_1() {
     
     info_msg "Instalando libssl1.1 para compatibilidade com dtproxy..."
     
-    # Tentar instalar via repositório focal (Ubuntu 20.04)
     if ! sudo grep -q "focal" /etc/apt/sources.list.d/focal.list 2>/dev/null; then
         sudo echo "deb http://security.ubuntu.com/ubuntu focal-security main" | sudo tee /etc/apt/sources.list.d/focal.list > /dev/null
         sudo apt update -qq
@@ -113,13 +110,11 @@ install_libssl1_1() {
         return 0
     fi
     
-    # Método alternativo: download direto
     warning_msg "Tentando método alternativo de instalação..."
     
     local temp_dir=$(mktemp -d)
     cd "$temp_dir"
     
-    # URLs para os pacotes .deb
     local libssl_url="http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.20_amd64.deb"
     
     if wget -q "$libssl_url"; then
@@ -140,25 +135,24 @@ install_dtproxy() {
     clear
     echo -e "${BLUE}--- Instalar dtproxy (mod mycroft) ---${NC}"
     
-    # Verificar se os arquivos do dtproxy existem
     local dtproxy_source_dir="$SCRIPT_DIR/dtproxy_project"
     if [[ ! -d "$dtproxy_source_dir" ]]; then
-        error_exit "Diretório dtproxy_project não encontrado."
+        error_exit "Diretório dtproxy_project não encontrado em $SCRIPT_DIR."
     fi
     
-    # Instalar dependência libssl1.1
+    if [[ ! -f "$dtproxy_source_dir/dtproxy_x86_64" || ! -f "$dtproxy_source_dir/dtproxy_menu.sh" ]]; then
+        error_exit "Arquivos dtproxy_x86_64 ou dtproxy_menu.sh não encontrados em $dtproxy_source_dir."
+    fi
+    
     install_libssl1_1
     
     info_msg "Instalando dtproxy..."
     
-    # Criar diretório de instalação
     sudo mkdir -p "$DTPROXY_DIR" || error_exit "Falha ao criar diretório $DTPROXY_DIR."
     
-    # Copiar executável
     sudo cp "$dtproxy_source_dir/dtproxy_x86_64" "$DTPROXY_DIR/dtproxy_x86_64" || error_exit "Falha ao copiar executável dtproxy."
     sudo chmod +x "$DTPROXY_DIR/dtproxy_x86_64" || error_exit "Falha ao dar permissão de execução ao dtproxy."
     
-    # Copiar script de menu
     sudo cp "$dtproxy_source_dir/dtproxy_menu.sh" "/usr/local/bin/dtproxy_menu" || error_exit "Falha ao copiar script de menu dtproxy."
     sudo chmod +x "/usr/local/bin/dtproxy_menu" || error_exit "Falha ao dar permissão de execução ao script de menu dtproxy."
     
@@ -169,7 +163,7 @@ install_dtproxy() {
 install_openvpn_manager() {
     info_msg "Instalando OpenVPN Manager..."
     if [[ ! -f "$SCRIPT_DIR/openvpn_manager.sh" ]]; then
-        error_exit "Arquivo openvpn_manager.sh não encontrado."
+        error_exit "Arquivo openvpn_manager.sh não encontrado em $SCRIPT_DIR."
     fi
     sudo cp "$SCRIPT_DIR/openvpn_manager.sh" "$OPENVPN_MANAGER_SCRIPT" || error_exit "Falha ao copiar script openvpn_manager.sh."
     sudo chmod +x "$OPENVPN_MANAGER_SCRIPT" || error_exit "Falha ao dar permissão de execução ao openvpn_manager.sh."
@@ -180,7 +174,7 @@ install_openvpn_manager() {
 install_ferramentas_otimizacao() {
     info_msg "Instalando Ferramentas de Otimização..."
     if [[ ! -f "$SCRIPT_DIR/ferramentas_otimizacao.sh" ]]; then
-        error_exit "Arquivo ferramentas_otimizacao.sh não encontrado."
+        error_exit "Arquivo ferramentas_otimizacao.sh não encontrado em $SCRIPT_DIR."
     fi
     sudo cp "$SCRIPT_DIR/ferramentas_otimizacao.sh" "$FERRAMENTAS_OTIMIZACAO_SCRIPT" || error_exit "Falha ao copiar script ferramentas_otimizacao.sh."
     sudo chmod +x "$FERRAMENTAS_OTIMIZACAO_SCRIPT" || error_exit "Falha ao dar permissão de execução ao ferramentas_otimizacao.sh."
@@ -202,6 +196,10 @@ install_socks5_proxy() {
         return
     fi
     
+    if [[ ! -f "$SCRIPT_DIR/Cargo.toml" ]]; then
+        error_exit "Arquivo Cargo.toml não encontrado em $SCRIPT_DIR."
+    fi
+    
     info_msg "Compilando o projeto Rust para SOCKS5..."
     (cd "$SCRIPT_DIR" && cargo build --release)
     
@@ -216,6 +214,9 @@ install_socks5_proxy() {
     sudo cp "$SCRIPT_DIR/target/release/rusty_socks_proxy" "$SOCKS5_EXEC"
     
     info_msg "Copiando arquivo de serviço systemd..."
+    if [[ ! -f "$SCRIPT_DIR/rusty_socks_proxy.service" ]]; then
+        error_exit "Arquivo rusty_socks_proxy.service não encontrado em $SCRIPT_DIR."
+    fi
     sudo cp "$SCRIPT_DIR/rusty_socks_proxy.service" "$SOCKS5_SERVICE_FILE"
     
     info_msg "Recarregando daemon systemd, habilitando e iniciando serviço SOCKS5..."
@@ -248,9 +249,3 @@ info_msg "Criando link simbólico para o menu..."
 sudo ln -sf "$SCRIPT_DIR/menu.sh" /usr/local/bin/menu
 sudo chmod +x /usr/local/bin/menu
 success_msg "Link simbólico criado. Agora você pode acessar o menu digitando 'menu'."
-
-# Inicia o menu principal após a instalação
-# O menu principal agora é chamado diretamente pelo script menu.sh
-# main_menu
-
-
