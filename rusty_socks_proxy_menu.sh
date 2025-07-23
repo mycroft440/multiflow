@@ -4,16 +4,17 @@
 # Versão: 1.0
 
 # Cores
-RED=\'\\033[0;31m\'
-GREEN=\'\\033[0;32m\'
-YELLOW=\'\\033[1;33m\'
-BLUE=\'\\033[0;34m\'
-NC=\'\\033[0m\'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 # Configurações
 SOCKS5_DIR="/opt/rusty_socks_proxy"
 SOCKS5_EXEC="$SOCKS5_DIR/rusty_socks_proxy"
 SOCKS5_SERVICE_FILE="/etc/systemd/system/rusty_socks_proxy.service"
+PROJECT_DIR="/opt/multiflow"
 
 # Função para exibir mensagens de erro e sair
 error_exit() {
@@ -56,9 +57,12 @@ install_socks5() {
         return
     fi
     
+    if [[ ! -f "$PROJECT_DIR/Cargo.toml" ]]; then
+        error_exit "Arquivo Cargo.toml não encontrado em $PROJECT_DIR."
+    fi
+    
     info_msg "Compilando o projeto Rust para SOCKS5..."
-    # Assumindo que o código Rust está no diretório pai do script de menu
-    (cd $(dirname $(dirname "${BASH_SOURCE[0]}")) && cargo build --release)
+    (cd "$PROJECT_DIR" && cargo build --release)
     
     if [[ $? -ne 0 ]]; then
         error_exit "Falha ao compilar o projeto Rust."
@@ -68,10 +72,13 @@ install_socks5() {
     sudo mkdir -p "$SOCKS5_DIR"
     
     info_msg "Copiando executável para $SOCKS5_DIR..."
-    sudo cp $(dirname $(dirname "${BASH_SOURCE[0]}"))/target/release/rusty_socks_proxy "$SOCKS5_EXEC"
+    sudo cp "$PROJECT_DIR/target/release/rusty_socks_proxy" "$SOCKS5_EXEC"
     
     info_msg "Copiando arquivo de serviço systemd..."
-    sudo cp $(dirname $(dirname "${BASH_SOURCE[0]}"))/rusty_socks_proxy.service "$SOCKS5_SERVICE_FILE"
+    if [[ ! -f "$PROJECT_DIR/rusty_socks_proxy.service" ]]; then
+        error_exit "Arquivo rusty_socks_proxy.service não encontrado em $PROJECT_DIR."
+    fi
+    sudo cp "$PROJECT_DIR/rusty_socks_proxy.service" "$SOCKS5_SERVICE_FILE"
     
     info_msg "Recarregando daemon systemd, habilitando e iniciando serviço SOCKS5..."
     sudo systemctl daemon-reload
@@ -98,7 +105,7 @@ alter_socks5_port() {
         error_exit "Serviço SOCKS5 não encontrado. Instale-o primeiro."
     fi
     
-    current_port=$(grep -oP \'Environment="SOCKS5_PORT=\\K[0-9]+\' "$SOCKS5_SERVICE_FILE")
+    current_port=$(grep -oP 'Environment="SOCKS5_PORT=\K[0-9]+' "$SOCKS5_SERVICE_FILE")
     info_msg "Porta atual do SOCKS5: ${current_port:-1080}"
     
     read -p "Digite a nova porta para o SOCKS5: " new_port
@@ -139,20 +146,18 @@ open_socks5_port() {
     
     if [[ ! -f "$SOCKS5_SERVICE_FILE" ]]; then
         error_exit "Serviço SOCKS5 não encontrado. Instale-o primeiro."
-    }
+    fi
     
-    current_port=$(grep -oP \'Environment="SOCKS5_PORT=\\K[0-9]+\' "$SOCKS5_SERVICE_FILE")
+    current_port=$(grep -oP 'Environment="SOCKS5_PORT=\K[0-9]+' "$SOCKS5_SERVICE_FILE")
     port=${current_port:-1080}
     
     info_msg "Abrindo porta $port no firewall (UFW)..."
     
-    # Verificar se UFW está instalado
     if ! command -v ufw &> /dev/null; then
         warning_msg "UFW não está instalado. Instalando..."
         sudo apt update && sudo apt install -y ufw
     fi
     
-    # Abrir a porta no UFW
     sudo ufw allow $port/tcp
     
     success_msg "Porta $port aberta no firewall."
@@ -240,5 +245,3 @@ socks5_menu() {
 
 # Inicia o menu principal
 socks5_menu
-
-
