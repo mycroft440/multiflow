@@ -48,6 +48,10 @@ verif_ptrs() {
 # Função para gerar arquivo de configuração do cliente OpenVPN
 newclient() {
     local client_name="$1"
+    if [[ ! -f /etc/openvpn/client-common.txt ]]; then
+        echo -e "${RED}[ERRO]${NC} Arquivo /etc/openvpn/client-common.txt não encontrado."
+        return 1
+    fi
     cp /etc/openvpn/client-common.txt ~/${client_name}.ovpn
     echo "<ca>" >>~/${client_name}.ovpn
     cat /etc/openvpn/easy-rsa/pki/ca.crt >>~/${client_name}.ovpn
@@ -799,5 +803,3 @@ main_menu() {
 
 # Iniciar o menu principal
 main_menu
-
-
