@@ -1,11 +1,8 @@
-```bash
 #!/bin/bash
 
 # MultiFlow - Menu Principal
-# Versão: 2.0 (Corrigida)
+# Versão: 2.1 (Corrigida)
 # Autor: MultiFlow Team
-
-set -euo pipefail  # Modo strict para bash
 
 # Cores para a saída do terminal
 readonly GREEN="\033[1;32m"
@@ -45,7 +42,7 @@ check_services_status() {
     local service_status
 
     for service in "${services[@]}"; do
-        if systemctl is-active --quiet "$service"; then
+        if systemctl is-active --quiet "$service" 2>/dev/null; then
             service_status="${GREEN}Ativo${NC}"
         else
             service_status="${RED}Inativo${NC}"
@@ -54,7 +51,7 @@ check_services_status() {
     done
 
     # Verificar dtproxy (assumindo que é um processo, não um serviço systemd)
-    if pgrep -f "dtproxy_x86_64" > /dev/null; then
+    if pgrep -f "dtproxy_x86_64" > /dev/null 2>&1; then
         dtproxy_status="${GREEN}Ativo${NC}"
     else
         dtproxy_status="${RED}Inativo${NC}"
@@ -141,4 +138,3 @@ main_menu() {
 
 # Iniciar o menu
 main_menu
-```
