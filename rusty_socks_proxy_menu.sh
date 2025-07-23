@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 
 # Menu para gerenciar o SOCKS5
@@ -46,6 +47,18 @@ check_port_in_use() {
     return 1
 }
 
+# Função para verificar dependências Rust
+check_rust_dependencies() {
+    info_msg "Verificando dependências Rust..."
+    if ! command -v cargo &> /dev/null; then
+        error_exit "Rust e Cargo não estão instalados. Execute o script de instalação primeiro."
+    fi
+    if [[ ! -f "$PROJECT_DIR/Cargo.toml" ]]; then
+        error_exit "Arquivo Cargo.toml não encontrado em $PROJECT_DIR."
+    fi
+    info_msg "Dependências Rust verificadas com sucesso."
+}
+
 # Função para instalar SOCKS5
 install_socks5() {
     clear
@@ -57,28 +70,29 @@ install_socks5() {
         return
     fi
     
-    if [[ ! -f "$PROJECT_DIR/Cargo.toml" ]]; then
-        error_exit "Arquivo Cargo.toml não encontrado em $PROJECT_DIR."
-    fi
+    check_rust_dependencies
     
     info_msg "Compilando o projeto Rust para SOCKS5..."
     (cd "$PROJECT_DIR" && cargo build --release)
     
     if [[ $? -ne 0 ]]; then
-        error_exit "Falha ao compilar o projeto Rust."
+        error_exit "Falha ao compilar o projeto Rust. Verifique as dependências no Cargo.toml."
     fi
     
     info_msg "Criando diretório de instalação: $SOCKS5_DIR..."
     sudo mkdir -p "$SOCKS5_DIR"
     
     info_msg "Copiando executável para $SOCKS5_DIR..."
-    sudo cp "$PROJECT_DIR/target/release/rusty_socks_proxy" "$SOCKS5_EXEC"
+    if [[ ! -f "$PROJECT_DIR/target/release/rusty_socks_proxy" ]]; then
+        error_exit "Executável rusty_socks_proxy não encontrado em $PROJECT_DIR/target/release."
+    fi
+    sudo cp "$PROJECT_DIR/target/release/rusty_socks_proxy" "$SOCKS5_EXEC" || error_exit "Falha ao copiar executável."
     
     info_msg "Copiando arquivo de serviço systemd..."
     if [[ ! -f "$PROJECT_DIR/rusty_socks_proxy.service" ]]; then
         error_exit "Arquivo rusty_socks_proxy.service não encontrado em $PROJECT_DIR."
     fi
-    sudo cp "$PROJECT_DIR/rusty_socks_proxy.service" "$SOCKS5_SERVICE_FILE"
+    sudo cp "$PROJECT_DIR/rusty_socks_proxy.service" "$SOCKS5_SERVICE_FILE" || error_exit "Falha ao copiar arquivo de serviço."
     
     info_msg "Recarregando daemon systemd, habilitando e iniciando serviço SOCKS5..."
     sudo systemctl daemon-reload
@@ -245,3 +259,4 @@ socks5_menu() {
 
 # Inicia o menu principal
 socks5_menu
+´´´
