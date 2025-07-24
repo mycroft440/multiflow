@@ -1,10 +1,13 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
+use std::env;
 
 fn main() {
-    let listener = TcpListener::bind("127.0.0.1:1080").expect("Failed to bind to port 1080");
-    println!("SOCKS5 proxy listening on 127.0.0.1:1080");
+    let port = env::var("SOCKS5_PORT").unwrap_or_else(|_| "1080".to_string());
+    let bind_address = format!("127.0.0.1:{}", port);
+    let listener = TcpListener::bind(&bind_address).expect(&format!("Failed to bind to port {}", port));
+    println!("SOCKS5 proxy listening on {}", bind_address);
 
     for stream in listener.incoming() {
         match stream {
@@ -45,4 +48,3 @@ fn handle_client(mut stream: TcpStream) {
         _ => return,
     }
 }
-
