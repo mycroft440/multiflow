@@ -1,0 +1,82 @@
+/* Estilos do Header Compacto e Otimizado */
+.app-header {
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  padding: 0 24px;
+  height: 56px !important; /* Altura compacta e fixa */
+  line-height: 56px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+/* Garantir que o conteúdo interno esteja alinhado verticalmente */
+.app-header .ant-row {
+  height: 100%;
+}
+
+/* Estilização da barra de pesquisa */
+.app-header .ant-input-search {
+  vertical-align: middle;
+}
+
+.app-header .ant-input-affix-wrapper {
+  border-radius: 20px;
+  background-color: #f5f5f5;
+  border: none;
+}
+
+.app-header .ant-input-affix-wrapper:hover,
+.app-header .ant-input-affix-wrapper:focus,
+.app-header .ant-input-affix-wrapper-focused {
+  border-color: #1890ff;
+  background-color: #ffffff;
+}
+
+/* Ícones interativos */
+.app-header .anticon {
+  transition: color 0.3s ease;
+  color: #8c8c8c;
+}
+
+.app-header .anticon:hover {
+  color: #1890ff;
+}
+
+/* Badge de notificações */
+.app-header .ant-badge {
+  vertical-align: middle;
+}
+
+/* Avatar do usuário */
+.app-header .ant-avatar {
+  transition: transform 0.3s ease;
+}
+
+.app-header .ant-avatar:hover {
+  transform: scale(1.1);
+}
+
+/* Responsividade */
+@media (max-width: 768px) {
+  .app-header {
+    padding: 0 16px;
+  }
+  
+  .app-header .ant-input-search {
+    font-size: 14px;
+  }
+  
+  .app-header .anticon {
+    font-size: 16px !important;
+  }
+  
+  .app-header .ant-avatar {
+    width: 28px;
+    height: 28px;
+    line-height: 28px;
+  }
+}
