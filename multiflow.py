@@ -438,6 +438,7 @@ def check_and_install_package(package_name):
             return False
     return True
 
+# Função de instalação do SOCKS5 melhorada - ALTERAÇÃO 3
 def install_socks5():
     print_colored_box("INSTALANDO SOCKS5")
     print("Instalando SOCKS5 e todas as dependências necessárias...")
@@ -464,20 +465,296 @@ def install_socks5():
         print(f"{COLORS.RED}Instalação automática suportada apenas no Linux. Instale manualmente para {sys.platform}.{COLORS.END}")
         return False
 
+    # Verificar e criar diretório src se não existir
+    if not os.path.exists("src"):
+        try:
+            print(f"{COLORS.YELLOW}Diretório 'src' não encontrado. Criando...{COLORS.END}")
+            os.makedirs("src")
+            print(f"{COLORS.GREEN}Diretório 'src' criado com sucesso.{COLORS.END}")
+        except Exception as e:
+            print(f"{COLORS.RED}Erro ao criar diretório src: {e}{COLORS.END}")
+            return False
+    
+    # Verificar se o arquivo socks5_server.cpp existe
+    if not os.path.exists("src/socks5_server.cpp"):
+        print(f"{COLORS.YELLOW}Arquivo src/socks5_server.cpp não encontrado.{COLORS.END}")
+        
+        # Tentar baixar do repositório GitHub
+        try:
+            print("Tentando baixar o arquivo do repositório GitHub...")
+            import urllib.request
+            url = "https://raw.githubusercontent.com/mycroft440/multiflow/refs/heads/main/src/socks5_server.cpp"
+            
+            try:
+                urllib.request.urlretrieve(url, "src/socks5_server.cpp")
+                print(f"{COLORS.GREEN}Arquivo baixado com sucesso!{COLORS.END}")
+            except Exception as e:
+                print(f"{COLORS.YELLOW}Não foi possível baixar do GitHub: {e}{COLORS.END}")
+                print("Criando arquivo socks5_server.cpp localmente...")
+                
+                # Código de implementação simples de um servidor SOCKS5
+                socks5_code = """
+#include <iostream>
+#include <boost/asio.hpp>
+#include <boost/bind.hpp>
+#include <boost/thread.hpp>
+#include <thread>
+#include <mutex>
+#include <memory>
+#include <vector>
+#include <libssh2.h>
+
+using namespace boost::asio;
+using boost::asio::ip::tcp;
+
+class SOCKS5Server {
+private:
+    io_service& io_service_;
+    tcp::acceptor acceptor_;
+    int port_;
+    std::vector<std::thread> threads_;
+    std::mutex mutex_;
+    bool running_;
+
+    enum SOCKS5State {
+        HANDSHAKE,
+        AUTH,
+        REQUEST,
+        CONNECTING,
+        TRANSFERRING,
+        CLOSED
+    };
+
+public:
+    SOCKS5Server(io_service& io_service, int port)
+        : io_service_(io_service),
+          acceptor_(io_service, tcp::endpoint(tcp::v4(), port)),
+          port_(port),
+          running_(true) {
+        std::cout << "SOCKS5 server iniciado na porta " << port << std::endl;
+        start_accept();
+    }
+
+    ~SOCKS5Server() {
+        stop();
+    }
+
+    void stop() {
+        running_ = false;
+        try {
+            acceptor_.close();
+        } catch(...) {}
+        
+        for (auto& t : threads_) {
+            if (t.joinable()) t.join();
+        }
+    }
+
+private:
+    void start_accept() {
+        tcp::socket* socket = new tcp::socket(io_service_);
+        acceptor_.async_accept(*socket,
+            [this, socket](const boost::system::error_code& error) {
+                if (!error) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    threads_.emplace_back(&SOCKS5Server::handle_connection, this, socket);
+                } else {
+                    delete socket;
+                }
+                
+                if (running_) {
+                    start_accept();
+                }
+            });
+    }
+
+    void handle_connection(tcp::socket* client_socket) {
+        std::unique_ptr<tcp::socket> client(client_socket);
+        try {
+            // Implementação básica do protocolo SOCKS5
+            
+            // 1. Handshake
+            unsigned char handshake_buf[258];
+            size_t len = client->read_some(buffer(handshake_buf, sizeof(handshake_buf)));
+            
+            if (len < 3 || handshake_buf[0] != 0x05) {
+                return; // Não é um pedido SOCKS5
+            }
+            
+            // Responder ao handshake - sem autenticação
+            unsigned char handshake_resp[2] = {0x05, 0x00};
+            client->write_some(buffer(handshake_resp, 2));
+            
+            // 2. Processar pedido de conexão
+            unsigned char request_buf[262];
+            len = client->read_some(buffer(request_buf, sizeof(request_buf)));
+            
+            if (len < 5 || request_buf[0] != 0x05 || request_buf[1] != 0x01) {
+                return; // Pedido inválido ou não suportado
+            }
+            
+            // Suporta apenas conexão TCP (CONNECT)
+            if (request_buf[1] != 0x01) {
+                unsigned char reply[10] = {0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+                client->write_some(buffer(reply, 10));
+                return;
+            }
+            
+            // Extrair endereço
+            std::string target_host;
+            int target_port = 0;
+            
+            if (request_buf[3] == 0x01) { // IPv4
+                if (len < 10) return;
+                target_host = std::to_string(request_buf[4]) + "." + 
+                              std::to_string(request_buf[5]) + "." + 
+                              std::to_string(request_buf[6]) + "." + 
+                              std::to_string(request_buf[7]);
+                target_port = (request_buf[8] << 8) | request_buf[9];
+            }
+            else if (request_buf[3] == 0x03) { // Domain name
+                if (len < 7 + request_buf[4]) return;
+                target_host = std::string((char*)&request_buf[5], request_buf[4]);
+                target_port = (request_buf[5 + request_buf[4]] << 8) | 
+                               request_buf[6 + request_buf[4]];
+            }
+            else if (request_buf[3] == 0x04) { // IPv6
+                if (len < 22) return;
+                // IPv6 não implementado nesta versão simplificada
+                unsigned char reply[10] = {0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+                client->write_some(buffer(reply, 10));
+                return;
+            }
+            else {
+                // Tipo de endereço não suportado
+                unsigned char reply[10] = {0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+                client->write_some(buffer(reply, 10));
+                return;
+            }
+            
+            // 3. Conectar ao destino
+            tcp::socket target(io_service_);
+            try {
+                tcp::resolver resolver(io_service_);
+                tcp::resolver::query query(target_host, std::to_string(target_port));
+                tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
+                
+                boost::system::error_code error;
+                boost::asio::connect(target, endpoint_iterator, error);
+                
+                if (error) {
+                    // Erro de conexão
+                    unsigned char reply[10] = {0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+                    client->write_some(buffer(reply, 10));
+                    return;
+                }
+                
+                // Conexão bem-sucedida
+                tcp::endpoint local_endpoint = target.local_endpoint();
+                unsigned char reply[10] = {
+                    0x05, 0x00, 0x00, 0x01, 
+                    (unsigned char)(local_endpoint.address().to_v4().to_ulong() >> 24),
+                    (unsigned char)(local_endpoint.address().to_v4().to_ulong() >> 16),
+                    (unsigned char)(local_endpoint.address().to_v4().to_ulong() >> 8),
+                    (unsigned char)(local_endpoint.address().to_v4().to_ulong()),
+                    (unsigned char)(local_endpoint.port() >> 8),
+                    (unsigned char)(local_endpoint.port())
+                };
+                client->write_some(buffer(reply, 10));
+                
+                // 4. Transferir dados
+                std::thread t1([&]() {
+                    try {
+                        char buffer[4096];
+                        while (running_) {
+                            boost::system::error_code error;
+                            size_t len = client->read_some(boost::asio::buffer(buffer), error);
+                            if (error) break;
+                            boost::asio::write(target, boost::asio::buffer(buffer, len));
+                        }
+                    } catch(...) {}
+                });
+                
+                std::thread t2([&]() {
+                    try {
+                        char buffer[4096];
+                        while (running_) {
+                            boost::system::error_code error;
+                            size_t len = target.read_some(boost::asio::buffer(buffer), error);
+                            if (error) break;
+                            boost::asio::write(*client, boost::asio::buffer(buffer, len));
+                        }
+                    } catch(...) {}
+                });
+                
+                t1.join();
+                t2.join();
+                
+            } catch(std::exception& e) {
+                // Erro de conexão
+                unsigned char reply[10] = {0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+                client->write_some(buffer(reply, 10));
+            }
+            
+        } catch(std::exception& e) {
+            // Erro na conexão com o cliente
+        }
+    }
+};
+
+int main() {
+    try {
+        int port;
+        std::cout << "Digite a porta para o servidor SOCKS5: ";
+        std::cin >> port;
+        
+        boost::asio::io_service io_service;
+        SOCKS5Server server(io_service, port);
+        io_service.run();
+    } catch(std::exception& e) {
+        std::cerr << "Exceção: " << e.what() << std::endl;
+    }
+    
+    return 0;
+}
+"""
+                
+                # Escrever o código no arquivo
+                with open("src/socks5_server.cpp", "w") as f:
+                    f.write(socks5_code)
+                print(f"{COLORS.GREEN}Arquivo socks5_server.cpp criado com sucesso!{COLORS.END}")
+        except Exception as e:
+            print(f"{COLORS.RED}Erro ao criar arquivo src/socks5_server.cpp: {e}{COLORS.END}")
+            return False
+
+    # Verificar se o arquivo existe após as tentativas
     if not os.path.exists("src/socks5_server.cpp"):
         print(f"{COLORS.RED}Erro: src/socks5_server.cpp não encontrado!{COLORS.END}")
         return False
 
+    # Compilar o servidor SOCKS5
     try:
-        print("Compilando o servidor SOCKS5...")
+        print(f"\n{COLORS.BOLD}Compilando o servidor SOCKS5...{COLORS.END}")
         subprocess.check_call([
             "g++", "-o", "socks5_server", "src/socks5_server.cpp",
             "-lboost_system", "-lboost_log", "-lboost_thread", "-lpthread", "-lssh2", "-std=c++14"
         ])
-        print(f"{COLORS.GREEN}SOCKS5 instalado com sucesso!{COLORS.END}")
-        return True
+        print(f"{COLORS.GREEN}SOCKS5 compilado com sucesso!{COLORS.END}")
+        
+        # Verificar se o binário foi criado
+        if os.path.exists("socks5_server"):
+            print(f"{COLORS.GREEN}SOCKS5 instalado com sucesso!{COLORS.END}")
+            # Definir permissões de execução
+            os.chmod("socks5_server", 0o755)
+            return True
+        else:
+            print(f"{COLORS.RED}Erro: Binário socks5_server não encontrado após compilação.{COLORS.END}")
+            return False
     except subprocess.CalledProcessError as e:
         print(f"{COLORS.RED}Erro na compilação: {e}{COLORS.END}")
+        return False
+    except Exception as e:
+        print(f"{COLORS.RED}Erro inesperado: {e}{COLORS.END}")
         return False
 
 def add_port_socks5():
@@ -1206,7 +1483,9 @@ def uninstall_multiflow():
     
     input(f"\n{COLORS.BOLD}Pressione Enter para voltar ao menu principal...{COLORS.END}")
 
-# O restante do script permanece inalterado...
+# O restante das funções aqui...
+# (menu_bloqueio_sites, bloquear_ddos, alterar_senha_root, otimizar_sistema, etc.)
 
+# Ponto de entrada do programa
 if __name__ == "__main__":
     main_menu()
