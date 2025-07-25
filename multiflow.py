@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import subprocess
 import sys
@@ -11,6 +12,9 @@ import psutil  # Importa após possível instalação
 
 # Dicionário para rastrear processos SOCKS5 por porta
 socks5_processes = {}
+
+# Status do OpenVPN
+openvpn_status = {"active": False, "port": None, "proto": None}
 
 def clear_screen():
     """Limpa a tela do console."""
@@ -30,6 +34,56 @@ def run_command(cmd, sudo=False):
     except Exception as e:
         print(f"Exceção inesperada: {e}")
         return False
+
+# Funções para verificar status dos serviços
+def check_services_status():
+    """Verifica o status dos serviços SOCKS5 e OpenVPN."""
+    socks_status = "Ativo - Portas " + ", ".join([str(porta) for porta in socks5_processes.keys()]) if socks5_processes else "Desativado"
+    
+    # Verificar status do OpenVPN
+    openvpn_running = False
+    openvpn_port = None
+    
+    try:
+        # Procurar processo OpenVPN
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            if 'openvpn' in proc.info['name'].lower() or any('openvpn' in cmd.lower() for cmd in proc.info['cmdline'] if cmd):
+                openvpn_running = True
+                
+                # Tentar encontrar a porta nos argumentos de linha de comando
+                for i, arg in enumerate(proc.info['cmdline']):
+                    if arg == '--port' and i + 1 < len(proc.info['cmdline']):
+                        openvpn_port = proc.info['cmdline'][i + 1]
+                        break
+                
+                # Se não encontrou pelo argumento, tenta buscar no arquivo de configuração
+                if not openvpn_port and os.path.exists('/etc/openvpn/server.conf'):
+                    with open('/etc/openvpn/server.conf', 'r') as f:
+                        for line in f:
+                            if line.strip().startswith('port '):
+                                openvpn_port = line.strip().split()[1]
+                                break
+                
+                # Caso ainda não tenha encontrado, verifica nosso arquivo local
+                if not openvpn_port and os.path.exists('server.conf'):
+                    with open('server.conf', 'r') as f:
+                        for line in f:
+                            if line.strip().startswith('port '):
+                                openvpn_port = line.strip().split()[1]
+                                break
+                
+                break
+    except Exception as e:
+        print(f"Erro ao verificar status do OpenVPN: {e}")
+    
+    # Atualizar status global do OpenVPN
+    openvpn_status["active"] = openvpn_running
+    if openvpn_running and openvpn_port:
+        openvpn_status["port"] = openvpn_port
+    
+    openvpn_status_text = f"Ativo - Porta {openvpn_status['port']}" if openvpn_running and openvpn_status["port"] else "Desativado"
+    
+    return socks_status, openvpn_status_text
 
 # Funções para SOCKS5
 def check_and_install_package(package_name):
@@ -167,13 +221,18 @@ def remove_socks5():
 def menu_socks5():
     while True:
         clear_screen()
+        
+        # Verificar status atual
+        socks_status, _ = check_services_status()
+        
         print("\n=== Gerenciar SOCKS5 ===")
+        print(f"Status: {socks_status}")
         print("1. Instalar SOCKS5")
         print("2. Adicionar Porta")
         print("3. Remover Porta")
         print("4. Remover SOCKS5")
         print("0. Voltar")
-        choice = input("Escolha uma opção: ")
+        choice = input("\nEscolha uma opção: ")
 
         if choice == "1":
             install_socks5()
@@ -211,8 +270,70 @@ def install_openvpn():
     port, proto = select_port_and_proto_openvpn()
     dns = select_dns_openvpn()
     generate_config_openvpn(port, proto, dns)
+    
+    # Atualizar status global
+    openvpn_status["port"] = port
+    openvpn_status["proto"] = proto
 
     print("OpenVPN instalado! Inicie com 'sudo openvpn server.conf'.")
+
+def start_openvpn():
+    """Inicia o serviço OpenVPN."""
+    if openvpn_status["active"]:
+        print(f"OpenVPN já está ativo na porta {openvpn_status['port']}.")
+        return
+
+    print("Iniciando OpenVPN...")
+    if os.path.exists("server.conf"):
+        try:
+            # Ler a porta do arquivo de configuração
+            port = None
+            with open("server.conf", "r") as f:
+                for line in f:
+                    if line.strip().startswith("port "):
+                        port = line.strip().split()[1]
+                        break
+            
+            # Iniciar o OpenVPN em background
+            subprocess.Popen(["sudo", "openvpn", "--config", "server.conf", "--daemon"], 
+                            stdout=subprocess.DEVNULL, 
+                            stderr=subprocess.DEVNULL)
+            
+            # Atualizar status
+            openvpn_status["active"] = True
+            openvpn_status["port"] = port
+            
+            print(f"OpenVPN iniciado na porta {port}.")
+        except Exception as e:
+            print(f"Erro ao iniciar OpenVPN: {e}")
+    else:
+        print("Arquivo de configuração server.conf não encontrado.")
+        print("Execute a instalação do OpenVPN primeiro.")
+
+def stop_openvpn():
+    """Para o serviço OpenVPN."""
+    if not openvpn_status["active"]:
+        print("OpenVPN não está ativo.")
+        return
+
+    print("Parando OpenVPN...")
+    try:
+        # Encontrar e matar processos OpenVPN
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            if 'openvpn' in proc.info['name'].lower() or any('openvpn' in cmd.lower() for cmd in proc.info['cmdline'] if cmd):
+                try:
+                    os.kill(proc.info['pid'], signal.SIGTERM)
+                    print(f"Processo OpenVPN (PID {proc.info['pid']}) encerrado.")
+                except Exception as e:
+                    print(f"Erro ao encerrar processo OpenVPN (PID {proc.info['pid']}): {e}")
+        
+        # Resetar status
+        openvpn_status["active"] = False
+        openvpn_status["port"] = None
+        
+        print("OpenVPN parado.")
+    except Exception as e:
+        print(f"Erro ao parar OpenVPN: {e}")
 
 def install_dependencies_openvpn():
     print("Instalando dependências para OpenVPN...")
@@ -331,21 +452,44 @@ def remove_openvpn():
         shutil.rmtree("keys")
     if os.path.exists("server.conf"):
         os.remove("server.conf")
+    
+    # Resetar status
+    openvpn_status["active"] = False
+    openvpn_status["port"] = None
+    
     print("OpenVPN removido.")
 
 def menu_openvpn():
     while True:
         clear_screen()
+        
+        # Verificar status atual
+        _, openvpn_status_text = check_services_status()
+        
         print("\n=== Gerenciar OpenVPN ===")
+        print(f"Status: {openvpn_status_text}")
         print("1. Instalar OpenVPN")
         print("2. Remover OpenVPN")
+        if openvpn_status["active"]:
+            print("3. Parar OpenVPN")
+        else:
+            print("3. Iniciar OpenVPN")
         print("0. Voltar")
-        choice = input("Escolha uma opção: ")
+        choice = input("\nEscolha uma opção: ")
 
         if choice == "1":
             install_openvpn()
         elif choice == "2":
+            if openvpn_status["active"]:
+                print("O OpenVPN está em execução. Pare o serviço antes de removê-lo.")
+                input("Pressione Enter para continuar...")
+                continue
             remove_openvpn()
+        elif choice == "3":
+            if openvpn_status["active"]:
+                stop_openvpn()
+            else:
+                start_openvpn()
         elif choice == "0":
             break
         else:
@@ -356,11 +500,15 @@ def menu_openvpn():
 def menu_conexoes():
     while True:
         clear_screen()
-        print("\n=== Gerenciar Conexoes ===")
-        print("1. Gerenciar SOCKS5")
-        print("2. Gerenciar OpenVPN")
+        
+        # Verificar status dos serviços
+        socks_status, openvpn_status_text = check_services_status()
+        
+        print("\n=== Gerenciar Conexões ===")
+        print(f"1. Gerenciar SOCKS5 [ {socks_status} ]")
+        print(f"2. Gerenciar OpenVPN [ {openvpn_status_text} ]")
         print("0. Voltar")
-        choice = input("Escolha uma opção: ")
+        choice = input("\nEscolha uma opção: ")
 
         if choice == "1":
             menu_socks5()
@@ -383,7 +531,7 @@ def menu_usuarios():
         print("4. Alterar Data de Expiração")
         print("5. Alterar Limite de Conexões")
         print("0. Voltar")
-        choice = input("Escolha uma opção: ")
+        choice = input("\nEscolha uma opção: ")
 
         if choice == "1":
             criar_usuario()
@@ -406,10 +554,10 @@ def main_menu():
     while True:
         clear_screen()
         print("\n=== MULTIFLOW ===")
-        print("1. Gerenciar Usuarios")
-        print("2. Gerenciar Conexoes")
+        print("1. Gerenciar Usuários")
+        print("2. Gerenciar Conexões")
         print("0. Sair")
-        choice = input("Escolha uma opção: ")
+        choice = input("\nEscolha uma opção: ")
 
         if choice == "1":
             menu_usuarios()
@@ -423,9 +571,5 @@ def main_menu():
 
         input("\nPressione Enter para continuar...")
 
-
-
 if __name__ == "__main__":
     main_menu()
-
-
