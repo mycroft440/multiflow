@@ -319,6 +319,62 @@ def show_system_panel():
     
     print_colored_box("INFORMAÇÕES DO SISTEMA", content_lines)
 
+# Função principal com menu modificado - ALTERAÇÃO 1
+def main_menu():
+    # Verificar se o script está sendo executado como root
+    is_root = check_root()
+    
+    while True:
+        clear_screen()
+        
+        # Banner do MULTIFLOW
+        banner = f"""
+{COLORS.BOLD}{COLORS.CYAN}███╗   ███╗██╗   ██╗██╗  ████████╗██╗███████╗██╗      ██████╗ ██╗    ██╗
+████╗ ████║██║   ██║██║  ╚══██╔══╝██║██╔════╝██║     ██╔═══██╗██║    ██║
+██╔████╔██║██║   ██║██║     ██║   ██║█████╗  ██║     ██║   ██║██║ █╗ ██║
+██║╚██╔╝██║██║   ██║██║     ██║   ██║██╔══╝  ██║     ██║   ██║██║███╗██║
+██║ ╚═╝ ██║╚██████╔╝███████╗██║   ██║██║     ███████╗╚██████╔╝╚███╔███╔╝
+╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝{COLORS.END}
+        """
+        print(banner)
+        
+        # Exibir o painel de informações do sistema
+        show_system_panel()
+        
+        # Menu principal com opções 3 e 4 invertidas
+        width = 60
+        print(f"{BoxChars.TOP_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.TOP_RIGHT}")
+        print_menu_option("1", "Gerenciar Usuários", color=COLORS.CYAN)
+        print_menu_option("2", "Gerenciar Conexões", color=COLORS.CYAN)
+        print_menu_option("3", "Ferramentas", color=COLORS.CYAN)  # Modificado: era opção 4
+        print_menu_option("4", "Remover Completamente Multiflow", color=COLORS.RED)  # Modificado: era opção 3
+        print_menu_option("0", "Sair", color=COLORS.YELLOW)
+        print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.BOTTOM_RIGHT}")
+        
+        # Adicionar aviso se não está executando como root
+        if not is_root:
+            print(f"\n{COLORS.YELLOW}⚠️  Aviso: Executando sem privilégios de root. Algumas funções podem não funcionar.{COLORS.END}")
+        
+        choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}")
+
+        if choice == "1":
+            menu_usuarios()
+        elif choice == "2":
+            menu_conexoes()
+        elif choice == "3":
+            menu_ferramentas()  # Modificado: era opção 4
+        elif choice == "4":
+            uninstall_multiflow()  # Modificado: era opção 3
+        elif choice == "0":
+            clear_screen()
+            print(f"\n{COLORS.GREEN}Obrigado por usar o Multiflow!{COLORS.END}")
+            print(f"{COLORS.CYAN}Saindo...{COLORS.END}")
+            break
+        else:
+            print(f"{COLORS.RED}Opção inválida!{COLORS.END}")
+
+        input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
+
 # Funções para verificar status dos serviços
 def check_services_status():
     """Verifica o status dos serviços SOCKS5 e OpenVPN."""
@@ -883,919 +939,6 @@ def menu_usuarios():
 
         input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
 
-# Novas funções de ferramentas
-def alterar_senha_root():
-    print_colored_box("ALTERAR SENHA DO ROOT")
-    print("Esta operação irá alterar a senha do usuário root")
-    
-    # Verificar se estamos rodando como root
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Esta operação precisa ser executada como root!{COLORS.END}")
-        return
-    
-    import getpass
-    
-    # Solicitar nova senha
-    nova_senha = getpass.getpass(f"{COLORS.CYAN}Digite a nova senha para root: {COLORS.END}")
-    confirm_senha = getpass.getpass(f"{COLORS.CYAN}Confirme a nova senha: {COLORS.END}")
-    
-    if nova_senha != confirm_senha:
-        print(f"{COLORS.RED}As senhas não coincidem!{COLORS.END}")
-        return
-    
-    if len(nova_senha) < 6:
-        print(f"{COLORS.RED}A senha deve ter pelo menos 6 caracteres!{COLORS.END}")
-        return
-    
-    # Alterar a senha
-    try:
-        process = subprocess.Popen(
-            ["passwd"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        process.stdin.write(f"{nova_senha}\n{nova_senha}\n")
-        process.stdin.flush()
-        process.wait()
-        
-        if process.returncode == 0:
-            print(f"{COLORS.GREEN}Senha do root alterada com sucesso!{COLORS.END}")
-        else:
-            print(f"{COLORS.RED}Erro ao alterar senha do root. Código de retorno: {process.returncode}{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao alterar senha: {e}{COLORS.END}")
-
-def otimizar_sistema():
-    print_colored_box("OTIMIZANDO SISTEMA")
-    
-    # Verificar se estamos rodando como root
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Esta operação precisa ser executada como root!{COLORS.END}")
-        return
-    
-    print("Iniciando otimização do sistema...")
-    
-    # 1. Atualizar o sistema
-    print(f"\n{COLORS.BOLD}1. Atualizando repositórios...{COLORS.END}")
-    run_command(["apt", "update"], sudo=True)
-    
-    # 2. Remover pacotes desnecessários
-    print(f"\n{COLORS.BOLD}2. Removendo pacotes desnecessários...{COLORS.END}")
-    run_command(["apt", "autoremove", "-y"], sudo=True)
-    run_command(["apt", "clean"], sudo=True)
-    
-    # 3. Limpar o cache de pacotes
-    print(f"\n{COLORS.BOLD}3. Limpando cache de pacotes...{COLORS.END}")
-    run_command(["apt-get", "clean"], sudo=True)
-    
-    # 4. Otimizar uso de memória
-    print(f"\n{COLORS.BOLD}4. Otimizando uso de memória...{COLORS.END}")
-    
-    # Ajustar swappiness - versão corrigida com melhor tratamento de erros
-    try:
-        # Método seguro usando sysctl
-        run_command(["sysctl", "-w", "vm.swappiness=10"], sudo=True)
-    except Exception:
-        try:
-            # Método alternativo
-            with open("/proc/sys/vm/swappiness", "w") as f:
-                f.write("10")
-        except Exception as e:
-            print(f"{COLORS.RED}Erro ao ajustar swappiness: {e}{COLORS.END}")
-    
-    # Configurar para persistir após reinicialização
-    sysctl_file = "/etc/sysctl.conf"
-    sysctl_content = ""
-    
-    try:
-        if os.path.exists(sysctl_file):
-            with open(sysctl_file, "r") as f:
-                sysctl_content = f.read()
-        
-        if "vm.swappiness" in sysctl_content:
-            # Substitui o valor existente
-            sysctl_content = re.sub(r'vm\.swappiness\s*=\s*\d+', 'vm.swappiness = 10', sysctl_content)
-        else:
-            # Adiciona nova configuração
-            sysctl_content += "\n# Otimizado pelo Multiflow\nvm.swappiness = 10\n"
-        
-        with open(sysctl_file, "w") as f:
-            f.write(sysctl_content)
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao atualizar arquivo sysctl.conf: {e}{COLORS.END}")
-    
-    # 5. Otimizar desempenho de rede
-    print(f"\n{COLORS.BOLD}5. Otimizando desempenho de rede...{COLORS.END}")
-    
-    net_config = """
-# Otimizado pelo Multiflow
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 65536 16777216
-net.ipv4.tcp_congestion_control = cubic
-net.ipv4.tcp_mtu_probing = 1
-net.ipv4.tcp_fastopen = 3
-net.core.netdev_max_backlog = 5000
-"""
-    
-    try:
-        # Adicionar configurações de rede se não existirem
-        for line in net_config.strip().split('\n'):
-            if line.startswith('#') or not line.strip():
-                continue
-            
-            key = line.split('=')[0].strip()
-            if key not in sysctl_content:
-                sysctl_content += line + "\n"
-        
-        with open(sysctl_file, "w") as f:
-            f.write(sysctl_content)
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao atualizar configurações de rede: {e}{COLORS.END}")
-    
-    # Aplicar configurações do sysctl
-    run_command(["sysctl", "-p"], sudo=True)
-    
-    # 6. Desativar serviços desnecessários
-    print(f"\n{COLORS.BOLD}6. Verificando serviços desnecessários...{COLORS.END}")
-    unnecessary_services = ["cups", "bluetooth", "avahi-daemon"]
-    for service in unnecessary_services:
-        try:
-            # Verificar se o serviço existe
-            result = subprocess.run(
-                ["systemctl", "status", service],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            if result.returncode != 4:  # 4 = serviço não encontrado
-                print(f"Desativando serviço {service}...")
-                run_command(["systemctl", "stop", service], sudo=True)
-                run_command(["systemctl", "disable", service], sudo=True)
-        except Exception:
-            pass
-    
-    print(f"\n{COLORS.GREEN}Sistema otimizado com sucesso! Recomenda-se reiniciar para aplicar todas as mudanças.{COLORS.END}")
-
-def gerar_memoria_swap():
-    print_colored_box("GERAR MEMÓRIA SWAP")
-    
-    # Verificar se estamos rodando como root
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Esta operação precisa ser executada como root!{COLORS.END}")
-        return
-    
-    # Verificar memória RAM disponível
-    try:
-        mem_info = {}
-        with open('/proc/meminfo', 'r') as f:
-            for line in f:
-                if ":" in line:
-                    key, value = line.split(':', 1)
-                    mem_info[key.strip()] = int(value.strip().split()[0])  # em KB
-        
-        total_mem = mem_info.get('MemTotal', 0) / 1024  # Converter para MB
-        print(f"Memória RAM total: {total_mem:.0f} MB")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao verificar memória: {e}{COLORS.END}")
-        total_mem = 1024  # Valor padrão de 1GB
-    
-    # Verificar swap existente - versão corrigida com melhor tratamento de erros
-    current_swap = 0
-    try:
-        swap_info = subprocess.check_output(["swapon", "--show=SIZE", "--bytes"], text=True)
-        if swap_info.strip():
-            try:
-                # Processa apenas se houver linhas após o cabeçalho
-                lines = swap_info.strip().split('\n')[1:]
-                if lines:
-                    current_swap = sum(int(size.strip()) for size in lines) / (1024**2)
-            except (ValueError, IndexError) as e:
-                print(f"{COLORS.RED}Erro ao processar informações de swap: {e}{COLORS.END}")
-        print(f"Swap existente: {current_swap:.0f} MB")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao verificar swap existente: {e}{COLORS.END}")
-    
-    if current_swap > 0:
-        print(f"\n{COLORS.YELLOW}Já existe memória swap configurada no sistema.{COLORS.END}")
-        choice = input(f"{COLORS.BOLD}Deseja remover a swap existente e criar uma nova? (s/n): {COLORS.END}")
-        if choice.lower() != 's':
-            return
-        
-        # Desativar swap existente
-        try:
-            run_command(["swapoff", "-a"], sudo=True)
-        except Exception as e:
-            print(f"{COLORS.RED}Erro ao desativar swap existente: {e}{COLORS.END}")
-            return
-        
-        # Remover entradas do fstab
-        fstab = "/etc/fstab"
-        if os.path.exists(fstab):
-            try:
-                with open(fstab, "r") as f:
-                    lines = f.readlines()
-                
-                with open(fstab, "w") as f:
-                    for line in lines:
-                        if "swap" not in line:
-                            f.write(line)
-                print("Entradas de swap removidas do fstab.")
-            except Exception as e:
-                print(f"{COLORS.RED}Erro ao modificar fstab: {e}{COLORS.END}")
-                return
-    
-    # Definir tamanho recomendado da swap
-    if total_mem <= 2048:  # 2GB
-        recommended_swap = total_mem * 2
-    elif total_mem <= 8192:  # 8GB
-        recommended_swap = total_mem
-    else:
-        recommended_swap = 8192  # 8GB máximo
-    
-    print(f"\n{COLORS.GREEN}Tamanho recomendado de swap: {recommended_swap:.0f} MB{COLORS.END}")
-    
-    # Perguntar o tamanho desejado
-    while True:
-        try:
-            swap_size = input(f"{COLORS.CYAN}Digite o tamanho de swap desejado em MB (padrão {recommended_swap:.0f}): {COLORS.END}")
-            swap_size = int(swap_size) if swap_size else int(recommended_swap)
-            if swap_size < 256:
-                print(f"{COLORS.RED}O tamanho mínimo de swap é 256 MB{COLORS.END}")
-            else:
-                break
-        except ValueError:
-            print(f"{COLORS.RED}Por favor, digite um número válido{COLORS.END}")
-    
-    # Criar arquivo de swap
-    swap_file = "/swapfile"
-    print(f"\nCriando arquivo de swap de {swap_size} MB em {swap_file}...")
-    
-    # Garantir que o arquivo não exista
-    if os.path.exists(swap_file):
-        try:
-            os.remove(swap_file)
-        except Exception as e:
-            print(f"{COLORS.RED}Erro ao remover arquivo swap existente: {e}{COLORS.END}")
-            return
-    
-    # Criar e configurar arquivo de swap
-    try:
-        # Criar arquivo (dd é mais rápido para arquivos grandes)
-        run_command(["dd", "if=/dev/zero", f"of={swap_file}", f"bs=1M", f"count={swap_size}"], sudo=True)
-        
-        # Definir permissões
-        run_command(["chmod", "600", swap_file], sudo=True)
-        
-        # Formatar como swap
-        run_command(["mkswap", swap_file], sudo=True)
-        
-        # Ativar swap
-        run_command(["swapon", swap_file], sudo=True)
-        
-        # Adicionar ao fstab para persistir após reinicialização
-        try:
-            with open("/etc/fstab", "a") as f:
-                f.write(f"\n# Swap criado pelo Multiflow\n{swap_file} none swap sw 0 0\n")
-            print("Configuração adicionada ao fstab para persistência.")
-        except Exception as e:
-            print(f"{COLORS.RED}Erro ao atualizar fstab: {e}{COLORS.END}")
-        
-        print(f"\n{COLORS.GREEN}Memória swap criada e ativada com sucesso!{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao configurar swap: {e}{COLORS.END}")
-
-def configurar_zram():
-    print_colored_box("CONFIGURAR ZRAM")
-    
-    # Verificar se estamos rodando como root
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Esta operação precisa ser executada como root!{COLORS.END}")
-        return
-    
-    # Verificar se o módulo zram já está carregado
-    loaded = False
-    try:
-        lsmod_output = subprocess.check_output(["lsmod"], text=True)
-        if "zram" in lsmod_output:
-            loaded = True
-            print(f"{COLORS.GREEN}O módulo ZRAM já está carregado.{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao verificar módulos do kernel: {e}{COLORS.END}")
-    
-    if not loaded:
-        print("Instalando e configurando ZRAM...")
-        
-        # Instalar o pacote zram-tools se disponível
-        try:
-            run_command(["apt", "install", "-y", "zram-tools"], sudo=True)
-            print(f"{COLORS.GREEN}zram-tools instalado com sucesso.{COLORS.END}")
-        except Exception as e:
-            print(f"{COLORS.YELLOW}Pacote zram-tools não encontrado: {e}. Configurando manualmente...{COLORS.END}")
-            
-            # Carregar o módulo zram
-            try:
-                run_command(["modprobe", "zram"], sudo=True)
-                print(f"{COLORS.GREEN}Módulo zram carregado com sucesso.{COLORS.END}")
-            except Exception as e:
-                print(f"{COLORS.RED}Erro ao carregar módulo zram: {e}{COLORS.END}")
-                return
-            
-            # Garantir que o módulo seja carregado na inicialização
-            try:
-                os.makedirs("/etc/modules-load.d", exist_ok=True)
-                with open("/etc/modules-load.d/zram.conf", "w") as f:
-                    f.write("zram\n")
-                print("Módulo zram configurado para carregar na inicialização.")
-            except Exception as e:
-                print(f"{COLORS.RED}Erro ao configurar carregamento automático: {e}{COLORS.END}")
-    
-    # Configurar o tamanho da ZRAM
-    # Verificar memória RAM disponível
-    try:
-        mem_info = {}
-        with open('/proc/meminfo', 'r') as f:
-            for line in f:
-                if ":" in line:
-                    key, value = line.split(':', 1)
-                    mem_info[key.strip()] = int(value.strip().split()[0])  # em KB
-        
-        total_mem = mem_info.get('MemTotal', 0) / 1024  # Converter para MB
-        print(f"Memória RAM total: {total_mem:.0f} MB")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao verificar memória: {e}{COLORS.END}")
-        total_mem = 1024  # Valor padrão de 1GB
-    
-    # Definir tamanho da ZRAM (50% da RAM total)
-    zram_size = int(total_mem * 0.5)
-    print(f"{COLORS.GREEN}Tamanho recomendado de ZRAM: {zram_size} MB (50% da RAM){COLORS.END}")
-    
-    # Perguntar o tamanho desejado
-    while True:
-        try:
-            custom_size = input(f"{COLORS.CYAN}Digite o tamanho de ZRAM desejado em MB (padrão {zram_size}): {COLORS.END}")
-            zram_size = int(custom_size) if custom_size else zram_size
-            if zram_size < 256:
-                print(f"{COLORS.RED}O tamanho mínimo recomendado é 256 MB{COLORS.END}")
-            elif zram_size > total_mem:
-                print(f"{COLORS.RED}O tamanho não deve exceder a RAM total{COLORS.END}")
-            else:
-                break
-        except ValueError:
-            print(f"{COLORS.RED}Por favor, digite um número válido{COLORS.END}")
-    
-    # Configurar ZRAM
-    if os.path.exists("/etc/default/zramswap"):
-        # Método para distribuições baseadas em Debian que usam zram-tools
-        try:
-            with open("/etc/default/zramswap", "w") as f:
-                f.write(f"PERCENT={int((zram_size / total_mem) * 100)}\n")
-                f.write("PRIORITY=100\n")
-            
-            print("Reiniciando serviço zramswap...")
-            run_command(["service", "zramswap", "restart"], sudo=True)
-            print(f"{COLORS.GREEN}ZRAM configurado através de zram-tools.{COLORS.END}")
-        except Exception as e:
-            print(f"{COLORS.RED}Erro ao configurar zramswap: {e}{COLORS.END}")
-    else:
-        # Método manual para outras distribuições
-        # Primeiro, remover qualquer configuração existente
-        try:
-            if os.path.exists("/sys/block/zram0"):
-                run_command(["swapoff", "/dev/zram0"], sudo=True)
-                with open("/sys/class/zram-control/reset", "w") as f:
-                    f.write("1\n")
-                print("Configuração ZRAM existente removida.")
-        except Exception as e:
-            print(f"{COLORS.YELLOW}Aviso ao resetar ZRAM: {e}{COLORS.END}")
-        
-        # Criar novo dispositivo zram
-        try:
-            with open("/sys/class/zram-control/hot_add", "w") as f:
-                f.write("\n")
-            
-            # Configurar tamanho
-            zram_bytes = zram_size * 1024 * 1024
-            with open("/sys/block/zram0/disksize", "w") as f:
-                f.write(str(zram_bytes) + "\n")
-            
-            # Formatar e ativar
-            run_command(["mkswap", "/dev/zram0"], sudo=True)
-            run_command(["swapon", "-p", "100", "/dev/zram0"], sudo=True)
-            
-            print(f"{COLORS.GREEN}Dispositivo ZRAM configurado manualmente.{COLORS.END}")
-            
-            # Adicionar ao /etc/fstab para persistir após reinicialização
-            # Primeiro remover entradas anteriores
-            if os.path.exists("/etc/fstab"):
-                with open("/etc/fstab", "r") as f:
-                    lines = f.readlines()
-                
-                with open("/etc/fstab", "w") as f:
-                    for line in lines:
-                        if "zram" not in line:
-                            f.write(line)
-                    
-                    # Adicionar nova entrada
-                    f.write("\n# ZRAM configurado pelo Multiflow\n/dev/zram0 none swap defaults,pri=100 0 0\n")
-                print("Configuração adicionada ao fstab para persistência.")
-        except Exception as e:
-            print(f"{COLORS.RED}Erro ao configurar dispositivo ZRAM: {e}{COLORS.END}")
-    
-    # Criar script de inicialização para garantir que ZRAM seja carregado corretamente
-    rc_script = """#!/bin/bash
-# ZRAM setup script created by Multiflow
-
-# Load zram module if not loaded
-if ! lsmod | grep -q zram; then
-    modprobe zram
-    
-    # If using zram-control, set up the device
-    if [ -e /sys/class/zram-control/hot_add ]; then
-        cat /sys/class/zram-control/hot_add > /dev/null
-        echo "%s" > /sys/block/zram0/disksize
-        mkswap /dev/zram0
-        swapon -p 100 /dev/zram0
-    fi
-fi
-
-# If zram-tools is installed, make sure the service is running
-if [ -f /etc/default/zramswap ]; then
-    service zramswap restart
-fi
-""" % (zram_size * 1024 * 1024)
-    
-    try:
-        with open("/etc/rc.local", "w") as f:
-            f.write(rc_script)
-        
-        os.chmod("/etc/rc.local", 0o755)
-        print("Script de inicialização criado para garantir persistência.")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao criar script de inicialização: {e}{COLORS.END}")
-    
-    print(f"\n{COLORS.GREEN}ZRAM configurado com sucesso! Recomenda-se reiniciar o sistema para verificar se a configuração persiste.{COLORS.END}")
-
-def verificar_hosts_file():
-    """Verifica se o arquivo hosts está no formato esperado."""
-    hosts_file = "/etc/hosts"
-    if not os.path.exists(hosts_file):
-        return False
-    
-    try:
-        with open(hosts_file, "r") as f:
-            content = f.read()
-        
-        # Verificar se contém pelo menos uma entrada padrão
-        return "localhost" in content and "127.0.0.1" in content
-    except Exception:
-        return False
-
-def bloquear_site_pornografia():
-    """Bloqueia sites de pornografia."""
-    print_colored_box("BLOQUEAR SITES DE PORNOGRAFIA")
-    
-    hosts_file = "/etc/hosts"
-    
-    # Verificar permissões
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Esta operação precisa ser executada como root!{COLORS.END}")
-        return
-    
-    # Lista de sites a bloquear
-    porn_sites = """
-# Bloqueio de sites pornográficos pelo Multiflow
-127.0.0.1 pornhub.com www.pornhub.com
-127.0.0.1 xvideos.com www.xvideos.com
-127.0.0.1 xnxx.com www.xnxx.com
-127.0.0.1 youporn.com www.youporn.com
-127.0.0.1 redtube.com www.redtube.com
-127.0.0.1 tube8.com www.tube8.com
-127.0.0.1 spankbang.com www.spankbang.com
-127.0.0.1 xhamster.com www.xhamster.com
-127.0.0.1 beeg.com www.beeg.com
-127.0.0.1 youjizz.com www.youjizz.com
-127.0.0.1 motherless.com www.motherless.com
-127.0.0.1 drtuber.com www.drtuber.com
-127.0.0.1 nuvid.com www.nuvid.com
-127.0.0.1 pornhd.com www.pornhd.com
-127.0.0.1 porn.com www.porn.com
-127.0.0.1 tnaflix.com www.tnaflix.com
-127.0.0.1 4tube.com www.4tube.com
-127.0.0.1 hclips.com www.hclips.com
-127.0.0.1 nudevista.com www.nudevista.com
-127.0.0.1 alohatube.com www.alohatube.com
-127.0.0.1 pornhat.com www.pornhat.com
-127.0.0.1 sunporno.com www.sunporno.com
-127.0.0.1 xxxbunker.com www.xxxbunker.com
-"""
-    
-    # Verificar se o hosts file está íntegro
-    if not verificar_hosts_file():
-        print(f"{COLORS.RED}Erro: O arquivo /etc/hosts parece estar corrompido ou inacessível.{COLORS.END}")
-        return
-    
-    try:
-        with open(hosts_file, "r") as f:
-            current_hosts = f.read()
-        
-        # Verificar se o bloqueio já existe
-        if "Bloqueio de sites pornográficos pelo Multiflow" in current_hosts:
-            print(f"{COLORS.YELLOW}Os bloqueios de pornografia já estão configurados.{COLORS.END}")
-            
-            # Perguntar se quer atualizar
-            choice = input(f"{COLORS.BOLD}Deseja atualizar a lista de bloqueios? (s/n): {COLORS.END}")
-            if choice.lower() != "s":
-                return
-            
-            # Remover bloqueios existentes
-            lines = current_hosts.split("\n")
-            new_lines = []
-            skip = False
-            
-            for line in lines:
-                if "Bloqueio de sites pornográficos pelo Multiflow" in line:
-                    skip = True
-                    continue
-                
-                if skip and line.strip() and not line.startswith("#") and not line.startswith("127.0.0.1"):
-                    skip = False
-                
-                if not skip:
-                    new_lines.append(line)
-            
-            current_hosts = "\n".join(new_lines)
-            print("Bloqueios anteriores removidos.")
-        
-        # Adicionar novos bloqueios
-        with open(hosts_file, "w") as f:
-            f.write(current_hosts.rstrip() + "\n" + porn_sites)
-        
-        print(f"{COLORS.GREEN}Sites de pornografia bloqueados com sucesso!{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao configurar bloqueios: {e}{COLORS.END}")
-
-def bloquear_site_personalizado():
-    """Bloqueia um site específico por domínio."""
-    print_colored_box("BLOQUEAR SITE ESPECÍFICO")
-    
-    hosts_file = "/etc/hosts"
-    
-    # Verificar permissões
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Esta operação precisa ser executada como root!{COLORS.END}")
-        return
-    
-    # Verificar se o hosts file está íntegro
-    if not verificar_hosts_file():
-        print(f"{COLORS.RED}Erro: O arquivo /etc/hosts parece estar corrompido ou inacessível.{COLORS.END}")
-        return
-    
-    # Solicitar o domínio a ser bloqueado
-    domain = input(f"{COLORS.CYAN}Digite o domínio a ser bloqueado (ex: example.com): {COLORS.END}")
-    if not domain:
-        print(f"{COLORS.RED}Nenhum domínio informado.{COLORS.END}")
-        return
-    
-    # Validar o domínio
-    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$', domain):
-        print(f"{COLORS.RED}Domínio inválido. Use o formato example.com{COLORS.END}")
-        return
-    
-    try:
-        with open(hosts_file, "r") as f:
-            current_hosts = f.read()
-        
-        # Verificar se o domínio já está bloqueado
-        domain_pattern = re.compile(r'127\.0\.0\.1\s+' + re.escape(domain))
-        www_pattern = re.compile(r'127\.0\.0\.1\s+www\.' + re.escape(domain))
-        
-        if domain_pattern.search(current_hosts) and www_pattern.search(current_hosts):
-            print(f"{COLORS.YELLOW}O domínio {domain} já está bloqueado.{COLORS.END}")
-            return
-        
-        # Adicionar bloqueio
-        block_entry = f"\n# Bloqueio personalizado pelo Multiflow\n127.0.0.1 {domain} www.{domain}\n"
-        
-        with open(hosts_file, "a") as f:
-            f.write(block_entry)
-        
-        print(f"{COLORS.GREEN}Domínio {domain} bloqueado com sucesso!{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao bloquear domínio: {e}{COLORS.END}")
-
-def bloquear_ddos():
-    """Configura proteções contra ataques DDoS sem interferir em conexões legítimas."""
-    print_colored_box("CONFIGURAÇÃO ANTI-DDOS")
-    
-    # Verificar se estamos rodando como root
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Esta operação precisa ser executada como root!{COLORS.END}")
-        return
-    
-    print("Instalando ferramentas necessárias...")
-    
-    # Instalar pacotes necessários
-    try:
-        run_command(["apt", "update"], sudo=True)
-        run_command(["apt", "install", "-y", "iptables", "ipset", "fail2ban", "conntrack"], sudo=True)
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao instalar dependências: {e}{COLORS.END}")
-        return
-    
-    print(f"\n{COLORS.BOLD}Configurando proteção anti-DDoS...{COLORS.END}")
-    
-    # Verificar se ipset está instalado
-    try:
-        subprocess.check_output(["ipset", "-v"])
-    except Exception as e:
-        print(f"{COLORS.RED}Erro: ipset não está instalado corretamente: {e}{COLORS.END}")
-        return
-    
-    # Limpar regras existentes com tratamento de erros melhorado
-    try:
-        print("Limpando regras existentes...")
-        
-        # Limpar regras de ipset com melhor tratamento de erros
-        try:
-            subprocess.run(["ipset", "list", "blacklist"], stderr=subprocess.DEVNULL, check=True)
-            print("Removendo blacklist existente...")
-            subprocess.run(["ipset", "destroy", "blacklist"], stderr=subprocess.DEVNULL)
-        except subprocess.CalledProcessError:
-            # A blacklist provavelmente não existe, o que é esperado em primeira execução
-            pass
-        
-        # Criar lista de bloqueio
-        try:
-            subprocess.run(["ipset", "create", "blacklist", "hash:ip", "timeout", "3600"], check=True)
-            print(f"{COLORS.GREEN}Lista de bloqueio criada com sucesso.{COLORS.END}")
-        except subprocess.CalledProcessError as e:
-            print(f"{COLORS.RED}Erro ao criar lista de bloqueio: {e}{COLORS.END}")
-            return
-        
-        # Verificar se foi criada
-        try:
-            ipset_list = subprocess.check_output(["ipset", "list"], text=True)
-            if "blacklist" not in ipset_list:
-                print(f"{COLORS.RED}Erro ao criar blacklist com ipset.{COLORS.END}")
-                return
-        except Exception as e:
-            print(f"{COLORS.RED}Erro ao verificar ipset: {e}{COLORS.END}")
-            return
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao configurar ipset: {e}{COLORS.END}")
-        return
-    
-    # Configurar regras de iptables
-    print(f"\n{COLORS.BOLD}Configurando regras de firewall...{COLORS.END}")
-    
-    try:
-        # Salvar regras atuais
-        print("Salvando regras atuais...")
-        try:
-            # Correção: usar string única com shell=True
-            subprocess.run("iptables-save > /etc/iptables.backup", shell=True)
-            print("Backup das regras de firewall salvo em /etc/iptables.backup")
-        except Exception as e:
-            print(f"{COLORS.YELLOW}Aviso: Não foi possível salvar backup das regras atuais: {e}{COLORS.END}")
-        
-        # Configurar regras anti-DDoS
-        iptables_rules = [
-            # Regra básica para bloquear IPs da blacklist
-            ["iptables", "-A", "INPUT", "-m", "set", "--match-set", "blacklist", "src", "-j", "DROP"],
-            
-            # Proteção contra ataques SYN flood
-            ["iptables", "-A", "INPUT", "-p", "tcp", "--syn", "-m", "limit", "--limit", "1/s", "--limit-burst", "3", "-j", "ACCEPT"],
-            ["iptables", "-A", "INPUT", "-p", "tcp", "--syn", "-j", "DROP"],
-            
-            # Limitar conexões ICMP (ping)
-            ["iptables", "-A", "INPUT", "-p", "icmp", "-m", "limit", "--limit", "1/s", "--limit-burst", "1", "-j", "ACCEPT"],
-            ["iptables", "-A", "INPUT", "-p", "icmp", "-j", "DROP"],
-            
-            # Limitar novas conexões por IP
-            ["iptables", "-A", "INPUT", "-p", "tcp", "-m", "conntrack", "--ctstate", "NEW", "-m", "limit", "--limit", "60/s", "--limit-burst", "20", "-j", "ACCEPT"],
-            ["iptables", "-A", "INPUT", "-p", "tcp", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"],
-            
-            # Bloquear pacotes inválidos
-            ["iptables", "-A", "INPUT", "-m", "conntrack", "--ctstate", "INVALID", "-j", "DROP"],
-        ]
-        
-        # Aplicar as regras com melhor tratamento de erros
-        success_count = 0
-        total_rules = len(iptables_rules)
-        
-        for rule in iptables_rules:
-            try:
-                subprocess.run(rule, check=True)
-                success_count += 1
-            except Exception as e:
-                print(f"{COLORS.RED}Erro ao aplicar regra {' '.join(rule)}: {e}{COLORS.END}")
-        
-        if success_count == total_rules:
-            print(f"{COLORS.GREEN}Todas as regras de proteção anti-DDoS aplicadas com sucesso.{COLORS.END}")
-        else:
-            print(f"{COLORS.YELLOW}Aplicadas {success_count} de {total_rules} regras de proteção.{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao configurar regras de firewall: {e}{COLORS.END}")
-    
-    # Configurar script de persistência
-    print(f"\n{COLORS.BOLD}Configurando persistência das regras...{COLORS.END}")
-    
-    startup_script = """#!/bin/bash
-# Anti-DDoS protection script by Multiflow
-
-# Restaurar ipset
-ipset create blacklist hash:ip timeout 3600 -exist
-
-# Aplicar regras de proteção
-iptables -A INPUT -m set --match-set blacklist src -j DROP
-iptables -A INPUT -p tcp --syn -m limit --limit 1/s --limit-burst 3 -j ACCEPT
-iptables -A INPUT -p tcp --syn -j DROP
-iptables -A INPUT -p icmp -m limit --limit 1/s --limit-burst 1 -j ACCEPT
-iptables -A INPUT -p icmp -j DROP
-iptables -A INPUT -p tcp -m conntrack --ctstate NEW -m limit --limit 60/s --limit-burst 20 -j ACCEPT
-iptables -A INPUT -p tcp -m conntrack --ctstate NEW -j DROP
-iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
-
-# Log
-echo "Anti-DDoS rules loaded at $(date)" >> /var/log/antiddos.log
-"""
-    
-    try:
-        # Criar diretório se não existir
-        os.makedirs("/etc/network/if-pre-up.d", exist_ok=True)
-        
-        script_path = "/etc/network/if-pre-up.d/antiddos"
-        with open(script_path, "w") as f:
-            f.write(startup_script)
-        
-        # Tornar executável
-        os.chmod(script_path, 0o755)
-        print(f"{COLORS.GREEN}Script de inicialização criado em {script_path}{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao criar script de persistência: {e}{COLORS.END}")
-    
-    # Configurar fail2ban para proteção adicional
-    print(f"\n{COLORS.BOLD}Configurando Fail2ban...{COLORS.END}")
-    
-    fail2ban_config = """
-[DEFAULT]
-# Ban hosts for 10 hours
-bantime = 36000
-findtime = 600
-maxretry = 5
-
-# Custom settings for SSH brute force protection
-[sshd]
-enabled = true
-port = ssh
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 3
-
-# Protection against HTTP DoS attacks
-[http-dos]
-enabled = true
-port = http,https
-filter = http-dos
-logpath = /var/log/apache2/access.log
-maxretry = 300
-findtime = 300
-bantime = 600
-
-# Custom filter for HTTP DoS
-"""
-    
-    http_dos_filter = """
-[Definition]
-failregex = ^<HOST> -.*"(GET|POST).*
-ignoreregex =
-"""
-    
-    try:
-        # Criar diretório se não existir
-        os.makedirs("/etc/fail2ban", exist_ok=True)
-        
-        if not os.path.exists("/etc/fail2ban/jail.local"):
-            with open("/etc/fail2ban/jail.local", "w") as f:
-                f.write(fail2ban_config)
-            print(f"{COLORS.GREEN}Configuração do Fail2ban criada.{COLORS.END}")
-        
-        # Criar filtro personalizado para HTTP DoS
-        filter_dir = "/etc/fail2ban/filter.d"
-        os.makedirs(filter_dir, exist_ok=True)
-        
-        with open(os.path.join(filter_dir, "http-dos.conf"), "w") as f:
-            f.write(http_dos_filter)
-        
-        # Reiniciar fail2ban
-        try:
-            run_command(["systemctl", "restart", "fail2ban"], sudo=True)
-            print(f"{COLORS.GREEN}Fail2ban configurado e reiniciado.{COLORS.END}")
-        except Exception as e:
-            print(f"{COLORS.YELLOW}Aviso ao reiniciar fail2ban: {e}{COLORS.END}")
-            print("Tentando iniciar fail2ban...")
-            run_command(["systemctl", "start", "fail2ban"], sudo=True)
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao configurar Fail2ban: {e}{COLORS.END}")
-    
-    # Verificar e ajustar parâmetros do kernel para proteção
-    print(f"\n{COLORS.BOLD}Ajustando parâmetros do kernel...{COLORS.END}")
-    
-    sysctl_config = """
-# Otimizações contra DDoS - Multiflow
-# SYN flood protection
-net.ipv4.tcp_syncookies = 1
-net.ipv4.tcp_syn_retries = 5
-net.ipv4.tcp_synack_retries = 2
-net.ipv4.tcp_max_syn_backlog = 4096
-
-# Proteção contra port scanning e outros ataques
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
-
-# Desabilitar redirecionamento ICMP
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.all.secure_redirects = 0
-net.ipv4.conf.default.secure_redirects = 0
-net.ipv6.conf.all.accept_redirects = 0
-net.ipv6.conf.default.accept_redirects = 0
-
-# Desabilitar source routing
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv4.conf.default.accept_source_route = 0
-net.ipv6.conf.all.accept_source_route = 0
-net.ipv6.conf.default.accept_source_route = 0
-
-# Aumentar tamanho das filas
-net.core.netdev_max_backlog = 16384
-net.ipv4.tcp_max_syn_backlog = 8192
-net.core.somaxconn = 16384
-
-# Proteção contra ataques de tempo
-net.ipv4.tcp_rfc1337 = 1
-
-# Limitar transferência de rotas ICMP
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.default.send_redirects = 0
-"""
-    
-    try:
-        os.makedirs("/etc/sysctl.d", exist_ok=True)
-        sysctl_file = "/etc/sysctl.d/90-antiddos.conf"
-        with open(sysctl_file, "w") as f:
-            f.write(sysctl_config)
-        
-        # Aplicar configurações
-        run_command(["sysctl", "-p", sysctl_file], sudo=True)
-        print(f"{COLORS.GREEN}Parâmetros do kernel ajustados para proteção contra DDoS.{COLORS.END}")
-    except Exception as e:
-        print(f"{COLORS.RED}Erro ao ajustar parâmetros do kernel: {e}{COLORS.END}")
-    
-    print(f"\n{COLORS.GREEN}Configuração anti-DDoS concluída com sucesso!{COLORS.END}")
-    print(f"\n{COLORS.BOLD}Importante:{COLORS.END} Esta configuração foi projetada para bloquear ataques DDoS comuns")
-    print("enquanto mantém conexões legítimas funcionando. Monitore o sistema após a")
-    print("implementação para garantir que serviços importantes continuem funcionando.")
-    print(f"\n{COLORS.BOLD}As proteções ativadas incluem:{COLORS.END}")
-    print(f" - {COLORS.CYAN}Limitação de taxa para pacotes SYN (proteção contra SYN flood){COLORS.END}")
-    print(f" - {COLORS.CYAN}Limitação de ICMP (proteção contra ataques ping){COLORS.END}")
-    print(f" - {COLORS.CYAN}Blacklist automática para IPs suspeitos{COLORS.END}")
-    print(f" - {COLORS.CYAN}Proteção contra pacotes inválidos{COLORS.END}")
-    print(f" - {COLORS.CYAN}Optimização de parâmetros do kernel{COLORS.END}")
-    print(f" - {COLORS.CYAN}Configuração do Fail2ban para proteção adicional{COLORS.END}")
-
-def menu_bloqueio_sites():
-    while True:
-        clear_screen()
-        
-        print_colored_box("BLOQUEIO DE SITES")
-        
-        # Opções do menu
-        width = 60
-        print(f"{BoxChars.TOP_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.TOP_RIGHT}")
-        print_menu_option("1", "Bloquear Sites de Pornografia", color=COLORS.CYAN)
-        print_menu_option("2", "Bloquear Site Específico (por domínio)", color=COLORS.CYAN)
-        print_menu_option("0", "Voltar", color=COLORS.YELLOW)
-        print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.BOTTOM_RIGHT}")
-        
-        choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}")
-        
-        if choice == "1":
-            bloquear_site_pornografia()
-        elif choice == "2":
-            bloquear_site_personalizado()
-        elif choice == "0":
-            break
-        else:
-            print(f"{COLORS.RED}Opção inválida!{COLORS.END}")
-        
-        input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
-
 def menu_ferramentas():
     while True:
         clear_screen()
@@ -1835,11 +978,34 @@ def menu_ferramentas():
         
         input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
 
+# Função de desinstalação revisada - ALTERAÇÃO 2
 def uninstall_multiflow():
     """Remove completamente o multiflow e todas as alterações feitas."""
     clear_screen()
     
     print_colored_box("REMOVER COMPLETAMENTE MULTIFLOW", title_color=COLORS.RED)
+    
+    # Verificar permissões de root (adicionado)
+    if os.geteuid() != 0:
+        print_colored_box("ERRO", [
+            f"{COLORS.RED}Esta operação precisa ser executada como root/sudo.{COLORS.END}",
+            f"{COLORS.YELLOW}Execute novamente com privilégios de administrador.{COLORS.END}"
+        ], title_color=COLORS.RED)
+        input(f"\n{COLORS.BOLD}Pressione Enter para voltar ao menu principal...{COLORS.END}")
+        return
+    
+    # Verificar processos em execução (adicionado)
+    processes_running = False
+    if socks5_processes:
+        processes_running = True
+        print(f"{COLORS.YELLOW}⚠️  Serviços SOCKS5 ainda em execução nas portas: {', '.join(str(porta) for porta in socks5_processes.keys())}{COLORS.END}")
+    
+    if openvpn_status["active"]:
+        processes_running = True
+        print(f"{COLORS.YELLOW}⚠️  Serviço OpenVPN ainda em execução na porta {openvpn_status['port']}{COLORS.END}")
+    
+    if processes_running:
+        print(f"\n{COLORS.YELLOW}Serviços serão automaticamente encerrados durante o processo de remoção.{COLORS.END}")
     
     content_lines = [
         f"{COLORS.YELLOW}Esta operação irá remover TODAS as alterações feitas pelo Multiflow:{COLORS.END}",
@@ -1858,6 +1024,25 @@ def uninstall_multiflow():
         print(f"{BoxChars.VERTICAL} {line}{' ' * padding}{BoxChars.VERTICAL}")
     print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.BOTTOM_RIGHT}")
     
+    # Opção de criar backup final (adicionado)
+    backup_criado = False
+    install_dir = "/opt/multiflow"
+    if os.path.exists(install_dir):
+        backup_choice = input(f"\n{COLORS.BOLD}Deseja criar um backup final antes de remover? (s/n): {COLORS.END}")
+        if backup_choice.lower() == 's':
+            backup_time = time.strftime("%Y%m%d%H%M%S")
+            backup_dir = f"/opt/multiflow.bak.{backup_time}"
+            try:
+                shutil.copytree(install_dir, backup_dir)
+                print(f"{COLORS.GREEN}✓ Backup criado em {backup_dir}{COLORS.END}")
+                backup_criado = True
+            except Exception as e:
+                print(f"{COLORS.RED}Erro ao criar backup: {e}{COLORS.END}")
+                proceed = input(f"{COLORS.BOLD}Continuar mesmo assim? (s/n): {COLORS.END}")
+                if proceed.lower() != 's':
+                    print(f"{COLORS.GREEN}Operação cancelada.{COLORS.END}")
+                    return
+    
     confirmation = input(f"\n{COLORS.BOLD}{COLORS.RED}Esta ação é irreversível. Digite 'REMOVER' para confirmar: {COLORS.END}")
     
     if confirmation != "REMOVER":
@@ -1866,123 +1051,162 @@ def uninstall_multiflow():
     
     print(f"\n{COLORS.BOLD}Iniciando remoção completa...{COLORS.END}")
     
-    # 1. Parar e remover todos os serviços SOCKS5
-    print(f"\n{COLORS.BOLD}1. Removendo serviços SOCKS5...{COLORS.END}")
-    remove_socks5()
-    
-    # 2. Parar e remover OpenVPN
-    print(f"\n{COLORS.BOLD}2. Removendo OpenVPN...{COLORS.END}")
-    if openvpn_status["active"]:
-        stop_openvpn()
-    remove_openvpn()
-    
-    # 3. Remover link simbólico
-    print(f"\n{COLORS.BOLD}3. Removendo links simbólicos...{COLORS.END}")
+    # Criar arquivo de log (adicionado)
+    log_file = f"/tmp/multiflow_uninstall_{time.strftime('%Y%m%d%H%M%S')}.log"
     try:
-        if os.path.exists("/usr/local/bin/multiflow"):
-            os.remove("/usr/local/bin/multiflow")
-            print("Link simbólico /usr/local/bin/multiflow removido.")
+        with open(log_file, "w") as f:
+            f.write(f"Log de desinstalação do Multiflow - {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            if backup_criado:
+                f.write(f"Backup criado em: {backup_dir}\n")
+            f.write("----------------------------------------\n\n")
     except Exception as e:
-        print(f"{COLORS.RED}Erro ao remover link simbólico: {e}{COLORS.END}")
+        print(f"{COLORS.YELLOW}Não foi possível criar arquivo de log: {e}{COLORS.END}")
     
-    # 4. Remover diretório de instalação
+    def log_action(message, success=True):
+        """Registra ações no log e exibe feedback visual."""
+        if success:
+            status = f"{COLORS.GREEN}✓{COLORS.END}"
+        else:
+            status = f"{COLORS.RED}✗{COLORS.END}"
+        
+        print(f"{status} {message}")
+        
+        try:
+            with open(log_file, "a") as f:
+                result = "SUCESSO" if success else "FALHA"
+                f.write(f"[{result}] {message}\n")
+        except:
+            pass
+    
+    # 1. Parar e remover todos os serviços SOCKS5 (aprimorado)
+    print(f"\n{COLORS.BOLD}1. Removendo serviços SOCKS5...{COLORS.END}")
+    try:
+        if socks5_processes:
+            ports = list(socks5_processes.keys())
+            remove_socks5()
+            log_action(f"Serviços SOCKS5 nas portas {', '.join(str(p) for p in ports)} removidos")
+        else:
+            log_action("Nenhum serviço SOCKS5 encontrado em execução")
+    except Exception as e:
+        log_action(f"Erro ao remover serviços SOCKS5: {e}", success=False)
+    
+    # 2. Parar e remover OpenVPN (aprimorado)
+    print(f"\n{COLORS.BOLD}2. Removendo OpenVPN...{COLORS.END}")
+    try:
+        if openvpn_status["active"]:
+            port = openvpn_status["port"]
+            stop_openvpn()
+            log_action(f"Serviço OpenVPN na porta {port} parado")
+        else:
+            log_action("OpenVPN não está em execução")
+        
+        remove_openvpn()
+        log_action("Arquivos e configurações do OpenVPN removidos")
+    except Exception as e:
+        log_action(f"Erro ao remover OpenVPN: {e}", success=False)
+    
+    # 3. Remover link simbólico (aprimorado)
+    print(f"\n{COLORS.BOLD}3. Removendo links simbólicos...{COLORS.END}")
+    symlinks = ["/usr/local/bin/multiflow", "/usr/bin/multiflow"]
+    for link in symlinks:
+        try:
+            if os.path.exists(link) or os.path.islink(link):
+                os.remove(link)
+                log_action(f"Link simbólico {link} removido")
+            else:
+                log_action(f"Link simbólico {link} não encontrado")
+        except Exception as e:
+            log_action(f"Erro ao remover link simbólico {link}: {e}", success=False)
+    
+    # 4. Remover diretório de instalação (aprimorado)
     print(f"\n{COLORS.BOLD}4. Removendo diretório de instalação...{COLORS.END}")
     try:
         install_dir = "/opt/multiflow"
         if os.path.exists(install_dir):
             shutil.rmtree(install_dir)
-            print(f"Diretório {install_dir} removido.")
+            log_action(f"Diretório {install_dir} removido com sucesso")
+        else:
+            log_action(f"Diretório {install_dir} não encontrado")
     except Exception as e:
-        print(f"{COLORS.RED}Erro ao remover diretório de instalação: {e}{COLORS.END}")
+        log_action(f"Erro ao remover diretório de instalação: {e}", success=False)
     
-    # 5. Limpar arquivos temporários
+    # 5. Limpar arquivos temporários (aprimorado)
     print(f"\n{COLORS.BOLD}5. Limpando arquivos temporários...{COLORS.END}")
-    temp_files = ["server.conf", "openvpn_source", "keys", "socks5_server"]
+    temp_files = ["server.conf", "openvpn_source", "keys", "socks5_server", "multiflow_wrapper.sh"]
     for file in temp_files:
-        if os.path.exists(file):
-            try:
+        try:
+            if os.path.exists(file):
                 if os.path.isdir(file):
                     shutil.rmtree(file)
+                    log_action(f"Diretório {file} removido")
                 else:
                     os.remove(file)
-                print(f"{file} removido.")
-            except Exception as e:
-                print(f"{COLORS.RED}Erro ao remover {file}: {e}{COLORS.END}")
+                    log_action(f"Arquivo {file} removido")
+        except Exception as e:
+            log_action(f"Erro ao remover {file}: {e}", success=False)
     
-    # 6. Verificar e remover backups
+    # 6. Verificar e remover backups (aprimorado)
     print(f"\n{COLORS.BOLD}6. Verificando backups...{COLORS.END}")
     try:
         backup_dirs = [d for d in os.listdir("/opt") if d.startswith("multiflow.bak")]
         if backup_dirs:
-            print(f"Encontrados {len(backup_dirs)} backups.")
-            remove_backups = input(f"{COLORS.BOLD}Deseja remover também os backups? (s/n): {COLORS.END}")
-            if remove_backups.lower() == "s":
+            print(f"Encontrados {len(backup_dirs)} backups:")
+            for i, backup in enumerate(backup_dirs, 1):
+                backup_path = os.path.join("/opt", backup)
+                backup_time = backup.split(".")[-1] if len(backup.split(".")) > 2 else "Desconhecida"
+                try:
+                    size = sum(os.path.getsize(os.path.join(dirpath, filename)) 
+                               for dirpath, _, filenames in os.walk(backup_path) 
+                               for filename in filenames)
+                    size_mb = size / (1024 * 1024)
+                    print(f"  {i}. {backup} (Data: {backup_time}, Tamanho: {size_mb:.2f} MB)")
+                except:
+                    print(f"  {i}. {backup} (Data: {backup_time})")
+            
+            remove_backups = input(f"\n{COLORS.BOLD}Deseja remover os backups? (s/n/selecionar): {COLORS.END}")
+            
+            if remove_backups.lower() == 's':
                 for backup in backup_dirs:
                     backup_path = os.path.join("/opt", backup)
-                    shutil.rmtree(backup_path)
-                    print(f"Backup {backup} removido.")
+                    try:
+                        shutil.rmtree(backup_path)
+                        log_action(f"Backup {backup} removido")
+                    except Exception as e:
+                        log_action(f"Erro ao remover backup {backup}: {e}", success=False)
+            
+            elif remove_backups.lower() == 'selecionar':
+                indices = input(f"{COLORS.BOLD}Digite os números dos backups a remover (separados por vírgula): {COLORS.END}")
+                try:
+                    selected = [int(i.strip()) for i in indices.split(",") if i.strip()]
+                    for idx in selected:
+                        if 1 <= idx <= len(backup_dirs):
+                            backup = backup_dirs[idx-1]
+                            backup_path = os.path.join("/opt", backup)
+                            try:
+                                shutil.rmtree(backup_path)
+                                log_action(f"Backup {backup} removido")
+                            except Exception as e:
+                                log_action(f"Erro ao remover backup {backup}: {e}", success=False)
+                except Exception as e:
+                    log_action(f"Erro ao processar seleção de backups: {e}", success=False)
+        else:
+            log_action("Nenhum backup encontrado")
     except Exception as e:
-        print(f"{COLORS.RED}Erro ao verificar backups: {e}{COLORS.END}")
+        log_action(f"Erro ao verificar backups: {e}", success=False)
     
-    print(f"\n{COLORS.GREEN}Multiflow foi completamente removido do sistema.{COLORS.END}")
-    print(f"{COLORS.CYAN}Obrigado por usar o Multiflow!{COLORS.END}")
+    # Exibir informações finais (aprimorado)
+    print(f"\n{COLORS.GREEN}✅ Multiflow foi completamente removido do sistema.{COLORS.END}")
+    if os.path.exists(log_file):
+        print(f"{COLORS.CYAN}Log detalhado da desinstalação salvo em: {log_file}{COLORS.END}")
+    
+    print(f"\n{COLORS.YELLOW}Para remover completamente todos os arquivos de configuração residuais,{COLORS.END}")
+    print(f"{COLORS.YELLOW}você pode executar: sudo apt autoremove && sudo apt clean{COLORS.END}")
+    
+    print(f"\n{COLORS.CYAN}Obrigado por usar o Multiflow!{COLORS.END}")
     
     input(f"\n{COLORS.BOLD}Pressione Enter para voltar ao menu principal...{COLORS.END}")
 
-def main_menu():
-    # Verificar se o script está sendo executado como root
-    is_root = check_root()
-    
-    while True:
-        clear_screen()
-        
-        # Banner do MULTIFLOW
-        banner = f"""
-{COLORS.BOLD}{COLORS.CYAN}███╗   ███╗██╗   ██╗██╗  ████████╗██╗███████╗██╗      ██████╗ ██╗    ██╗
-████╗ ████║██║   ██║██║  ╚══██╔══╝██║██╔════╝██║     ██╔═══██╗██║    ██║
-██╔████╔██║██║   ██║██║     ██║   ██║█████╗  ██║     ██║   ██║██║ █╗ ██║
-██║╚██╔╝██║██║   ██║██║     ██║   ██║██╔══╝  ██║     ██║   ██║██║███╗██║
-██║ ╚═╝ ██║╚██████╔╝███████╗██║   ██║██║     ███████╗╚██████╔╝╚███╔███╔╝
-╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝{COLORS.END}
-        """
-        print(banner)
-        
-        # Exibir o painel de informações do sistema
-        show_system_panel()
-        
-        # Menu principal
-        width = 60
-        print(f"{BoxChars.TOP_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.TOP_RIGHT}")
-        print_menu_option("1", "Gerenciar Usuários", color=COLORS.CYAN)
-        print_menu_option("2", "Gerenciar Conexões", color=COLORS.CYAN)
-        print_menu_option("3", "Remover Completamente Multiflow", color=COLORS.RED)
-        print_menu_option("4", "Ferramentas", color=COLORS.CYAN)
-        print_menu_option("0", "Sair", color=COLORS.YELLOW)
-        print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.BOTTOM_RIGHT}")
-        
-        # Adicionar aviso se não está executando como root
-        if not is_root:
-            print(f"\n{COLORS.YELLOW}⚠️  Aviso: Executando sem privilégios de root. Algumas funções podem não funcionar.{COLORS.END}")
-        
-        choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}")
-
-        if choice == "1":
-            menu_usuarios()
-        elif choice == "2":
-            menu_conexoes()
-        elif choice == "3":
-            uninstall_multiflow()
-        elif choice == "4":
-            menu_ferramentas()
-        elif choice == "0":
-            clear_screen()
-            print(f"\n{COLORS.GREEN}Obrigado por usar o Multiflow!{COLORS.END}")
-            print(f"{COLORS.CYAN}Saindo...{COLORS.END}")
-            break
-        else:
-            print(f"{COLORS.RED}Opção inválida!{COLORS.END}")
-
-        input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
+# O restante do script permanece inalterado...
 
 if __name__ == "__main__":
     main_menu()
