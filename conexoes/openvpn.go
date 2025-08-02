@@ -15,20 +15,6 @@ import (
 	"github.com/fatih/color"
 )
 
-// Função init para garantir que as dependências estão instaladas
-func init() {
-	// Verifica se o go.mod existe; se não, inicializa.
-	if _, err := os.Stat("go.mod"); os.IsNotExist(err) {
-		cmd := exec.Command("go", "mod", "init", "openvpn_installer")
-		cmd.Run() // Ignora o erro se já existir
-	}
-	// Instala a dependência de cor
-	cmd := exec.Command("go", "get", "github.com/fatih/color")
-	if err := cmd.Run(); err != nil {
-		fmt.Println("Aviso: Falha ao instalar o pacote 'github.com/fatih/color'. A saída não será colorida.", err)
-	}
-}
-
 // Constantes para versões (facilitam atualizações)
 const EASYRSA_VERSION = "3.1.0" // Versão estável
 const OPENVPN_VERSION = "2.5.4" // Versão estável
