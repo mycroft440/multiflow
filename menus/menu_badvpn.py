@@ -28,16 +28,16 @@ COLORS = Colors()
 
 class BadVPNManager:
     def __init__(self):
-        # O script a ser gerenciado é o script Python, apesar da extensão .c
+        # O script a ser gerenciado é o script Python
         script_dir = os.path.dirname(__file__)
-        self.badvpn_script_path = os.path.join(script_dir, '..', 'conexoes', 'badvpn.c')
+        self.badvpn_script_path = os.path.join(script_dir, '..', 'conexoes', 'badvpn.py')
 
     def _get_badvpn_processes(self):
-        """Helper para encontrar todos os processos python do 'badvpn.c' em execução."""
+        """Helper para encontrar todos os processos python do 'badvpn.py' em execução."""
         procs = []
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
-                # Verifica se é um processo python executando o script 'badvpn.c'
+                # Verifica se é um processo python executando o script 'badvpn.py'
                 if proc.info['cmdline'] and 'python' in proc.info['name'] and self.badvpn_script_path in proc.info['cmdline']:
                     procs.append(proc)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
