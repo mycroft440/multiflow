@@ -15,6 +15,8 @@ try:
     import ssh_user_manager
     from menus import menu_badvpn
     from menus import menu_openvpn
+    # --- CORREÇÃO: Adicionado import para o menu do proxysocks ---
+    from menus import menu_proxysocks 
 except ImportError as e:
     print(f"\033[91mErro: Módulo \'{e.name}\' não encontrado.\033[0m")
     print(f"\033[93mCertifique-se de que todos os ficheiros .py estão no mesmo diretório que este script.\033[0m")
@@ -133,50 +135,21 @@ def ssh_users_main_menu():
     clear_screen()
     ssh_user_manager.main()
 
-def proxysocks_simples_menu():
-    """Menu para gerenciar ProxySocks (simples)."""
-    print("Funcionalidade ProxySocks (simples) ainda não implementada.")
-    time.sleep(2)
-
-def conexoes_menu():
-    """Menu para gerenciar conexões."""
-    while True:
-        clear_screen()
-        show_system_panel()
-        print_colored_box("MENU CONEXÕES")
-        print_menu_option("1", "OpenVPN", color=COLORS.CYAN)
-        print_menu_option("2", "BadVPN", color=COLORS.CYAN)
-        print_menu_option("3", "ProxySocks (simples)", color=COLORS.CYAN)
-        print_menu_option("0", "Voltar", color=COLORS.YELLOW)
-        print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
-        
-        choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}")
-        
-        if choice == "1":
-            menu_openvpn.main_menu()
-        elif choice == "2":
-            menu_badvpn.main_menu()
-        elif choice == "3":
-            proxysocks_simples_menu()
-        elif choice == "0":
-            break
-        else:
-            print(f"{COLORS.RED}Opção inválida. Tente novamente.{COLORS.END}")
-        
-        time.sleep(1)
-
 def otimizadorvps_menu():
     """Redireciona para o script otimizadorvps.py."""
     clear_screen()
     try:
-        subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'ferramentas', 'otimizadorvps.py')], check=True)
+        # Garante que o caminho para o script seja construído de forma segura
+        script_dir = os.path.dirname(__file__)
+        otimizador_path = os.path.join(script_dir, 'ferramentas', 'otimizadorvps.py')
+        subprocess.run([sys.executable, otimizador_path], check=True)
     except FileNotFoundError:
         print(f"{COLORS.RED}Erro: otimizadorvps.py não encontrado. Certifique-se de que o arquivo está no diretório 'ferramentas'.{COLORS.END}")
     except subprocess.CalledProcessError as e:
         print(f"{COLORS.RED}Erro ao executar otimizadorvps.py: {e}{COLORS.END}")
     input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
 
-# Função principal (se necessário)
+# Função principal
 if __name__ == "__main__":
     check_root()
     while True:
@@ -184,8 +157,10 @@ if __name__ == "__main__":
         show_system_panel()
         print_colored_box("MENU PRINCIPAL")
         print_menu_option("1", "Gerenciar Usuários SSH", color=COLORS.CYAN)
-        print_menu_option("2", "Conexões (OpenVPN, BadVPN, ProxySocks)", color=COLORS.CYAN)
-        print_menu_option("3", "Otimizador de VPS", color=COLORS.CYAN)
+        print_menu_option("2", "OpenVPN", color=COLORS.CYAN)
+        print_menu_option("3", "BadVPN", color=COLORS.CYAN)
+        print_menu_option("4", "ProxySocks (simples)", color=COLORS.CYAN)
+        print_menu_option("5", "Otimizador de VPS", color=COLORS.CYAN)
         print_menu_option("0", "Sair", color=COLORS.YELLOW)
         print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
         
@@ -194,14 +169,16 @@ if __name__ == "__main__":
         if choice == "1":
             ssh_users_main_menu()
         elif choice == "2":
-            conexoes_menu()
+            menu_openvpn.main_menu()
         elif choice == "3":
+            menu_badvpn.main_menu()
+        elif choice == "4":
+            menu_proxysocks.main()
+        elif choice == "5":
             otimizadorvps_menu()
         elif choice == "0":
+            print(f"\n{COLORS.GREEN}Saindo do Multiflow...{COLORS.END}")
             break
         else:
             print(f"{COLORS.RED}Opção inválida. Tente novamente.{COLORS.END}")
-        
-        time.sleep(1)
-
-
+            time.sleep(1) # Pequena pausa para o usuário ver a mensagem de erro
