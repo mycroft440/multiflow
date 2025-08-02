@@ -77,31 +77,45 @@ class OpenVPNManager:
             return f"{COLORS.RED}Inativo / Não Instalado{COLORS.END}"
 
     def run_go_installer(self):
-        """Compila e executa o instalador Go."""
+        """Compila e executa o instalador Go, gerenciando as dependências primeiro."""
         clear_screen()
         print_colored_box("INSTALADOR OPENVPN")
         
-        go_script_path = os.path.join(self.base_dir, '..', 'conexoes')
+        go_script_dir = os.path.join(self.base_dir, '..', 'conexoes')
         go_script_name = 'openvpn.go'
+        go_mod_path = os.path.join(go_script_dir, 'go.mod')
 
-        if not os.path.exists(os.path.join(go_script_path, go_script_name)):
-            print(f"{COLORS.RED}Erro: Arquivo '{go_script_name}' não encontrado em '{go_script_path}'.{COLORS.END}")
+        if not os.path.exists(os.path.join(go_script_dir, go_script_name)):
+            print(f"{COLORS.RED}Erro: Arquivo '{go_script_name}' não encontrado em '{go_script_dir}'.{COLORS.END}")
             return
 
+        # --- CORREÇÃO INICIA AQUI ---
+        # 1. Inicializa o módulo Go se o go.mod não existir
+        if not os.path.exists(go_mod_path):
+            print(f"{COLORS.YELLOW}Inicializando o módulo Go em '{go_script_dir}'...{COLORS.END}")
+            init_cmd = ["go", "mod", "init", "openvpn_installer"]
+            if self._run_command(init_cmd, capture_output=False, cwd=go_script_dir) is None:
+                print(f"{COLORS.RED}Erro ao inicializar o módulo Go. Verifique se o Go está instalado.{COLORS.END}")
+                return
+
+        # 2. Baixa as dependências do Go
+        print(f"{COLORS.YELLOW}Verificando e baixando dependências do Go...{COLORS.END}")
+        tidy_cmd = ["go", "mod", "tidy"]
+        if self._run_command(tidy_cmd, capture_output=False, cwd=go_script_dir) is None:
+            print(f"{COLORS.RED}Erro ao baixar as dependências do Go.{COLORS.END}")
+            return
+        # --- CORREÇÃO TERMINA AQUI ---
+
         print(f"{COLORS.YELLOW}Compilando o gerenciador Go...{COLORS.END}")
-        # CORREÇÃO: Passa o nome do arquivo sem aspas extras.
-        # O comando é executado dentro do diretório do script Go.
         compile_cmd = ["go", "build", "-o", self.compiled_openvpn_go, go_script_name]
-        if self._run_command(compile_cmd, capture_output=False, cwd=go_script_path) is None:
-            print(f"{COLORS.RED}Erro ao compilar '{go_script_name}'. Certifique-se de que o Go está instalado e o código-fonte não tem erros.{COLORS.END}")
+        if self._run_command(compile_cmd, capture_output=False, cwd=go_script_dir) is None:
+            print(f"{COLORS.RED}Erro ao compilar '{go_script_name}'. O código-fonte pode conter erros.{COLORS.END}")
             return
         
         print(f"{COLORS.GREEN}Compilação concluída.{COLORS.END}")
         print(f"{COLORS.YELLOW}Iniciando o instalador interativo... Siga as instruções na tela.{COLORS.END}")
         
         try:
-            # O script Go é interativo, então executamos diretamente no terminal
-            # Usamos sys.stdin, sys.stdout, sys.stderr para permitir a interatividade
             subprocess.run(["sudo", self.compiled_openvpn_go], check=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
             print(f"\n{COLORS.GREEN}Instalação do OpenVPN concluída com sucesso!{COLORS.END}")
         except subprocess.CalledProcessError:
@@ -121,7 +135,6 @@ class OpenVPNManager:
                 status_line = self.display_status()
                 print_colored_box("GERENCIADOR OPENVPN", [f"Status: {status_line}"])
                 
-                # A única opção é instalar/executar o script Go
                 print_menu_option("1", "Instalar / Gerenciar OpenVPN (via script Go)", color=COLORS.CYAN)
                 print_menu_option("0", "Voltar ao Menu Anterior", color=COLORS.YELLOW)
                 print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
