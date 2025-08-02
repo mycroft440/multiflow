@@ -124,16 +124,7 @@ git clone --depth 1 "$REPO_URL" "$TMP_DIR"
 # O diretório de trabalho agora é o do projeto clonado
 cd "$TMP_DIR"
 
-# 5. Compilação de Ferramentas (BadVPN)
-BADVPN_SOURCE="conexoes/BadVPN.c"
-BADVPN_EXEC="/usr/local/bin/custom_badvpn"
-if [ -f "$BADVPN_SOURCE" ]; then
-    log_info "Compilando BadVPN customizado..."
-    $SUDO gcc -o "$BADVPN_EXEC" "$BADVPN_SOURCE" -lpthread || log_warn "Falha ao compilar BadVPN. O menu pode não funcionar corretamente."
-    $SUDO chmod +x "$BADVPN_EXEC"
-fi
-
-# 6. Instalação das Ferramentas de Otimização (ZRAM e Swap)
+# 5. Instalação das Ferramentas de Otimização (ZRAM e Swap)
 log_info "Instalando ferramentas de otimização..."
 
 # Instalação do ZRAM
@@ -161,7 +152,7 @@ else
     log_warn "Arquivo 'ferramentas/swap.py' não encontrado. Pulando esta etapa."
 fi
 
-# 7. Instalação do Multiflow
+# 6. Instalação do Multiflow
 log_info "Iniciando a instalação do Multiflow..."
 
 if [ -d "$INSTALL_DIR" ]; then
@@ -174,7 +165,7 @@ $SUDO mkdir -p "$INSTALL_DIR"
 # Copia todo o conteúdo do diretório atual (TMP_DIR)
 $SUDO cp -a . "$INSTALL_DIR/"
 
-# 8. Configuração de Permissões e Shebangs
+# 7. Configuração de Permissões e Shebangs
 log_info "Configurando permissões de execução para os scripts..."
 find "$INSTALL_DIR" -type f -name "*.py" -print0 | while IFS= read -r -d $'\0' script; do
     if ! grep -q "^#\!/usr/bin/env python3" "$script"; then
@@ -184,13 +175,13 @@ find "$INSTALL_DIR" -type f -name "*.py" -print0 | while IFS= read -r -d $'\0' s
 done
 find "$INSTALL_DIR" -type f \( -name "*.sh" -o -name "*.go" \) -exec $SUDO chmod +x {} +
 
-# 9. Criação de Links Simbólicos
+# 8. Criação de Links Simbólicos
 log_info "Criando links simbólicos para facilitar a execução..."
 $SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/multiflow
 $SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/h
 $SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/menu
 
-# 10. Limpeza
+# 9. Limpeza
 log_info "Limpando arquivos de instalação temporários..."
 rm -rf "$TMP_DIR"
 
