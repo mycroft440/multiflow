@@ -15,7 +15,7 @@ try:
     import ssh_user_manager
     from menus import menu_badvpn
     from menus import menu_openvpn
-    from menus import menu_proxysocks 
+    from menus import menu_proxysocks
 except ImportError as e:
     print(f"\033[91mErro: Módulo \'{e.name}\' não encontrado.\033[0m")
     print(f"\033[93mCertifique-se de que todos os ficheiros .py estão no mesmo diretório que este script.\033[0m")
@@ -171,6 +171,26 @@ def otimizadorvps_menu():
         print(f"{COLORS.RED}Erro ao executar otimizadorvps.py: {e}{COLORS.END}")
     input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
 
+def ferramentas_menu():
+    """Menu para acessar as ferramentas de otimização."""
+    while True:
+        clear_screen()
+        show_system_panel()
+        print_colored_box("FERRAMENTAS DE OTIMIZAÇÃO")
+        print_menu_option("1", "Otimizador de VPS", color=COLORS.CYAN)
+        print_menu_option("0", "Voltar", color=COLORS.YELLOW)
+        print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
+
+        choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}")
+
+        if choice == "1":
+            otimizadorvps_menu()
+        elif choice == "0":
+            break
+        else:
+            print(f"{COLORS.RED}Opção inválida. Tente novamente.{COLORS.END}")
+            time.sleep(1)
+
 # Função principal
 if __name__ == "__main__":
     check_root()
@@ -181,7 +201,7 @@ if __name__ == "__main__":
         print_menu_option("1", "Gerenciar Usuários SSH", color=COLORS.CYAN)
         print_menu_option("2", "Gerenciar Conexões", color=COLORS.CYAN)
         print_menu_option("3", "BadVPN", color=COLORS.CYAN)
-        print_menu_option("4", "Otimizador de VPS", color=COLORS.CYAN)
+        print_menu_option("4", "Ferramentas", color=COLORS.CYAN)
         print_menu_option("0", "Sair", color=COLORS.YELLOW)
         print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
         
@@ -194,7 +214,7 @@ if __name__ == "__main__":
         elif choice == "3":
             menu_badvpn.main_menu()
         elif choice == "4":
-            otimizadorvps_menu()
+            ferramentas_menu()
         elif choice == "0":
             print(f"\n{COLORS.GREEN}Saindo do Multiflow...{COLORS.END}")
             break
