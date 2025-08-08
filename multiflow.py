@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
-import os
 import sys
+sys.path.append("/opt/multiflow")
+import os
 import time
 import re
 import platform
