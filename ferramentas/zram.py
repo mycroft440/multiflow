@@ -38,7 +38,7 @@ def setup_zram(percentage=0.3, algorithm='zstd', priority=100, num_devices=None)
     size_per_device = total_zram_size // num_devices
     
     # Load zram module with specified number of devices
-    subprocess.run(['modprobe', 'zram', f'num_devices={num_devices}'], check=True)
+    subprocess.run(["sudo", "modprobe", "zram", f"num_devices={num_devices}"], check=True)
     
     for dev_id in range(num_devices):
         dev = f'/dev/zram{dev_id}'
