@@ -22,6 +22,7 @@ except ImportError as e:
 
 from menus.menu_style_utils import Colors, BoxChars, visible_length, clear_screen, print_colored_box, print_menu_option
 
+# (Todo o código de cores e funções de UI permanece o mesmo...)
 # Cores modernas e gradientes
 class ModernColors:
     # Cores básicas
@@ -67,6 +68,7 @@ class Icons:
     EXIT = ""
     CLOCK = ""
     SYSTEM = ""
+    UPDATE = "⟳ " # Ícone para atualização
 
 def print_gradient_text(text, start_color, end_color):
     """Imprime texto com efeito gradiente simulado."""
@@ -251,8 +253,6 @@ def conexoes_menu():
         if choice == "1":
             clear_screen()
             try:
-                # CORREÇÃO: Usar os.path.realpath para encontrar o caminho correto do script,
-                # mesmo quando executado através de um link simbólico.
                 script_real_path = os.path.realpath(__file__)
                 script_dir = os.path.dirname(script_real_path)
                 openvpn_script_path = os.path.join(script_dir, 'conexoes', 'openvpn.sh')
@@ -262,18 +262,13 @@ def conexoes_menu():
                     time.sleep(4)
                     continue
 
-                # Garante que o script é executável
                 os.chmod(openvpn_script_path, 0o755)
-
-                # Executa o script bash diretamente, passando o controle do terminal
                 subprocess.run(['bash', openvpn_script_path], check=True)
             
             except FileNotFoundError:
                 print(f"{MC.RED_GRADIENT}Erro: O comando 'bash' não foi encontrado. Verifique a sua instalação.{MC.RESET}")
                 time.sleep(3)
             except subprocess.CalledProcessError:
-                # O script do OpenVPN provavelmente já mostrou uma mensagem de erro.
-                # Apenas aguardamos o usuário para voltar ao menu.
                 input(f"\n{MC.BOLD}Pressione Enter para voltar ao menu...{MC.RESET}")
             except Exception as e:
                 print(f"{MC.RED_GRADIENT}Ocorreu um erro inesperado: {e}{MC.RESET}")
@@ -289,7 +284,6 @@ def otimizadorvps_menu():
     """Redireciona para o script otimizadorvps.py."""
     clear_screen()
     try:
-        # CORREÇÃO: Usar o mesmo método robusto para encontrar o caminho do otimizador.
         script_real_path = os.path.realpath(__file__)
         script_dir = os.path.dirname(script_real_path)
         otimizador_path = os.path.join(script_dir, 'ferramentas', 'otimizadorvps.py')
@@ -319,6 +313,52 @@ def ferramentas_menu():
             print(f"{MC.RED_GRADIENT}Opção inválida.{MC.RESET}")
             time.sleep(1)
 
+# ==============================================================================
+# NOVA FUNÇÃO DE ATUALIZAÇÃO
+# ==============================================================================
+def atualizar_multiflow():
+    """Executa o script de atualização e encerra o programa."""
+    clear_screen()
+    print_modern_box("ATUALIZADOR MULTIFLOW", [
+        f"{MC.YELLOW_GRADIENT}Este processo irá baixar a versão mais recente do GitHub.{MC.RESET}",
+        f"{MC.YELLOW_GRADIENT}Serviços ativos como BadVPN e ProxySocks serão parados.{MC.RESET}",
+        f"{MC.RED_GRADIENT}O programa será encerrado após a atualização.{MC.RESET}",
+        f"{MC.WHITE}Você precisará iniciá-lo novamente para usar a nova versão.{MC.RESET}"
+    ], Icons.UPDATE, MC.PURPLE_GRADIENT)
+
+    confirm = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar com a atualização? (s/n): {MC.RESET}").lower()
+    
+    if confirm == 's':
+        try:
+            # Encontra o caminho do script de atualização de forma robusta
+            script_dir = os.path.dirname(os.path.realpath(__file__))
+            update_script_path = os.path.join(script_dir, 'update.sh')
+
+            if not os.path.exists(update_script_path):
+                print(f"\n{MC.RED_GRADIENT}Erro: Script 'update.sh' não encontrado!{MC.RESET}")
+                time.sleep(3)
+                return
+
+            print("\n" + "="*60)
+            # Executa o script de atualização e mostra a saída para o usuário
+            subprocess.run(['sudo', 'bash', update_script_path], check=True)
+            print("="*60)
+            
+            print(f"\n{MC.GREEN_GRADIENT}O programa foi atualizado com sucesso.{MC.RESET}")
+            print(f"{MC.YELLOW_GRADIENT}Encerrando agora. Por favor, inicie-o novamente com o comando 'multiflow'.{MC.RESET}")
+            sys.exit(0) # Encerra o script para forçar a reinicialização
+
+        except subprocess.CalledProcessError:
+            print(f"\n{MC.RED_GRADIENT}Ocorreu um erro durante a atualização. Verifique a saída acima.{MC.RESET}")
+            input(f"{MC.BOLD}Pressione Enter para voltar ao menu...{MC.RESET}")
+        except Exception as e:
+            print(f"\n{MC.RED_GRADIENT}Ocorreu um erro inesperado: {e}{MC.RESET}")
+            input(f"{MC.BOLD}Pressione Enter para continuar...{MC.RESET}")
+    else:
+        print(f"\n{MC.YELLOW_GRADIENT}Atualização cancelada.{MC.RESET}")
+        time.sleep(2)
+
+
 # Função principal
 if __name__ == "__main__":
     check_root()
@@ -335,6 +375,8 @@ if __name__ == "__main__":
             print_modern_menu_option("2", "Gerenciar Conexões", "", MC.CYAN_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("3", "BadVPN", "", MC.PURPLE_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("4", "Ferramentas", "", MC.ORANGE_GRADIENT, False, MC.CYAN_GRADIENT)
+            # NOVA OPÇÃO DE MENU
+            print_modern_menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, False, MC.CYAN_GRADIENT)
             print()
             print_modern_menu_option("0", "Sair", "", MC.RED_GRADIENT, True, MC.ORANGE_GRADIENT)
             
@@ -344,6 +386,8 @@ if __name__ == "__main__":
             elif choice == "2": conexoes_menu()
             elif choice == "3": menu_badvpn.main_menu()
             elif choice == "4": ferramentas_menu()
+            # NOVA CHAMADA DE FUNÇÃO
+            elif choice == "5": atualizar_multiflow()
             elif choice == "0":
                 print(f"\n{MC.GREEN_GRADIENT}Saindo do Multiflow...{MC.RESET}")
                 break
