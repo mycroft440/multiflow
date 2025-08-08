@@ -17,7 +17,7 @@ try:
     from menus import menu_badvpn
     from menus import menu_proxysocks
     from menus import menu_bloqueador
-    from menus import menu_servidor_download # <-- CORRIGIDO
+    from menus import menu_servidor_download
 except ImportError as e:
     print(f"\033[91mErro: Módulo '{e.name}' não encontrado.\033[0m")
     print(f"\033[93mCertifique-se de que todos os ficheiros .py estão no mesmo diretório que este script.\033[0m")
@@ -322,10 +322,10 @@ def ferramentas_menu():
             time.sleep(1)
 
 # ==============================================================================
-# NOVA FUNÇÃO DE ATUALIZAÇÃO
+# FUNÇÃO DE ATUALIZAÇÃO MODIFICADA
 # ==============================================================================
 def atualizar_multiflow():
-    """Executa o script de atualização e encerra o programa."""
+    """Executa o script de atualização em Python e encerra o programa."""
     clear_screen()
     print_modern_box("ATUALIZADOR MULTIFLOW", [
         f"{MC.YELLOW_GRADIENT}Este processo irá baixar a versão mais recente do GitHub.{MC.RESET}",
@@ -340,16 +340,17 @@ def atualizar_multiflow():
         try:
             # Encontra o caminho do script de atualização de forma robusta
             script_dir = os.path.dirname(os.path.realpath(__file__))
-            update_script_path = os.path.join(script_dir, 'update.sh')
+            update_script_path = os.path.join(script_dir, 'update.py') # <-- ALTERADO para update.py
 
             if not os.path.exists(update_script_path):
-                print(f"\n{MC.RED_GRADIENT}Erro: Script 'update.sh' não encontrado!{MC.RESET}")
+                print(f"\n{MC.RED_GRADIENT}Erro: Script 'update.py' não encontrado!{MC.RESET}")
                 time.sleep(3)
                 return
 
             print("\n" + "="*60)
             # Executa o script de atualização e mostra a saída para o usuário
-            subprocess.run(['sudo', 'bash', update_script_path], check=True)
+            # Usa sys.executable para garantir que está usando o mesmo interpretador Python
+            subprocess.run(['sudo', sys.executable, update_script_path], check=True)
             print("="*60)
             
             print(f"\n{MC.GREEN_GRADIENT}O programa foi atualizado com sucesso.{MC.RESET}")
@@ -384,7 +385,7 @@ if __name__ == "__main__":
             print_modern_menu_option("3", "BadVPN", "", MC.PURPLE_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("4", "Ferramentas", "", MC.ORANGE_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, False, MC.CYAN_GRADIENT)
-            print_modern_menu_option("6", "Servidor de Download", "▶️", MC.GREEN_GRADIENT, False, MC.CYAN_GRADIENT) # <-- ADICIONADO
+            print_modern_menu_option("6", "Servidor de Download", "▶️", MC.GREEN_GRADIENT, False, MC.CYAN_GRADIENT)
             print()
             print_modern_menu_option("0", "Sair", "", MC.RED_GRADIENT, True, MC.ORANGE_GRADIENT)
             
@@ -395,7 +396,7 @@ if __name__ == "__main__":
             elif choice == "3": menu_badvpn.main_menu()
             elif choice == "4": ferramentas_menu()
             elif choice == "5": atualizar_multiflow()
-            elif choice == "6": menu_servidor_download.main() # <-- ADICIONADO
+            elif choice == "6": menu_servidor_download.main()
             elif choice == "0":
                 print(f"\n{MC.GREEN_GRADIENT}Saindo do Multiflow...{MC.RESET}")
                 break
