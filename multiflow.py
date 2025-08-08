@@ -16,7 +16,7 @@ try:
     from menus import menu_badvpn
     from menus import menu_proxysocks
     from menus import menu_bloqueador
-    from menus import menu_servidor_download # <-- ADICIONADO
+    from menus import menu_servidor_download # <-- CORRIGIDO
 except ImportError as e:
     print(f"\033[91mErro: Módulo '{e.name}' não encontrado.\033[0m")
     print(f"\033[93mCertifique-se de que todos os ficheiros .py estão no mesmo diretório que este script.\033[0m")
