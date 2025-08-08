@@ -4,6 +4,7 @@
 import os
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 # Importa as ferramentas de estilo para manter a consistência visual
@@ -23,103 +24,93 @@ except ImportError:
 # Instancia as cores
 COLORS = Colors()
 
-
 class BadVPNManager:
     def __init__(self):
-        # Define os caminhos para o script de instalação
+        # Define os caminhos de forma robusta
         self.base_dir = Path(__file__).parent.parent
-        self.executable_path = self.base_dir / 'conexoes' / 'badvpn.sh'
+        self.install_script_path = self.base_dir / 'conexoes' / 'badvpn.sh'
+        self.service_file_path = Path("/etc/systemd/system/badvpn-udpgw.service")
 
-    def _check_badvpn_installed(self):
-        """Verifica se o badvpn-udpgw está instalado."""
-        return True
+    def _is_installed(self):
+        """Verifica se o serviço BadVPN parece estar instalado."""
+        return self.service_file_path.exists()
 
-    def display_status(self):
-        """Verifica o status do serviço BadVPN."""
+    def _run_command_interactive(self, command):
+        """Executa um comando e mostra sua saída em tempo real."""
         try:
-            result = subprocess.run(["systemctl", "is-active", "badvpn-udpgw"], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip() == "active":
-                return f"{COLORS.GREEN}Ativo{COLORS.END}"
-            else:
-                return f"{COLORS.RED}Inativo{COLORS.END}"
-        except:
-            return f"{COLORS.RED}Inativo{COLORS.END}"
-
-    def start_badvpn_port(self, port):
-        """Inicia o serviço BadVPN numa porta."""
-        # 1. Pré-verificações
-        if not self._check_badvpn_installed():
+            # Usa Popen para ter controle sobre o processo e exibir a saída
+            process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr, text=True)
+            process.wait()
+            return process.returncode == 0
+        except FileNotFoundError:
+            print(f"\n{COLORS.RED}Erro: Comando '{command[0]}' não encontrado.{COLORS.END}")
             return False
-
-        # 2. Executar o script de instalação/configuração
-        try:
-            print(f"{COLORS.YELLOW}Executando script de instalação/configuração do BadVPN...{COLORS.END}")
-            result = subprocess.run(["sudo", "bash", str(self.executable_path), str(port)], 
-                                  capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                print(f"{COLORS.GREEN}✓ Script executado com sucesso.{COLORS.END}")
-                
-                # 3. Verificar se o serviço está ativo
-                status_result = subprocess.run(["systemctl", "is-active", "badvpn-udpgw"], 
-                                             capture_output=True, text=True)
-                if status_result.returncode == 0 and status_result.stdout.strip() == "active":
-                    print(f"{COLORS.GREEN}✓ Serviço BadVPN está ativo.{COLORS.END}")
-                    return True
-                else:
-                    print(f"{COLORS.YELLOW}Script executado, mas serviço pode não estar ativo.{COLORS.END}")
-                    return True
-            else:
-                print(f"{COLORS.RED}✗ Erro ao executar o script: {result.stderr}{COLORS.END}")
-                return False
-                
         except Exception as e:
-            print(f"{COLORS.RED}✗ Erro ao executar o script: {e}{COLORS.END}")
+            print(f"\n{COLORS.RED}Ocorreu um erro inesperado: {e}{COLORS.END}")
             return False
 
-    def add_port(self):
-        clear_screen()
-        print_colored_box("INICIAR SERVIÇO EM NOVA PORTA")
+    def get_status(self):
+        """Verifica o status do serviço e a porta configurada."""
+        if not self._is_installed():
+            return f"{COLORS.YELLOW}Não Instalado{COLORS.END}"
+
         try:
-            port = input(f"{COLORS.CYAN}Digite a nova porta a ser iniciada: {COLORS.END}").strip()
+            # Verifica se o serviço está ativo
+            result = subprocess.run(["systemctl", "is-active", "badvpn-udpgw"], capture_output=True, text=True)
+            status = f"{COLORS.GREEN}Ativo{COLORS.END}" if result.stdout.strip() == "active" else f"{COLORS.RED}Inativo{COLORS.END}"
+
+            # Tenta ler a porta do arquivo de serviço
+            port = "N/A"
+            with self.service_file_path.open('r') as f:
+                content = f.read()
+                match = re.search(r'--listen-addr 127.0.0.1:(\d+)', content)
+                if match:
+                    port = match.group(1)
+            
+            return f"{status} | Porta: {COLORS.CYAN}{port}{COLORS.END}"
+
+        except Exception:
+            return f"{COLORS.RED}Erro ao obter status{COLORS.END}"
+
+    def install_or_change_port(self):
+        """Instala o BadVPN ou altera a porta se já estiver instalado."""
+        clear_screen()
+        action = "Alterar Porta" if self._is_installed() else "Instalar"
+        print_colored_box(f"{action.upper()} BADVPN")
+        
+        try:
+            port = input(f"{COLORS.CYAN}Digite a porta para o BadVPN (ex: 7300): {COLORS.END}").strip()
             if not port.isdigit() or not (1 <= int(port) <= 65535):
-                print(f"\n{COLORS.RED}✗ Porta inválida.{COLORS.END}")
+                print(f"\n{COLORS.RED}✗ Porta inválida. Tente novamente.{COLORS.END}")
                 return
-            self.start_badvpn_port(port)
+
+            print(f"\n{COLORS.YELLOW}Executando script de configuração... Acompanhe a saída abaixo.{COLORS.END}")
+            print("-" * 60)
+            
+            command = ["sudo", "bash", str(self.install_script_path), port]
+            success = self._run_command_interactive(command)
+            
+            print("-" * 60)
+            if success:
+                print(f"\n{COLORS.GREEN}✓ Operação concluída com sucesso!{COLORS.END}")
+            else:
+                print(f"\n{COLORS.RED}✗ A operação encontrou um erro.{COLORS.END}")
+
         except KeyboardInterrupt:
             print(f"\n{COLORS.YELLOW}Operação cancelada.{COLORS.END}")
 
-    def remove_port(self):
-        clear_screen()
-        print_colored_box("PARAR SERVIÇO BADVPN")
-        try:
-            result = subprocess.run(["sudo", "systemctl", "stop", "badvpn-udpgw"], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                print(f"{COLORS.GREEN}✓ Serviço BadVPN parado com sucesso.{COLORS.END}")
-            else:
-                print(f"{COLORS.RED}✗ Erro ao parar o serviço: {result.stderr}{COLORS.END}")
-        except Exception as e:
-            print(f"{COLORS.RED}✗ Erro ao parar o serviço: {e}{COLORS.END}")
-
-    def stop_all_services(self):
-        clear_screen()
-        print_colored_box("PARAR SERVIÇO BADVPN")
-        confirm = input(f"{COLORS.YELLOW}Deseja parar o serviço BadVPN? (s/N): {COLORS.END}").lower()
-        if confirm not in ['s', 'sim']:
-            print("Operação cancelada.")
+    def _control_service(self, action):
+        """Função auxiliar para iniciar, parar ou reiniciar o serviço."""
+        if not self._is_installed():
+            print(f"\n{COLORS.YELLOW}BadVPN não está instalado. Instale primeiro.{COLORS.END}")
             return
 
-        try:
-            result = subprocess.run(["sudo", "systemctl", "stop", "badvpn-udpgw"], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                print(f"{COLORS.GREEN}✓ Serviço BadVPN parado com sucesso.{COLORS.END}")
-            else:
-                print(f"{COLORS.RED}✗ Erro ao parar o serviço: {result.stderr}{COLORS.END}")
-        except Exception as e:
-            print(f"{COLORS.RED}✗ Erro ao parar o serviço: {e}{COLORS.END}")
+        clear_screen()
+        print_colored_box(f"{action.upper()} SERVIÇO BADVPN")
+        command = ["sudo", "systemctl", action, "badvpn-udpgw.service"]
+        self._run_command_interactive(command)
+        # Adiciona uma verificação de status após a ação
+        subprocess.run(["sudo", "systemctl", "status", "badvpn-udpgw.service", "--no-pager"], check=False)
 
 def main_menu():
     if os.geteuid() != 0:
@@ -131,20 +122,22 @@ def main_menu():
     while True:
         try:
             clear_screen()
-            status_line = manager.display_status()
+            status_line = manager.get_status()
             print_colored_box("GERENCIADOR BADVPN", [f"Status: {status_line}"])
             
-            print_menu_option("1", "Iniciar/Configurar BadVPN", color=COLORS.CYAN)
-            print_menu_option("2", "Parar Serviço BadVPN", color=COLORS.CYAN)
-            print_menu_option("3", "Parar Serviço BadVPN", color=COLORS.CYAN)
+            print_menu_option("1", "Instalar / Alterar Porta", color=COLORS.CYAN)
+            print_menu_option("2", "Iniciar Serviço", color=COLORS.GREEN)
+            print_menu_option("3", "Parar Serviço", color=COLORS.RED)
+            print_menu_option("4", "Reiniciar Serviço", color=COLORS.YELLOW)
             print_menu_option("0", "Voltar ao Menu Anterior", color=COLORS.YELLOW)
             print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
             
             choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}").strip()
             
-            if choice == '1': manager.add_port()
-            elif choice == '2': manager.remove_port()
-            elif choice == '3': manager.stop_all_services()
+            if choice == '1': manager.install_or_change_port()
+            elif choice == '2': manager._control_service('start')
+            elif choice == '3': manager._control_service('stop')
+            elif choice == '4': manager._control_service('restart')
             elif choice == '0': break
             else: print(f"\n{COLORS.RED}Opção inválida. Tente novamente.{COLORS.END}")
                 
@@ -159,4 +152,3 @@ def main_menu():
 
 if __name__ == "__main__":
     main_menu()
-
