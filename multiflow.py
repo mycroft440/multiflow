@@ -15,6 +15,7 @@ try:
     from ferramentas import manusear_usuarios
     from menus import menu_badvpn
     from menus import menu_proxysocks
+    from menus import menu_bloqueador # <-- Adicionado
 except ImportError as e:
     print(f"\033[91mErro: Módulo '{e.name}' não encontrado.\033[0m")
     print(f"\033[93mCertifique-se de que todos os ficheiros .py estão no mesmo diretório que este script.\033[0m")
@@ -57,7 +58,7 @@ class Icons:
     USERS = ""
     NETWORK = ""
     TOOLS = ""
-    SHIELD = ""
+    SHIELD = "🛡️ " # Ícone para bloqueador
     CHART = ""
     CPU = ""
     RAM = ""
@@ -302,13 +303,18 @@ def ferramentas_menu():
         print_modern_box("FERRAMENTAS DE OTIMIZAÇÃO", [], "", MC.ORANGE_GRADIENT)
         print()
         print_modern_menu_option("1", "Otimizador de VPS", "", MC.GREEN_GRADIENT, False)
+        print_modern_menu_option("2", "Bloqueador de Sites", Icons.SHIELD, MC.RED_GRADIENT, False)
         print()
         print_modern_menu_option("0", "Voltar", Icons.BACK, MC.YELLOW_GRADIENT, True)
 
         choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}┌─ Escolha uma opção: {MC.RESET}")
 
-        if choice == "1": otimizadorvps_menu()
-        elif choice == "0": break
+        if choice == "1":
+            otimizadorvps_menu()
+        elif choice == "2":
+            menu_bloqueador.main_menu()
+        elif choice == "0":
+            break
         else: 
             print(f"{MC.RED_GRADIENT}Opção inválida.{MC.RESET}")
             time.sleep(1)
@@ -375,7 +381,6 @@ if __name__ == "__main__":
             print_modern_menu_option("2", "Gerenciar Conexões", "", MC.CYAN_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("3", "BadVPN", "", MC.PURPLE_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("4", "Ferramentas", "", MC.ORANGE_GRADIENT, False, MC.CYAN_GRADIENT)
-            # NOVA OPÇÃO DE MENU
             print_modern_menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, False, MC.CYAN_GRADIENT)
             print()
             print_modern_menu_option("0", "Sair", "", MC.RED_GRADIENT, True, MC.ORANGE_GRADIENT)
@@ -386,7 +391,6 @@ if __name__ == "__main__":
             elif choice == "2": conexoes_menu()
             elif choice == "3": menu_badvpn.main_menu()
             elif choice == "4": ferramentas_menu()
-            # NOVA CHAMADA DE FUNÇÃO
             elif choice == "5": atualizar_multiflow()
             elif choice == "0":
                 print(f"\n{MC.GREEN_GRADIENT}Saindo do Multiflow...{MC.RESET}")
