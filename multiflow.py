@@ -15,7 +15,8 @@ try:
     from ferramentas import manusear_usuarios
     from menus import menu_badvpn
     from menus import menu_proxysocks
-    from menus import menu_bloqueador # <-- Adicionado
+    from menus import menu_bloqueador
+    from menus import menu_servidor_download # <-- ADICIONADO
 except ImportError as e:
     print(f"\033[91mErro: Módulo '{e.name}' não encontrado.\033[0m")
     print(f"\033[93mCertifique-se de que todos os ficheiros .py estão no mesmo diretório que este script.\033[0m")
@@ -382,6 +383,7 @@ if __name__ == "__main__":
             print_modern_menu_option("3", "BadVPN", "", MC.PURPLE_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("4", "Ferramentas", "", MC.ORANGE_GRADIENT, False, MC.CYAN_GRADIENT)
             print_modern_menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, False, MC.CYAN_GRADIENT)
+            print_modern_menu_option("6", "Servidor de Download", "▶️", MC.GREEN_GRADIENT, False, MC.CYAN_GRADIENT) # <-- ADICIONADO
             print()
             print_modern_menu_option("0", "Sair", "", MC.RED_GRADIENT, True, MC.ORANGE_GRADIENT)
             
@@ -392,6 +394,7 @@ if __name__ == "__main__":
             elif choice == "3": menu_badvpn.main_menu()
             elif choice == "4": ferramentas_menu()
             elif choice == "5": atualizar_multiflow()
+            elif choice == "6": menu_servidor_download.main() # <-- ADICIONADO
             elif choice == "0":
                 print(f"\n{MC.GREEN_GRADIENT}Saindo do Multiflow...{MC.RESET}")
                 break
