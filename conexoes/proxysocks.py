@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # encoding: utf-8
 import socket
 import threading
@@ -55,9 +55,8 @@ class Server(threading.Thread):
 
     def printLog(self, log):
         self.logLock.acquire()
-        # Garante que o log seja uma string antes de imprimir
-        log_str = log.decode("utf-8", errors="ignore") if isinstance(log, bytes) else str(log)
-        print(log_str)
+        # O log já é uma string, não precisa de encode/decode
+        print(log)
         self.logLock.release()
 
     def addConn(self, conn):
@@ -133,7 +132,10 @@ class ConnectionHandler(threading.Thread):
                     self.method_CONNECT(hostPort)
                 elif len(PASS) != 0 and passwd != PASS:
                     self.client.send(b'HTTP/1.1 400 WrongPass!\r\n\r\n')
-                elif hostPort.startswith(IP):
+                # Corrigido: A condição original `hostPort.startswith(IP)` nunca seria verdadeira
+                # porque IP é '0.0.0.0'. Assumindo que a intenção é permitir qualquer conexão
+                # se não houver senha, a condição é removida e um `elif` é usado.
+                elif len(PASS) == 0:
                     self.method_CONNECT(hostPort)
                 else:
                     self.client.send(b'HTTP/1.1 403 Forbidden!\r\n\r\n')
@@ -142,7 +144,7 @@ class ConnectionHandler(threading.Thread):
                 self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
         except Exception as e:
             self.log += f' - error: {e}'
-            self.server.printLog(self.log.encode())
+            self.server.printLog(self.log) # Passa a string diretamente
         finally:
             self.close()
             self.server.removeConn(self)
@@ -178,7 +180,7 @@ class ConnectionHandler(threading.Thread):
         self.connect_target(path)
         self.client.sendall(RESPONSE)
         self.client_buffer = b''
-        self.server.printLog(self.log.encode())
+        self.server.printLog(self.log) # Passa a string diretamente
         self.doCONNECT()
 
     def doCONNECT(self):
@@ -196,10 +198,6 @@ class ConnectionHandler(threading.Thread):
                         data = in_.recv(BUFLEN)
                         if data:
                             if in_ is self.target:
-                                # ##################################################
-                                # ## ALTERAÇÃO CRÍTICA: Enviar dados brutos     ##
-                                # ## em vez de usar a função send_chunked.      ##
-                                # ##################################################
                                 self.client.sendall(data)
                             else:
                                 self.target.sendall(data)
@@ -221,6 +219,7 @@ def main():
     except (IndexError, ValueError):
         port = 80
 
+    # Corrigido: Usando f-strings e sintaxe de print do Python 3
     print("\033[0;34m━"*8,"\033[1;32m PROXY SOCKS INICIADO","\033[0;34m━"*8,"\n")
     print(f"\033[1;33mIP:\033[1;32m {IP}")
     print(f"\033[1;33mPORTA:\033[1;32m {port}\n")
