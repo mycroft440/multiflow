@@ -19,25 +19,100 @@ except ImportError as e:
     sys.exit(1)
 
 def verificar_openvpn_instalado():
-    for path in ('/etc/openvpn/server/server.conf', '/etc/openvpn/server.conf'):
+    """Verifica se o OpenVPN está instalado verificando arquivos e serviços"""
+    # Verifica arquivos de configuração
+    config_paths = [
+        '/etc/openvpn/server.conf',
+        '/etc/openvpn/server/server.conf',
+        '/etc/openvpn/ca.crt',
+        '/etc/openvpn/server.crt'
+    ]
+    
+    for path in config_paths:
         if os.path.exists(path):
             return True
+    
+    # Verifica se o binário do OpenVPN existe
     try:
-        r = subprocess.run(["systemctl", "is-active", "openvpn-server@server"], capture_output=True, text=True, check=False)
-        return r.returncode == 0 and r.stdout.strip() == "active"
-    except Exception:
-        return False
+        result = subprocess.run(['which', 'openvpn'], capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+    except:
+        pass
+    
+    # Verifica se o serviço existe (mesmo que inativo)
+    try:
+        result = subprocess.run(['systemctl', 'list-unit-files'], capture_output=True, text=True, check=False)
+        if 'openvpn' in result.stdout:
+            return True
+    except:
+        pass
+    
+    return False
 
 def get_openvpn_status():
+    """Obtém o status detalhado do OpenVPN"""
     if not verificar_openvpn_instalado():
-        return f"{MC.RED_GRADIENT}{Icons.INACTIVE} Não Instalado{MC.RESET}"
+        return f"{MC.RED_GRADIENT}[X] Não Instalado{MC.RESET}"
+    
+    # Lista de possíveis nomes de serviço do OpenVPN
+    service_names = [
+        'openvpn@server',
+        'openvpn-server@server',
+        'openvpn',
+        'openvpn@server.service',
+        'openvpn-server@server.service'
+    ]
+    
+    for service in service_names:
+        try:
+            result = subprocess.run(
+                ['systemctl', 'is-active', service],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5
+            )
+            
+            status = result.stdout.strip().lower()
+            
+            if status == 'active':
+                # Verifica se está realmente escutando na porta
+                port_check = subprocess.run(
+                    ['lsof', '-i', ':1194'],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if 'openvpn' in port_check.stdout.lower():
+                    return f"{MC.GREEN_GRADIENT}[✓] Ativo{MC.RESET}"
+                else:
+                    return f"{MC.GREEN_GRADIENT}[✓] Ativo (verificar porta){MC.RESET}"
+            elif status == 'inactive':
+                continue  # Tenta o próximo nome de serviço
+            elif status == 'failed':
+                return f"{MC.RED_GRADIENT}[!] Falhou{MC.RESET}"
+            elif status == 'activating':
+                return f"{MC.YELLOW_GRADIENT}[~] Iniciando{MC.RESET}"
+        except subprocess.TimeoutExpired:
+            continue
+        except Exception:
+            continue
+    
+    # Se nenhum serviço foi encontrado ativo, verifica se o processo está rodando
     try:
-        r = subprocess.run(["systemctl", "is-active", "openvpn-server@server"], capture_output=True, text=True, check=False)
-        if r.returncode == 0 and r.stdout.strip() == "active":
-            return f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} Ativo{MC.RESET}"
-        return f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Instalado (Inativo){MC.RESET}"
-    except Exception:
-        return f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Status Desconhecido{MC.RESET}"
+        ps_result = subprocess.run(
+            ['pgrep', '-x', 'openvpn'],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if ps_result.returncode == 0:
+            return f"{MC.GREEN_GRADIENT}[✓] Processo Ativo{MC.RESET}"
+    except:
+        pass
+    
+    return f"{MC.YELLOW_GRADIENT}[!] Instalado (Inativo){MC.RESET}"
 
 def count_ovpn_files():
     try:
@@ -57,30 +132,30 @@ def build_main_frame(status_msg=""):
     s.append(simple_header("GERENCIADOR OPENVPN"))
     status = get_openvpn_status(); clients = count_ovpn_files()
     s.append(modern_box("STATUS DO SERVIÇO", [
-        f"{MC.CYAN_LIGHT}{Icons.NETWORK} Status:{MC.RESET} {status}",
-        f"{MC.CYAN_LIGHT}{Icons.FILE} Clientes Configurados:{MC.RESET} {MC.WHITE}{clients}{MC.RESET}"
-    ], Icons.INFO, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
+        f"{MC.CYAN_LIGHT}[>] Status:{MC.RESET} {status}",
+        f"{MC.CYAN_LIGHT}[>] Clientes Configurados:{MC.RESET} {MC.WHITE}{clients}{MC.RESET}"
+    ], "[i]", MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
     s.append("\n")
     if verificar_openvpn_instalado():
-        s.append(modern_box("OPÇÕES DISPONÍVEIS", [], Icons.SETTINGS, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
+        s.append(modern_box("OPÇÕES DISPONÍVEIS", [], "[*]", MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
         s.append("\n")
-        s.append(menu_option("1", "Adicionar Novo Cliente", Icons.PLUS, MC.GREEN_GRADIENT))
-        s.append(menu_option("2", "Remover Cliente", Icons.MINUS, MC.ORANGE_GRADIENT))
-        s.append(menu_option("3", "Listar Arquivos .ovpn", Icons.FOLDER, MC.CYAN_GRADIENT))
-        s.append(menu_option("4", "Reinstalar OpenVPN", Icons.UPDATE, MC.YELLOW_GRADIENT))
-        s.append(menu_option("5", "Desinstalar OpenVPN", Icons.TRASH, MC.RED_GRADIENT))
+        s.append(menu_option("1", "Adicionar Novo Cliente", "[+]", MC.GREEN_GRADIENT))
+        s.append(menu_option("2", "Remover Cliente", "[-]", MC.ORANGE_GRADIENT))
+        s.append(menu_option("3", "Listar Arquivos .ovpn", "[#]", MC.CYAN_GRADIENT))
+        s.append(menu_option("4", "Reinstalar OpenVPN", "[R]", MC.YELLOW_GRADIENT))
+        s.append(menu_option("5", "Desinstalar OpenVPN", "[X]", MC.RED_GRADIENT))
     else:
         s.append(modern_box("INSTALAÇÃO DISPONÍVEL", [
-            f"{MC.YELLOW_GRADIENT}{Icons.INFO} OpenVPN não está instalado{MC.RESET}",
+            f"{MC.YELLOW_GRADIENT}[!] OpenVPN não está instalado{MC.RESET}",
             f"{MC.WHITE}Configuração automática com:{MC.RESET}",
             "  • Protocolo TCP",
             "  • DNS da VPS",
             "  • Cliente inicial: cliente1.ovpn"
-        ], Icons.DOWNLOAD, MC.GREEN_GRADIENT, MC.GREEN_LIGHT))
+        ], "[D]", MC.GREEN_GRADIENT, MC.GREEN_LIGHT))
         s.append("\n")
-        s.append(menu_option("1", "Instalar OpenVPN Agora", Icons.DOWNLOAD, MC.GREEN_GRADIENT, badge="RECOMENDADO"))
+        s.append(menu_option("1", "Instalar OpenVPN Agora", "[D]", MC.GREEN_GRADIENT, badge="RECOMENDADO"))
     s.append("\n")
-    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
+    s.append(menu_option("0", "Voltar ao Menu Principal", "[<]", MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
     return "".join(s)
 
@@ -94,16 +169,16 @@ def build_clients_frame():
             for f in files:
                 try:
                     size = os.path.getsize(f'/root/{f}') / 1024
-                    content.append(f"{MC.CYAN_LIGHT}{Icons.FILE}{MC.RESET} /root/{f} {MC.GRAY}({size:.1f} KB){MC.RESET}")
+                    content.append(f"{MC.CYAN_LIGHT}[>]{MC.RESET} /root/{f} {MC.GRAY}({size:.1f} KB){MC.RESET}")
                 except Exception:
-                    content.append(f"{MC.CYAN_LIGHT}{Icons.FILE}{MC.RESET} /root/{f}")
+                    content.append(f"{MC.CYAN_LIGHT}[>]{MC.RESET} /root/{f}")
             content.append("")
-            content.append(f"{MC.YELLOW_GRADIENT}{Icons.INFO} Use SFTP para baixar os arquivos{MC.RESET}")
+            content.append(f"{MC.YELLOW_GRADIENT}[i] Use SFTP para baixar os arquivos{MC.RESET}")
         else:
-            content=[f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Nenhum arquivo .ovpn encontrado{MC.RESET}"]
-        s.append(modern_box("ARQUIVOS DE CONFIGURAÇÃO", content, Icons.FOLDER, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
+            content=[f"{MC.YELLOW_GRADIENT}[!] Nenhum arquivo .ovpn encontrado{MC.RESET}"]
+        s.append(modern_box("ARQUIVOS DE CONFIGURAÇÃO", content, "[#]", MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
     except Exception as e:
-        s.append(modern_box("ERRO", [f"{MC.RED_GRADIENT}{Icons.CROSS} {e}{MC.RESET}"], Icons.WARNING, MC.RED_GRADIENT, MC.RED_LIGHT))
+        s.append(modern_box("ERRO", [f"{MC.RED_GRADIENT}[X] {e}{MC.RESET}"], "[!]", MC.RED_GRADIENT, MC.RED_LIGHT))
     s.append(footer_line())
     return "".join(s)
 
@@ -111,7 +186,7 @@ def build_operation_frame(title, icon, color, msg="Aguarde..."):
     s=[]
     s.append(simple_header("OPERAÇÃO EM ANDAMENTO"))
     s.append(modern_box(title, [
-        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Não interrompa o processo{MC.RESET}",
+        f"{MC.YELLOW_GRADIENT}[!] Não interrompa o processo{MC.RESET}",
         f"{MC.WHITE}{msg}{MC.RESET}"
     ], icon, color, MC.CYAN_LIGHT))
     s.append(footer_line("Processando..."))
@@ -122,7 +197,7 @@ def executar_script_openvpn():
     if not script_path:
         return False, "Script openvpn.sh não encontrado em conexoes/."
     try:
-        TerminalManager.render(build_operation_frame("Executando openvpn.sh", Icons.DOWNLOAD, MC.GREEN_GRADIENT, "Inicializando instalação/gestão..."))
+        TerminalManager.render(build_operation_frame("Executando openvpn.sh", "[>]", MC.GREEN_GRADIENT, "Inicializando instalação/gestão..."))
         # Sair do alt-screen para mostrar saída do script
         TerminalManager.leave_alt_screen()
         subprocess.run(['chmod', '+x', script_path], check=True)
