@@ -19,6 +19,7 @@ try:
     from menus import menu_proxysocks
     from menus import menu_bloqueador
     from menus import menu_servidor_download
+    from menus import menu_openvpn  # <--- ADICIONADO NOVO MENU
 except ImportError as e:
     print(f"\033[91mErro: Módulo '{e.name}' não encontrado.\033[0m")
     print(f"\033[93mCertifique-se de que os módulos estão acessíveis via /opt/multiflow.\033[0m")
@@ -153,7 +154,7 @@ class Icons:
     EXIT = "🚪 "
     CLOCK = "🕐 "
     SYSTEM = "💻 "
-    UPDATE = "🔄 "
+    UPDATE = "� "
     DOWNLOAD = "📥 "
     KEY = "🔑 "
     LOCK = "🔒 "
@@ -454,22 +455,13 @@ def conexoes_menu():
         TerminalManager.after_input()
 
         if choice == "1":
+            TerminalManager.leave_alt_screen()
             try:
-                script_real_path = os.path.realpath(__file__)
-                script_dir = os.path.dirname(script_real_path)
-                openvpn_script_path = os.path.join(script_dir, 'conexoes', 'openvpn.sh')
-                if not os.path.exists(openvpn_script_path):
-                    status = "Erro: 'conexoes/openvpn.sh' não encontrado."
-                else:
-                    TerminalManager.leave_alt_screen()
-                    try:
-                        os.chmod(openvpn_script_path, 0o755)
-                        subprocess.run(['bash', openvpn_script_path], check=True)
-                    finally:
-                        TerminalManager.enter_alt_screen()
-                    status = "OpenVPN: operação concluída."
-            except Exception as e:
-                status = f"Erro: {e}"
+                # Chama o novo menu Python em vez do script shell
+                menu_openvpn.main_menu()
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "OpenVPN: operação concluída."
         elif choice == "2":
             TerminalManager.leave_alt_screen()
             try:
@@ -615,3 +607,4 @@ def main_menu():
 # ==================== EXECUÇÃO ====================
 if __name__ == "__main__":
     main_menu()
+�
