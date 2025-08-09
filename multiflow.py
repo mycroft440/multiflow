@@ -12,7 +12,7 @@ import shutil
 from datetime import datetime
 import random
 
-# Importando os módulos necessários no início
+# Importando módulos do projeto
 try:
     from ferramentas import manusear_usuarios
     from menus import menu_badvpn
@@ -21,17 +21,10 @@ try:
     from menus import menu_servidor_download
 except ImportError as e:
     print(f"\033[91mErro: Módulo '{e.name}' não encontrado.\033[0m")
-    print(f"\033[93mCertifique-se de que todos os ficheiros .py estão no mesmo diretório que este script.\033[0m")
+    print(f"\033[93mCertifique-se de que os módulos estão acessíveis via /opt/multiflow.\033[0m")
     sys.exit(1)
 
-# Opcional: funções existentes no projeto (não usadas aqui, mas mantidas)
-try:
-    from menus.menu_style_utils import Colors, BoxChars, visible_length, clear_screen, print_colored_box, print_menu_option
-except Exception:
-    pass
-
-# ==================== GERENCIAMENTO DO TERMINAL ====================
-
+# ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
     _in_alt = False
 
@@ -43,69 +36,48 @@ class TerminalManager:
     @staticmethod
     def enter_alt_screen():
         if not TerminalManager._in_alt:
-            # Entrar no buffer alternativo, ir para home e limpar
-            sys.stdout.write("\033[?1049h\033[H\033[2J\033[3J")
-            sys.stdout.write("\033[?25l")  # Oculta cursor
+            sys.stdout.write("\033[?1049h\033[H\033[2J\033[3J\033[?25l")
             sys.stdout.flush()
             TerminalManager._in_alt = True
 
     @staticmethod
     def leave_alt_screen():
-        # Mostra cursor e sai do buffer alternativo
         if TerminalManager._in_alt:
-            sys.stdout.write("\033[?25h")
-            sys.stdout.write("\033[?1049l")
+            sys.stdout.write("\033[?25h\033[?1049l")
             sys.stdout.flush()
             TerminalManager._in_alt = False
 
     @staticmethod
     def hard_clear():
-        """
-        Limpa completamente a tela de forma agressiva, cobrindo casos onde 2J/3J
-        não apagam o que já foi desenhado e o novo frame possui menos linhas.
-        """
+        # Limpa tela e scrollback e garante área em branco
         cols, lines = TerminalManager.size()
-        # Reset de atributos, home, limpar tela e scrollback
         sys.stdout.write("\033[0m\033[H\033[2J\033[3J")
-        # Sobrescreve todo o viewport com espaços (garante remoção de resquícios)
-        blank_line = " " * cols
-        buf = []
-        for _ in range(lines):
-            buf.append(blank_line)
-        sys.stdout.write("\n".join(buf))
-        # Volta para o topo e limpa de novo para garantir
-        sys.stdout.write("\033[H\033[2J\033[3J")
+        blank = (" " * cols + "\n") * (lines - 1) + (" " * cols)
+        sys.stdout.write(blank)
+        sys.stdout.write("\033[H\033[2J")
         sys.stdout.flush()
-        # Pequena pausa para terminais remotos (SSH/tmux) processarem
-        time.sleep(0.01)
 
     @staticmethod
-    def begin_frame():
-        # Oculta cursor e limpa a tela agressivamente antes de redesenhar
+    def render(frame_str):
+        # Renderiza um frame completo de uma vez, sem telas intermediárias
         sys.stdout.write("\033[?25l")
         TerminalManager.hard_clear()
-
-    @staticmethod
-    def end_frame():
-        # Garante atributos resetados e cursor visível após o frame, mas
-        # mantemos o cursor oculto até input para evitar flicker de redesenho
-        sys.stdout.write("\033[0m")
+        sys.stdout.write("\033[H")  # Garante cursor no topo
+        sys.stdout.write(frame_str)
         sys.stdout.flush()
 
     @staticmethod
     def before_input():
-        # Antes de pedir entrada ao usuário, garante cursor visível
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()
 
     @staticmethod
     def after_input():
-        # Após entrada, podemos ocultar novamente para o redesenho
         sys.stdout.write("\033[?25l")
         sys.stdout.flush()
 
-# ==================== CORES E ESTILOS MODERNOS ====================
-class ModernColors:
+# ==================== CORES E ÍCONES ====================
+class MC:
     RESET = '\033[0m'
     BOLD = '\033[1m'
     DIM = '\033[2m'
@@ -141,9 +113,6 @@ class ModernColors:
     LIGHT_GRAY = '\033[38;2;229;231;235m'
     DARK_GRAY = '\033[38;2;75;85;99m'
 
-MC = ModernColors()
-
-# ==================== ÍCONES ====================
 class Icons:
     SERVER = "🖥️ "
     USERS = "👥 "
@@ -178,83 +147,83 @@ class Icons:
     BOX_HORIZONTAL = "─"
     BOX_VERTICAL = "│"
 
-# ==================== UI HELPERS ====================
-def print_gradient_line(width=80, char='═',
-                        colors=(MC.PURPLE_GRADIENT, MC.CYAN_GRADIENT, MC.BLUE_GRADIENT)):
+# ==================== HELPERS DE UI (RETORNAM STRING) ====================
+def gradient_line(width=80, char='═',
+                  colors=(MC.PURPLE_GRADIENT, MC.CYAN_GRADIENT, MC.BLUE_GRADIENT)):
     seg = max(1, width // len(colors))
     out = []
-    consumed = 0
+    used = 0
     for i, c in enumerate(colors):
-        if i == len(colors) - 1:
-            run = width - consumed
-        else:
-            run = seg
-        consumed += run
+        run = seg if i < len(colors) - 1 else (width - used)
         out.append(f"{c}{char * run}")
-    sys.stdout.write("".join(out) + MC.RESET + "\n")
+        used += run
+    return "".join(out) + MC.RESET + "\n"
 
-def print_modern_header():
+def modern_header():
     cols, _ = TerminalManager.size()
     width = max(60, min(cols - 2, 100))
-    print_gradient_line(width)
+    s = []
+    s.append(gradient_line(width))
     logo_lines = [
-        f"{MC.PURPLE_LIGHT}███╗   ███╗{MC.CYAN_LIGHT}██╗   ██╗{MC.BLUE_LIGHT}██╗  ████████╗{MC.GREEN_LIGHT}██╗███████╗{MC.ORANGE_LIGHT}██╗      {MC.PINK_LIGHT}██████╗ {MC.YELLOW_LIGHT}██╗    ██╗",
-        f"{MC.PURPLE_GRADIENT}████╗ ████║{MC.CYAN_GRADIENT}██║   ██║{MC.BLUE_GRADIENT}██║  ╚══██╔══╝{MC.GREEN_GRADIENT}██║██╔════╝{MC.ORANGE_GRADIENT}██║     {MC.PINK_GRADIENT}██╔═══██╗{MC.YELLOW_GRADIENT}██║    ██║",
-        f"{MC.PURPLE_GRADIENT}██╔████╔██║{MC.CYAN_GRADIENT}██║   ██║{MC.BLUE_GRADIENT}██║     ██║   {MC.GREEN_GRADIENT}██║█████╗  {MC.ORANGE_GRADIENT}██║     {MC.PINK_GRADIENT}██║   ██║{MC.YELLOW_GRADIENT}██║ █╗ ██║",
-        f"{MC.PURPLE_DARK}██║╚██╔╝██║{MC.CYAN_DARK}██║   ██║{MC.BLUE_DARK}██║     ██║   {MC.GREEN_DARK}██║██╔══╝  {MC.ORANGE_DARK}██║     {MC.RED_GRADIENT}██║   ██║{MC.YELLOW_DARK}██║███╗██║",
-        f"{MC.PURPLE_DARK}██║ ╚═╝ ██║{MC.CYAN_DARK}╚██████╔╝{MC.BLUE_DARK}███████╗██║   {MC.GREEN_DARK}██║██║     {MC.ORANGE_DARK}███████╗{MC.RED_DARK}╚██████╔╝{MC.YELLOW_DARK}╚███╔███╔╝",
+        f"{MC.PURPLE_LIGHT}███╗   ███╗{MC.CYAN_LIGHT}██╗   ██╗{MC.BLUE_LIGHT}██╗  ████████╗{MC.GREEN_LIGHT}██╗███████╗{MC.ORANGE_LIGHT}██╗      {MC.PINK_LIGHT}██████╗ {MC.YELLOW_LIGHT}██╗    ██╗{MC.RESET}",
+        f"{MC.PURPLE_GRADIENT}████╗ ████║{MC.CYAN_GRADIENT}██║   ██║{MC.BLUE_GRADIENT}██║  ╚══██╔══╝{MC.GREEN_GRADIENT}██║██╔════╝{MC.ORANGE_GRADIENT}██║     {MC.PINK_GRADIENT}██╔═══██╗{MC.YELLOW_GRADIENT}██║    ██║{MC.RESET}",
+        f"{MC.PURPLE_GRADIENT}██╔████╔██║{MC.CYAN_GRADIENT}██║   ██║{MC.BLUE_GRADIENT}██║     ██║   {MC.GREEN_GRADIENT}██║█████╗  {MC.ORANGE_GRADIENT}██║     {MC.PINK_GRADIENT}██║   ██║{MC.YELLOW_GRADIENT}██║ █╗ ██║{MC.RESET}",
+        f"{MC.PURPLE_DARK}██║╚██╔╝██║{MC.CYAN_DARK}██║   ██║{MC.BLUE_DARK}██║     ██║   {MC.GREEN_DARK}██║██╔══╝  {MC.ORANGE_DARK}██║     {MC.RED_GRADIENT}██║   ██║{MC.YELLOW_DARK}██║███╗██║{MC.RESET}",
+        f"{MC.PURPLE_DARK}██║ ╚═╝ ██║{MC.CYAN_DARK}╚██████╔╝{MC.BLUE_DARK}███████╗██║   {MC.GREEN_DARK}██║██║     {MC.ORANGE_DARK}███████╗{MC.RED_DARK}╚██████╔╝{MC.YELLOW_DARK}╚███╔███╔╝{MC.RESET}",
         f"{MC.DARK_GRAY}╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝{MC.RESET}"
     ]
-    for line in logo_lines:
-        sys.stdout.write("  " + line + "\n")
-    sys.stdout.write(f"\n{MC.GRAY}{'═' * width}{MC.RESET}\n")
-    sys.stdout.write(f"{MC.CYAN_GRADIENT}{MC.BOLD}{'Sistema Avançado de Gerenciamento VPS'.center(width)}{MC.RESET}\n")
-    sys.stdout.write(f"{MC.GRAY}{'═' * width}{MC.RESET}\n\n")
+    s.extend(["  " + l + "\n" for l in logo_lines])
+    s.append(f"\n{MC.GRAY}{'═' * width}{MC.RESET}\n")
+    s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}{'Sistema Avançado de Gerenciamento VPS'.center(width)}{MC.RESET}\n")
+    s.append(f"{MC.GRAY}{'═' * width}{MC.RESET}\n\n")
+    return "".join(s)
 
-def print_modern_box(title, content, icon="", primary_color=MC.CYAN_GRADIENT, secondary_color=MC.CYAN_LIGHT):
+def modern_box(title, content_lines, icon="", primary=MC.CYAN_GRADIENT, secondary=MC.CYAN_LIGHT):
     cols, _ = TerminalManager.size()
     width = max(54, min(cols - 6, 100))
     title_text = f" {icon}{title} " if icon else f" {title} "
-    header = (f"{primary_color}{Icons.BOX_TOP_LEFT}{Icons.BOX_HORIZONTAL * 10}"
-              f"{secondary_color}┤{MC.BOLD}{MC.WHITE}{title_text}{MC.RESET}{secondary_color}├"
-              f"{primary_color}{Icons.BOX_HORIZONTAL * (width - len(title_text) - 12)}"
-              f"{Icons.BOX_TOP_RIGHT}{MC.RESET}")
-    sys.stdout.write(header + "\n")
+    header = (f"{primary}{Icons.BOX_TOP_LEFT}{Icons.BOX_HORIZONTAL * 10}"
+              f"{secondary}┤{MC.BOLD}{MC.WHITE}{title_text}{MC.RESET}{secondary}├"
+              f"{primary}{Icons.BOX_HORIZONTAL * (width - len(title_text) - 12)}"
+              f"{Icons.BOX_TOP_RIGHT}{MC.RESET}\n")
+    body = ""
+    for line in content_lines:
+        clean = re.sub(r'\033\[[0-9;]*m', '', line)
+        pad = width - len(clean) - 2
+        if pad < 0:
+            vis = clean[:width - 5] + "..."
+            line = line.replace(clean, vis)
+            pad = width - len(vis) - 2
+        body += f"{primary}{Icons.BOX_VERTICAL}{MC.RESET} {line}{' ' * pad} {primary}{Icons.BOX_VERTICAL}{MC.RESET}\n"
+    footer = f"{primary}{Icons.BOX_BOTTOM_LEFT}{Icons.BOX_HORIZONTAL * width}{Icons.BOX_BOTTOM_RIGHT}{MC.RESET}\n"
+    return header + body + footer
 
-    if content:
-        for line in content:
-            clean = re.sub(r'\033\[[0-9;]*m', '', line)
-            pad = width - len(clean) - 2
-            if pad < 0:
-                # Trunca visualmente se necessário
-                visible = clean[:width - 5] + "..."
-                line = line.replace(clean, visible)
-                pad = width - len(visible) - 2
-            sys.stdout.write(f"{primary_color}{Icons.BOX_VERTICAL}{MC.RESET} {line}{' ' * pad} {primary_color}{Icons.BOX_VERTICAL}{MC.RESET}\n")
+def menu_option(number, text, icon="", color=MC.CYAN_GRADIENT, badge=""):
+    num = f"{color}{MC.BOLD}[{number}]{MC.RESET}" if number != "0" else f"{MC.RED_GRADIENT}{MC.BOLD}[0]{MC.RESET}"
+    b = f" {MC.PURPLE_GRADIENT}{MC.WHITE}{MC.BOLD} {badge} {MC.RESET}" if badge else ""
+    return f"  {num} {icon}{MC.WHITE}{text}{b}{MC.RESET}\n"
 
-    footer = f"{primary_color}{Icons.BOX_BOTTOM_LEFT}{Icons.BOX_HORIZONTAL * width}{Icons.BOX_BOTTOM_RIGHT}{MC.RESET}"
-    sys.stdout.write(footer + "\n")
-
-def print_modern_menu_option(number, text, icon="", color=MC.CYAN_GRADIENT, badge=""):
-    num_display = f"{color}{MC.BOLD}[{number}]{MC.RESET}" if number != "0" else f"{MC.RED_GRADIENT}{MC.BOLD}[0]{MC.RESET}"
-    badge_text = f" {MC.PURPLE_GRADIENT}{MC.WHITE}{MC.BOLD} {badge} {MC.RESET}" if badge else ""
-    sys.stdout.write(f"  {num_display} {icon}{MC.WHITE}{text}{badge_text}{MC.RESET}\n")
-
-def create_progress_bar(percent, width=18):
+def progress_bar(percent, width=18):
     filled = int(percent * width / 100)
     empty = width - filled
-    if percent < 30:
-        c = MC.GREEN_GRADIENT
-    elif percent < 60:
-        c = MC.YELLOW_GRADIENT
-    elif percent < 80:
-        c = MC.ORANGE_GRADIENT
-    else:
-        c = MC.RED_GRADIENT
+    if percent < 30: c = MC.GREEN_GRADIENT
+    elif percent < 60: c = MC.YELLOW_GRADIENT
+    elif percent < 80: c = MC.ORANGE_GRADIENT
+    else: c = MC.RED_GRADIENT
     return f"[{c}{'█' * filled}{MC.DARK_GRAY}{'░' * empty}{MC.RESET}] {c}{percent:5.1f}%{MC.RESET}"
 
-# ==================== SISTEMA ====================
-def monitorar_uso_recursos(intervalo_cpu=0.45):
+def footer_line(status_msg=""):
+    cols, _ = TerminalManager.size()
+    width = max(60, min(cols - 2, 100))
+    bar = f"\n{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
+    status = f"{MC.GRAY}MultiFlow │ github.com/seu-repo{MC.RESET}"
+    if status_msg:
+        status += f"  {MC.YELLOW_GRADIENT}{status_msg}{MC.RESET}"
+    return bar + status + "\n" + f"{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
+
+# ==================== INFO DO SISTEMA ====================
+def monitorar_uso_recursos(intervalo_cpu=0.10):
+    # intervalo pequeno para não atrasar o frame
     try:
         ram = psutil.virtual_memory()
         cpu_percent = psutil.cpu_percent(interval=intervalo_cpu)
@@ -298,8 +267,6 @@ def get_active_services():
         services.append(f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} ZRAM{MC.RESET}")
     if '/swapfile' in swapon or 'partition' in swapon:
         services.append(f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} SWAP{MC.RESET}")
-
-    # ProxySocks
     try:
         if os.path.exists(menu_proxysocks.STATE_FILE):
             with open(menu_proxysocks.STATE_FILE, 'r') as f:
@@ -308,41 +275,33 @@ def get_active_services():
                 services.append(f"{MC.BLUE_GRADIENT}{Icons.ACTIVE} Proxy:{port}{MC.RESET}")
     except Exception:
         pass
-
-    # OpenVPN
     if os.path.exists('/etc/openvpn/server.conf'):
         services.append(f"{MC.CYAN_GRADIENT}{Icons.ACTIVE} OpenVPN{MC.RESET}")
-
-    # BadVPN
     try:
         r = subprocess.run(["systemctl", "is-active", "badvpn-udpgw"], capture_output=True, text=True)
         if r.returncode == 0 and r.stdout.strip() == "active":
             services.append(f"{MC.PURPLE_GRADIENT}{Icons.ACTIVE} BadVPN{MC.RESET}")
     except Exception:
         pass
-
-    # SSH
     try:
         r = subprocess.run(["systemctl", "is-active", "ssh"], capture_output=True, text=True)
         if r.returncode == 0 and r.stdout.strip() == "active":
             services.append(f"{MC.ORANGE_GRADIENT}{Icons.ACTIVE} SSH{MC.RESET}")
     except Exception:
         pass
-
     return services
 
-def show_combined_system_panel():
+def system_panel_box():
     info = get_system_info()
     uptime = get_system_uptime()
-    now = datetime.now()
-    dt = f"{now:%d/%m/%Y} - {now:%H:%M:%S}"
+    now = datetime.now().strftime("%d/%m/%Y - %H:%M:%S")
     os_name = (info['os_name'][:35] + '...') if len(info['os_name']) > 38 else info['os_name']
-    ram_bar = create_progress_bar(info["ram_percent"])
-    cpu_bar = create_progress_bar(info["cpu_percent"])
+    ram_bar = progress_bar(info["ram_percent"])
+    cpu_bar = progress_bar(info["cpu_percent"])
     services = get_active_services()
 
     content = [
-        f"{MC.CYAN_LIGHT}{Icons.SYSTEM} Sistema:{MC.RESET} {MC.White if hasattr(MC,'White') else MC.WHITE}{os_name}{MC.RESET}",
+        f"{MC.CYAN_LIGHT}{Icons.SYSTEM} Sistema:{MC.RESET} {MC.WHITE}{os_name}{MC.RESET}",
         f"{MC.CYAN_LIGHT}{Icons.CLOCK} Uptime:{MC.RESET} {MC.WHITE}{uptime}{MC.RESET}",
         f"{MC.CYAN_LIGHT}{Icons.RAM} RAM:{MC.RESET} {ram_bar}",
         f"{MC.CYAN_LIGHT}{Icons.CPU} CPU:{MC.RESET} {cpu_bar}",
@@ -355,10 +314,10 @@ def show_combined_system_panel():
     else:
         content.append(f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} {MC.GRAY}Nenhum serviço ativo{MC.RESET}")
 
-    content.append(f"{MC.CYAN_LIGHT}📅 Data/Hora:{MC.RESET} {MC.WHITE}{dt}{MC.RESET}")
-    print_modern_box("PAINEL DO SISTEMA", content, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
+    content.append(f"{MC.CYAN_LIGHT}📅 Data/Hora:{MC.RESET} {MC.WHITE}{now}{MC.RESET}")
+    return modern_box("PAINEL DO SISTEMA", content, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
 
-def show_welcome_message():
+def welcome_line():
     msgs = [
         f"{Icons.ROCKET} Bem-vindo ao MultiFlow!",
         f"{Icons.DIAMOND} Experiência premium no seu terminal.",
@@ -367,105 +326,134 @@ def show_welcome_message():
     msg = random.choice(msgs)
     cols, _ = TerminalManager.size()
     width = max(60, min(cols - 2, 100))
-    sys.stdout.write(f"\n{MC.CYAN_GRADIENT}{MC.BOLD}{msg.center(width)}{MC.RESET}\n\n")
+    return f"\n{MC.CYAN_GRADIENT}{MC.BOLD}{msg.center(width)}{MC.RESET}\n\n"
 
+# ==================== RENDER DE TELAS COMPLETAS ====================
+def build_main_frame(status_msg=""):
+    s = []
+    s.append(modern_header())
+    s.append(system_panel_box())
+    s.append(welcome_line())
+    s.append(modern_box("MENU PRINCIPAL", [], Icons.DIAMOND, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
+    s.append("\n")
+    s.append(menu_option("1", "Gerenciar Usuários SSH", Icons.USERS, MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "Gerenciar Conexões", Icons.NETWORK, MC.CYAN_GRADIENT))
+    s.append(menu_option("3", "BadVPN", Icons.SERVER, MC.PURPLE_GRADIENT))
+    s.append(menu_option("4", "Ferramentas", Icons.TOOLS, MC.ORANGE_GRADIENT))
+    s.append(menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, badge="v2"))
+    s.append(menu_option("6", "Servidor de Download", Icons.DOWNLOAD, MC.PINK_GRADIENT))
+    s.append("\n")
+    s.append(menu_option("0", "Sair", Icons.EXIT, MC.RED_GRADIENT))
+    s.append(footer_line(status_msg))
+    return "".join(s)
+
+def build_connections_frame(status_msg=""):
+    s = []
+    s.append(modern_header())
+    s.append(system_panel_box())
+    s.append("\n")
+    s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
+    s.append("\n")
+    s.append(menu_option("1", "Gerenciar OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "ProxySocks (Simples)", Icons.UNLOCK, MC.BLUE_GRADIENT))
+    s.append("\n")
+    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
+    s.append(footer_line(status_msg))
+    return "".join(s)
+
+def build_tools_frame(status_msg=""):
+    s = []
+    s.append(modern_header())
+    s.append(system_panel_box())
+    s.append("\n")
+    s.append(modern_box("FERRAMENTAS DE OTIMIZAÇÃO", [], Icons.TOOLS, MC.ORANGE_GRADIENT, MC.ORANGE_LIGHT))
+    s.append("\n")
+    s.append(menu_option("1", "Otimizador de VPS", Icons.ROCKET, MC.GREEN_GRADIENT, badge="TURBO"))
+    s.append(menu_option("2", "Bloqueador de Sites", Icons.SHIELD, MC.RED_GRADIENT))
+    s.append("\n")
+    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
+    s.append(footer_line(status_msg))
+    return "".join(s)
+
+def build_updater_frame():
+    s = []
+    s.append(modern_header())
+    s.append("\n")
+    s.append(modern_box("ATUALIZADOR MULTIFLOW", [
+        f"{MC.YELLOW_GRADIENT}{Icons.INFO} Baixar a versão mais recente do GitHub.{MC.RESET}",
+        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Serviços como BadVPN e ProxySocks serão parados.{MC.RESET}",
+        f"{MC.RED_GRADIENT}{Icons.WARNING} O programa encerra após a atualização.{MC.RESET}",
+        f"{MC.WHITE}{Icons.INFO} Reinicie com 'multiflow' após concluir.{MC.RESET}"
+    ], Icons.UPDATE, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
+    s.append(footer_line())
+    return "".join(s)
+
+# ==================== CHECK ROOT ====================
 def check_root():
     try:
         if os.geteuid() != 0:
-            TerminalManager.begin_frame()
-            print_modern_header()
-            print_modern_box("AVISO DE SEGURANÇA", [
+            TerminalManager.enter_alt_screen()
+            TerminalManager.render(modern_header() + modern_box("AVISO DE SEGURANÇA", [
                 f"{MC.RED_GRADIENT}{Icons.WARNING} Este script precisa ser executado como root!{MC.RESET}",
                 f"{MC.YELLOW_GRADIENT}Algumas operações podem falhar sem privilégios adequados.{MC.RESET}"
-            ], Icons.SHIELD, MC.RED_GRADIENT, MC.RED_LIGHT)
+            ], Icons.SHIELD, MC.RED_GRADIENT, MC.RED_LIGHT) + footer_line())
             TerminalManager.before_input()
             resp = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar mesmo assim? (s/n): {MC.RESET}").strip().lower()
             TerminalManager.after_input()
             if resp != 's':
-                TerminalManager.begin_frame()
-                sys.stdout.write(f"\n{MC.GREEN_GRADIENT}Saindo...{MC.RESET}\n")
-                TerminalManager.end_frame()
-                time.sleep(0.6)
                 TerminalManager.leave_alt_screen()
                 sys.exit(0)
             return False
         return True
     except AttributeError:
-        # alguns ambientes não possuem os.geteuid (Windows)
         return True
 
-# ==================== MENUS ====================
+# ==================== MENUS (COM RENDER ÚNICO POR FRAME) ====================
 def ssh_users_main_menu():
-    TerminalManager.begin_frame()
-    # Delega ao módulo, que pode usar seu próprio desenho
-    TerminalManager.end_frame()
-    menu_return = None
+    TerminalManager.leave_alt_screen()
     try:
-        menu_return = manusear_usuarios.main()
+        manusear_usuarios.main()
     finally:
-        # Ao voltar, garantimos limpeza completa
-        TerminalManager.begin_frame()
-        TerminalManager.end_frame()
-    return menu_return
+        TerminalManager.enter_alt_screen()
 
 def conexoes_menu():
+    status = ""
     while True:
-        TerminalManager.begin_frame()
-        print_modern_header()
-        show_combined_system_panel()
-        sys.stdout.write("\n")
-        print_modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT)
-        sys.stdout.write("\n")
-        print_modern_menu_option("1", "Gerenciar OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT)
-        print_modern_menu_option("2", "ProxySocks (Simples)", Icons.UNLOCK, MC.BLUE_GRADIENT)
-        sys.stdout.write("\n")
-        print_modern_menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT)
-
-        TerminalManager.end_frame()
+        TerminalManager.enter_alt_screen()
+        TerminalManager.render(build_connections_frame(status))
         TerminalManager.before_input()
         choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
         TerminalManager.after_input()
 
         if choice == "1":
-            TerminalManager.begin_frame()
+            # OpenVPN
             try:
                 script_real_path = os.path.realpath(__file__)
                 script_dir = os.path.dirname(script_real_path)
                 openvpn_script_path = os.path.join(script_dir, 'conexoes', 'openvpn.sh')
                 if not os.path.exists(openvpn_script_path):
-                    sys.stdout.write(f"{MC.RED_GRADIENT}Erro: 'conexoes/openvpn.sh' não encontrado.{MC.RESET}\n")
-                    TerminalManager.end_frame()
-                    time.sleep(2.2)
+                    status = "Erro: 'conexoes/openvpn.sh' não encontrado."
                 else:
-                    os.chmod(openvpn_script_path, 0o755)
-                    TerminalManager.end_frame()
-                    # Sai do alt screen temporariamente para rodar o shell script de forma limpa
                     TerminalManager.leave_alt_screen()
                     try:
+                        os.chmod(openvpn_script_path, 0o755)
                         subprocess.run(['bash', openvpn_script_path], check=True)
                     finally:
                         TerminalManager.enter_alt_screen()
+                    status = "OpenVPN: operação concluída."
             except Exception as e:
-                TerminalManager.enter_alt_screen()
-                TerminalManager.begin_frame()
-                sys.stdout.write(f"{MC.RED_GRADIENT}Erro: {e}{MC.RESET}\n")
-                TerminalManager.end_frame()
-                time.sleep(2.0)
-
+                status = f"Erro: {e}"
         elif choice == "2":
             TerminalManager.leave_alt_screen()
             try:
                 menu_proxysocks.main()
             finally:
                 TerminalManager.enter_alt_screen()
-
+            status = "ProxySocks: operação concluída."
         elif choice == "0":
-            break
+            return
         else:
-            TerminalManager.begin_frame()
-            sys.stdout.write(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Opção inválida!{MC.RESET}\n")
-            TerminalManager.end_frame()
-            time.sleep(1.0)
+            status = "Opção inválida. Tente novamente."
 
 def otimizadorvps_menu():
     TerminalManager.leave_alt_screen()
@@ -481,51 +469,32 @@ def otimizadorvps_menu():
         TerminalManager.enter_alt_screen()
 
 def ferramentas_menu():
+    status = ""
     while True:
-        TerminalManager.begin_frame()
-        print_modern_header()
-        show_combined_system_panel()
-        sys.stdout.write("\n")
-        print_modern_box("FERRAMENTAS DE OTIMIZAÇÃO", [], Icons.TOOLS, MC.ORANGE_GRADIENT, MC.ORANGE_LIGHT)
-        sys.stdout.write("\n")
-        print_modern_menu_option("1", "Otimizador de VPS", Icons.ROCKET, MC.GREEN_GRADIENT, badge="TURBO")
-        print_modern_menu_option("2", "Bloqueador de Sites", Icons.SHIELD, MC.RED_GRADIENT)
-        sys.stdout.write("\n")
-        print_modern_menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT)
-        TerminalManager.end_frame()
-
+        TerminalManager.enter_alt_screen()
+        TerminalManager.render(build_tools_frame(status))
         TerminalManager.before_input()
         choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
         TerminalManager.after_input()
 
         if choice == "1":
             otimizadorvps_menu()
+            status = "Otimizador executado."
         elif choice == "2":
             TerminalManager.leave_alt_screen()
             try:
                 menu_bloqueador.main_menu()
             finally:
                 TerminalManager.enter_alt_screen()
+            status = "Bloqueador executado."
         elif choice == "0":
-            break
+            return
         else:
-            TerminalManager.begin_frame()
-            sys.stdout.write(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Opção inválida!{MC.RESET}\n")
-            TerminalManager.end_frame()
-            time.sleep(1.0)
+            status = "Opção inválida. Tente novamente."
 
 def atualizar_multiflow():
-    TerminalManager.begin_frame()
-    print_modern_header()
-    sys.stdout.write("\n")
-    print_modern_box("ATUALIZADOR MULTIFLOW", [
-        f"{MC.YELLOW_GRADIENT}{Icons.INFO} Este processo irá baixar a versão mais recente do GitHub.{MC.RESET}",
-        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Serviços ativos como BadVPN e ProxySocks serão parados.{MC.RESET}",
-        f"{MC.RED_GRADIENT}{Icons.WARNING} O programa será encerrado após a atualização.{MC.RESET}",
-        f"{MC.WHITE}{Icons.INFO} Você precisará iniciá-lo novamente com 'multiflow'.{MC.RESET}"
-    ], Icons.UPDATE, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
-    TerminalManager.end_frame()
-
+    TerminalManager.enter_alt_screen()
+    TerminalManager.render(build_updater_frame())
     TerminalManager.before_input()
     confirm = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar com a atualização? (s/n): {MC.RESET}").strip().lower()
     TerminalManager.after_input()
@@ -535,13 +504,10 @@ def atualizar_multiflow():
             script_dir = os.path.dirname(os.path.realpath(__file__))
             update_script_path = os.path.join(script_dir, 'update.py')
             if not os.path.exists(update_script_path):
-                TerminalManager.begin_frame()
-                sys.stdout.write(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro: 'update.py' não encontrado!{MC.RESET}\n")
-                TerminalManager.end_frame()
-                time.sleep(2.5)
+                # Mostra erro no mesmo frame (sem telas intermediárias)
+                TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} 'update.py' não encontrado!{MC.RESET}\n")
+                time.sleep(2.0)
                 return
-
-            # Sair do alt screen para rodar atualização com I/O limpo
             TerminalManager.leave_alt_screen()
             try:
                 subprocess.run(['sudo', sys.executable, update_script_path], check=True)
@@ -549,101 +515,75 @@ def atualizar_multiflow():
                 time.sleep(1.0)
                 sys.exit(0)
             finally:
-                # Caso update.py retorne sem sair, reentra (se ainda aqui)
-                try:
-                    TerminalManager.enter_alt_screen()
-                except Exception:
-                    pass
-
+                # Caso retorne
+                TerminalManager.enter_alt_screen()
         except subprocess.CalledProcessError:
             TerminalManager.enter_alt_screen()
-            TerminalManager.begin_frame()
-            sys.stdout.write(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Ocorreu um erro durante a atualização.{MC.RESET}\n")
-            TerminalManager.end_frame()
+            TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro durante a atualização.{MC.RESET}\n")
             time.sleep(2.0)
         except Exception as e:
             TerminalManager.enter_alt_screen()
-            TerminalManager.begin_frame()
-            sys.stdout.write(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro inesperado: {e}{MC.RESET}\n")
-            TerminalManager.end_frame()
-            time.sleep(2.5)
+            TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro inesperado: {e}{MC.RESET}\n")
+            time.sleep(2.0)
     else:
-        TerminalManager.begin_frame()
-        sys.stdout.write(f"\n{MC.YELLOW_GRADIENT}{Icons.INFO} Atualização cancelada.{MC.RESET}\n")
-        TerminalManager.end_frame()
+        TerminalManager.render(build_updater_frame() + f"\n{MC.YELLOW_GRADIENT}{Icons.INFO} Atualização cancelada.{MC.RESET}\n")
         time.sleep(1.2)
 
 # ==================== MENU PRINCIPAL ====================
 def main_menu():
     check_root()
     TerminalManager.enter_alt_screen()
+    status = ""
 
     while True:
         try:
-            TerminalManager.begin_frame()
-            print_modern_header()
-            show_combined_system_panel()
-            show_welcome_message()
-
-            print_modern_box("MENU PRINCIPAL", [], Icons.DIAMOND, MC.BLUE_GRADIENT, MC.BLUE_LIGHT)
-            sys.stdout.write("\n")
-            print_modern_menu_option("1", "Gerenciar Usuários SSH", Icons.USERS, MC.GREEN_GRADIENT)
-            print_modern_menu_option("2", "Gerenciar Conexões", Icons.NETWORK, MC.CYAN_GRADIENT)
-            print_modern_menu_option("3", "BadVPN", Icons.SERVER, MC.PURPLE_GRADIENT)
-            print_modern_menu_option("4", "Ferramentas", Icons.TOOLS, MC.ORANGE_GRADIENT)
-            print_modern_menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, badge="v2")
-            print_modern_menu_option("6", "Servidor de Download", Icons.DOWNLOAD, MC.PINK_LIGHT if hasattr(MC, 'PINK_LIGHT') else MC.CYAN_LIGHT)
-            sys.stdout.write("\n")
-            print_modern_menu_option("0", "Sair", Icons.EXIT, MC.RED_GRADIENT)
-            TerminalManager.end_frame()
-
+            # Render do frame completo, sempre
+            TerminalManager.render(build_main_frame(status))
             TerminalManager.before_input()
             choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
             TerminalManager.after_input()
 
             if choice == "1":
                 ssh_users_main_menu()
+                status = "Gerenciamento de usuários concluído."
             elif choice == "2":
                 conexoes_menu()
+                status = "Conexões: operação concluída."
             elif choice == "3":
                 TerminalManager.leave_alt_screen()
                 try:
                     menu_badvpn.main_menu()
                 finally:
                     TerminalManager.enter_alt_screen()
+                status = "BadVPN: operação concluída."
             elif choice == "4":
                 ferramentas_menu()
+                status = "Ferramentas: operação concluída."
             elif choice == "5":
                 atualizar_multiflow()
+                status = "Atualizador executado."
             elif choice == "6":
                 TerminalManager.leave_alt_screen()
                 try:
                     menu_servidor_download.main()
                 finally:
                     TerminalManager.enter_alt_screen()
+                status = "Servidor de download: operação concluída."
             elif choice == "0":
-                TerminalManager.begin_frame()
-                sys.stdout.write(f"\n{MC.GREEN_GRADIENT}{Icons.CHECK} Saindo do Multiflow...{MC.RESET}\n")
-                TerminalManager.end_frame()
-                time.sleep(0.6)
+                TerminalManager.render(build_main_frame("Saindo..."))
+                time.sleep(0.4)
                 break
             else:
-                TerminalManager.begin_frame()
-                sys.stdout.write(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Opção inválida. Tente novamente.{MC.RESET}\n")
-                TerminalManager.end_frame()
-                time.sleep(0.9)
+                # Importante: sem telas intermediárias. Apenas atualizamos status
+                status = "Opção inválida. Pressione 1-6 ou 0 para sair."
 
         except KeyboardInterrupt:
-            TerminalManager.begin_frame()
-            sys.stdout.write(f"\n{MC.YELLOW_GRADIENT}{Icons.WARNING} Interrompido pelo usuário. Saindo...{MC.RESET}\n")
-            TerminalManager.end_frame()
-            time.sleep(0.6)
+            TerminalManager.render(build_main_frame("Interrompido pelo usuário."))
+            time.sleep(0.5)
             break
         except Exception as e:
-            TerminalManager.begin_frame()
-            sys.stdout.write(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro: {e}{MC.RESET}\n")
-            TerminalManager.end_frame()
-            time.sleep(1.2)
+            TerminalManager.render(build_main_frame(f"Erro: {e}"))
+            time.sleep(1.0)
             break
 
     TerminalManager.leave_alt_screen()
