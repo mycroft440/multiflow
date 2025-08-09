@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import re
 import sys
@@ -162,4 +165,21 @@ def print_menu_option(number, description, status=None, color=None, width=60):
         padding = width - visible_length(option_text) - 2
         print(f"{BoxChars.VERTICAL}{option_text}{' ' * padding}{BoxChars.VERTICAL}")
 
+# === Helpers compatíveis com scripts antigos (ex: update.py) ===
+def print_header(title="Multiflow"):
+    """Wrapper para print_colored_box, compatível com cabeçalhos simples."""
+    clear_screen()
+    print_colored_box(title)
 
+def print_center(text, width=60):
+    """Wrapper para print_centered."""
+    print_centered(text, width)
+
+def print_line(width=60):
+    """Imprime uma linha horizontal."""
+    print("-" * width)
+
+def print_error(msg):
+    """Imprime uma mensagem de erro em vermelho."""
+    colors = Colors()
+    print(f"{colors.RED}{msg}{colors.END}")
