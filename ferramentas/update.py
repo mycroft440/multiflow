@@ -72,16 +72,16 @@ def run_command(command, description):
 
 def full_cleanup():
     """
-    Executa uma limpeza completa de todos os componentes e arquivos do Multiflow.
+    Executa uma limpeza completa dos componentes do Multiflow, preservando ZRAM e SWAP.
     """
-    print_step("Iniciando Limpeza Completa do Multiflow")
+    print_step("Iniciando Limpeza Completa do Multiflow (Preservando ZRAM/SWAP)")
 
-    # 1. Parar e desabilitar serviços
+    # 1. Parar e desabilitar serviços (exceto zram)
     print("\n--- Desativando Serviços ---")
     services_to_manage = [
         "badvpn-udpgw.service",
         "openvpn@server.service",
-        "zram.service" # Embora não seja removido, o serviço systemd é
+        # "zram.service" é intencionalmente omitido para preservar a configuração
     ]
     for service in services_to_manage:
         run_command(f"systemctl stop {service}", f"Parando {service}")
@@ -101,11 +101,11 @@ def full_cleanup():
             os.remove(pid_file)
 
 
-    # 2. Remover arquivos de configuração e do sistema
+    # 2. Remover arquivos de configuração e do sistema (exceto zram)
     print("\n--- Removendo Arquivos de Configuração ---")
     files_to_remove = [
         "/etc/systemd/system/badvpn-udpgw.service",
-        "/etc/systemd/system/zram.service",
+        # "/etc/systemd/system/zram.service" é omitido para não ser removido
         "/etc/cron.d/vps_optimizer_tasks"
     ]
     dirs_to_remove = [
@@ -171,6 +171,7 @@ def reinstall():
 
     # 2. Executar o script de instalação
     print("  - Executando o instalador (isso pode levar alguns minutos)...")
+    print_warning("  O instalador tentará configurar ZRAM/SWAP, mas deve pular se já estiverem ativos.")
     try:
         # Executa o script de forma interativa para que o usuário veja a saída
         subprocess.run(["bash", TMP_INSTALL_SCRIPT], check=True)
@@ -199,12 +200,12 @@ def main():
     print(f"{Colors.YELLOW}      ATUALIZADOR E REINSTALADOR - MULTIFLOW         {Colors.NC}")
     print(f"{Colors.YELLOW}====================================================={Colors.NC}")
     print(f"\n{Colors.RED}{Colors.YELLOW}AVISO IMPORTANTE:{Colors.NC}")
-    print("Este script irá {Colors.RED}REMOVER COMPLETAMENTE{Colors.NC} a instalação atual do Multiflow e todas as suas configurações, incluindo:")
+    print(f"Este script irá {Colors.RED}REMOVER COMPLETAMENTE{Colors.NC} a instalação atual do Multiflow e todas as suas configurações, incluindo:")
     print("  - Serviços (BadVPN, OpenVPN, etc.)")
     print("  - Arquivos de configuração e logs")
     print("  - O diretório do projeto em /opt/multiflow")
     print("\nEm seguida, ele baixará e reinstalará a versão mais recente do GitHub.")
-    print("As configurações de {Colors.GREEN}ZRAM e SWAP{Colors.NC}, se existirem, {Colors.GREEN}NÃO{Colors.NC} serão removidas.")
+    print(f"As configurações de {Colors.GREEN}ZRAM e SWAP{Colors.NC}, se existirem, {Colors.GREEN}NÃO{Colors.NC} serão removidas durante a limpeza.")
 
     try:
         confirm = input(f"\n{Colors.CYAN}Você tem certeza que deseja continuar? [s/N]: {Colors.NC}").strip().lower()
