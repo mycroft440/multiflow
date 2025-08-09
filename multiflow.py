@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import sys
-sys.path.append("/opt/multiflow")
 import os
 import time
 import re
@@ -11,19 +10,133 @@ import psutil
 import shutil
 from datetime import datetime
 import random
+import importlib
+import importlib.util
 
-# Importando módulos do projeto
-try:
-    from ferramentas import manusear_usuarios
-    from menus import menu_badvpn
-    from menus import menu_proxysocks
-    from menus import menu_bloqueador
-    from menus import menu_servidor_download
-    from menus import menu_openvpn  # <--- ADICIONADO NOVO MENU
-except ImportError as e:
-    print(f"\033[91mErro: Módulo '{e.name}' não encontrado.\033[0m")
-    print(f"\033[93mCertifique-se de que os módulos estão acessíveis via /opt/multiflow.\033[0m")
-    sys.exit(1)
+# ==================== BOOTSTRAP DE IMPORTAÇÃO ====================
+# Tenta localizar a raiz do projeto (contendo 'menus' e 'ferramentas'),
+# ajusta sys.path e importa os módulos necessários.
+def _find_multiflow_root():
+    candidates = []
+    # 1) Variável de ambiente
+    env_home = os.environ.get("MULTIFLOW_HOME")
+    if env_home:
+        candidates.append(env_home)
+
+    # 2) Caminho padrão
+    candidates.append("/opt/multiflow")
+
+    # 3) Diretório do script e ascendentes
+    try:
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        candidates.append(script_dir)
+        # Subir alguns níveis procurando 'menus' e 'ferramentas'
+        parent = script_dir
+        for _ in range(5):
+            parent = os.path.dirname(parent)
+            if parent and parent not in candidates:
+                candidates.append(parent)
+    except Exception:
+        pass
+
+    # 4) Alguns caminhos comuns alternativos
+    for extra in ("/root/multiflow", "/usr/local/multiflow", "/usr/share/multiflow"):
+        candidates.append(extra)
+
+    # Normaliza e remove duplicados preservando ordem
+    normalized = []
+    seen = set()
+    for c in candidates:
+        if not c:
+            continue
+        nc = os.path.abspath(c)
+        if nc not in seen:
+            normalized.append(nc)
+            seen.add(nc)
+
+    # Valida candidatos: precisam ter 'menus' e 'ferramentas'
+    for root in normalized:
+        if os.path.isdir(os.path.join(root, "menus")) and os.path.isdir(os.path.join(root, "ferramentas")):
+            return root
+    return None
+
+def _import_by_module_name(modname):
+    try:
+        return importlib.import_module(modname)
+    except Exception:
+        return None
+
+def _import_by_file_path(alias, filepath):
+    if not os.path.exists(filepath):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(alias, filepath)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    except Exception:
+        return None
+    return None
+
+def bootstrap_imports():
+    # Tenta adicionar a raiz ao sys.path e importar como pacote
+    root = _find_multiflow_root()
+    if root and root not in sys.path:
+        sys.path.insert(0, root)
+
+    targets = {
+        "manusear_usuarios": "ferramentas.manusear_usuarios",
+        "menu_badvpn": "menus.menu_badvpn",
+        "menu_proxysocks": "menus.menu_proxysocks",
+        "menu_bloqueador": "menus.menu_bloqueador",
+        "menu_servidor_download": "menus.menu_servidor_download",
+        "menu_openvpn": "menus.menu_openvpn",
+    }
+
+    imported = {}
+    # 1) Tenta importar por nome de módulo (requer __init__.py nas pastas)
+    for alias, modname in targets.items():
+        mod = _import_by_module_name(modname)
+        if mod:
+            imported[alias] = mod
+
+    # 2) Fallback: importar por caminho de arquivo
+    missing = [alias for alias in targets.keys() if alias not in imported]
+    if missing and root:
+        for alias in missing:
+            modname = targets[alias]
+            rel = modname.replace(".", "/") + ".py"
+            modpath = os.path.join(root, rel)
+            mod = _import_by_file_path(alias, modpath)
+            if mod:
+                imported[alias] = mod
+
+    # 3) Se ainda faltam, mostra diagnóstico útil
+    still_missing = [alias for alias in targets.keys() if alias not in imported]
+    if still_missing:
+        red = "\033[91m"
+        yel = "\033[93m"
+        rst = "\033[0m"
+        sys.stderr.write(f"{red}[ERRO] Não foi possível carregar os módulos: {', '.join(still_missing)}{rst}\n")
+        sys.stderr.write(f"{yel}Dicas:\n"
+                         f" - Verifique a estrutura: {root or '/opt/multiflow'}/menus e /ferramentas existem?\n"
+                         f" - Crie __init__.py dentro de 'menus' e 'ferramentas' para habilitar import como pacote.\n"
+                         f" - Confirme MULTIFLOW_HOME ou o caminho real do projeto.\n"
+                         f" - Você está rodando com o Python correto (sudo pode usar outro Python)?{rst}\n")
+        sys.stderr.write(f"\nCaminho detectado: {root or 'N/D'}\n")
+        sys.stderr.write("sys.path atual:\n - " + "\n - ".join(sys.path) + "\n")
+        sys.exit(1)
+
+    # Exporta para globals
+    globals().update(imported)
+
+# Inicializa importações do projeto
+bootstrap_imports()
+
+# Importando módulos do projeto (já resolvidos pelo bootstrap)
+from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
+from menus import menu_badvpn, menu_proxysocks, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
 
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
