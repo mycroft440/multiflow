@@ -604,9 +604,10 @@ def atualizar_multiflow():
     if confirm == 's':
         try:
             script_dir = os.path.dirname(os.path.realpath(__file__))
-            update_script_path = os.path.join(script_dir, 'update.py')
+            # Alterado para o novo caminho do script de atualização
+            update_script_path = os.path.join(script_dir, 'ferramentas', 'update.py')
             if not os.path.exists(update_script_path):
-                TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} 'update.py' não encontrado!{MC.RESET}\n")
+                TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} 'update.py' não encontrado em 'ferramentas'!{MC.RESET}\n")
                 time.sleep(2.0)
                 return
             TerminalManager.leave_alt_screen()
