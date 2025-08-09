@@ -60,8 +60,9 @@ git clone https://github.com/ambrop72/badvpn.git "$TMP_DIR"
 cd "$TMP_DIR"
 
 log_info "Configurando o ambiente de compilação com CMake..."
-# ADICIONADO: Flags para garantir que APENAS o badvpn-udpgw seja compilado.
-cmake . -DBUILD_NOTHING_BY_DEFAULT=1 -DENABLE_UDPGW=1
+# REMOVIDO: Flags -DBUILD_NOTHING_BY_DEFAULT e -DENABLE_UDPGW.
+# Deixa o CMake fazer a compilação padrão, que agora deve funcionar com todas as dependências instaladas.
+cmake .
 
 log_info "Compilando o BadVPN com 'make'..."
 make
