@@ -1,175 +1,92 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
-import sys
 import subprocess
-import shutil
-import signal
-import time
+import sys
+import requests
 
-# --- Configurações ---
-REPO_URL = "https://github.com/mycroft440/multiflow.git"
-INSTALL_DIR = "/opt/multiflow"
-TMP_DIR = f"/tmp/multiflow-update-{int(time.time())}"
-PROXY_STATE_FILE = "/tmp/proxy.state"
-SERVER_STATE_FILE = "/tmp/download_server.state"
+# Adiciona o diretório do script ao sys.path para permitir importações de outros módulos
+# Isso é útil se o script de atualização for executado diretamente
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
-# --- Funções de Log com Cores ---
-class Colors:
-    RED = '\033[0;31m'
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    NC = '\033[0m'
+try:
+    from menus.menu_style_utils import print_header, print_center, print_line, print_error
+except ImportError:
+    print("Erro: Não foi possível importar utilitários de estilo.")
+    print(f"Verifique se o multiflow está instalado corretamente em {current_dir} e se o PYTHONPATH está configurado.")
+    sys.exit(1)
 
-def log_info(message):
-    """Exibe uma mensagem de informação."""
-    print(f"{Colors.GREEN}[INFO]{Colors.NC} {message}")
+# URL do repositório no GitHub
+GITHUB_REPO = "mycroft440/multiflow"
+# O diretório onde o script está instalado
+INSTALL_DIR = current_dir
 
-def log_warn(message):
-    """Exibe uma mensagem de aviso."""
-    print(f"{Colors.YELLOW}[AVISO]{Colors.NC} {message}")
-
-def log_error(message):
-    """Exibe uma mensagem de erro."""
-    print(f"{Colors.RED}[ERRO]{Colors.NC} {message}", file=sys.stderr)
-
-def check_root():
-    """Verifica se o script está sendo executado como root."""
-    return os.geteuid() == 0
-
-def run_command(command, check=True):
-    """Executa um comando no shell e trata exceções."""
+def get_latest_commit_sha():
+    """Obtém o SHA do último commit do repositório no GitHub."""
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
     try:
-        subprocess.run(command, check=check, capture_output=True, text=True)
-    except FileNotFoundError:
-        log_error(f"Comando '{command[0]}' não encontrado. Verifique se o programa está instalado.")
-        raise
-    except subprocess.CalledProcessError as e:
-        # Não levanta exceção se o comando falhar, apenas loga o erro,
-        # útil para comandos de parada/desinstalação que podem falhar se o serviço não existir.
-        if not check:
-            log_warn(f"Comando '{' '.join(command)}' falhou (pode ser normal se o serviço não existir): {e.stderr.strip()}")
-        else:
-            log_error(f"Erro ao executar '{' '.join(command)}': {e.stderr}")
-            raise
+        response = requests.get(api_url)
+        response.raise_for_status()
+        return response.json()['sha']
+    except requests.exceptions.RequestException as e:
+        print_error(f"Erro ao verificar atualizações: {e}")
+        return None
 
-def uninstall_services():
-    """Para e desinstala serviços ativos para uma atualização limpa."""
-    log_info("Desinstalando serviços antigos para uma atualização limpa...")
+def get_local_commit_sha():
+    """Obtém o SHA do commit local."""
+    sha_file = os.path.join(INSTALL_DIR, '.git_sha')
+    if os.path.exists(sha_file):
+        with open(sha_file, 'r') as f:
+            return f.read().strip()
+    return None
 
-    # --- Desinstalação do OpenVPN ---
-    if os.path.isdir("/etc/openvpn"):
-        log_info("Desinstalando OpenVPN...")
-        run_command(['systemctl', 'stop', 'openvpn@server'], check=False)
-        run_command(['systemctl', 'disable', 'openvpn@server'], check=False)
-        if os.path.exists('/etc/debian_version'):
-            run_command(['apt-get', 'remove', '--purge', '-y', 'openvpn', 'easy-rsa'], check=False)
-            run_command(['apt-get', 'autoremove', '-y'], check=False)
-        elif os.path.exists('/etc/redhat-release'):
-             run_command(['yum', 'remove', '-y', 'openvpn', 'easy-rsa'], check=False)
-        
-        shutil.rmtree("/etc/openvpn", ignore_errors=True)
-        user_home = os.path.expanduser("~")
-        ovpn_clients_dir = os.path.join(user_home, "ovpn-clients")
-        shutil.rmtree(ovpn_clients_dir, ignore_errors=True)
-        log_info("OpenVPN desinstalado.")
-
-    # --- Desinstalação do BadVPN ---
-    badvpn_service_path = "/etc/systemd/system/badvpn-udpgw.service"
-    badvpn_binary_path = "/usr/local/bin/badvpn-udpgw"
-    if os.path.exists(badvpn_service_path):
-        log_info("Desinstalando BadVPN...")
-        run_command(['systemctl', 'stop', 'badvpn-udpgw.service'], check=False)
-        run_command(['systemctl', 'disable', 'badvpn-udpgw.service'], check=False)
-        try:
-            os.remove(badvpn_service_path)
-            if os.path.exists(badvpn_binary_path):
-                os.remove(badvpn_binary_path)
-            run_command(['systemctl', 'daemon-reload'], check=False)
-            log_info("BadVPN desinstalado.")
-        except OSError as e:
-            log_warn(f"Erro ao remover arquivos do BadVPN: {e}")
-
-    # --- Parada de serviços baseados em Python ---
-    for state_file, service_name in [(PROXY_STATE_FILE, "ProxySocks"), (SERVER_STATE_FILE, "Servidor de Download")]:
-        if os.path.exists(state_file):
-            try:
-                with open(state_file, 'r') as f:
-                    pid_str = f.read().strip().split(':')[0]
-                    pid = int(pid_str)
-                log_info(f"Parando {service_name} (PID: {pid})...")
-                os.kill(pid, signal.SIGTERM)
-            except (IOError, ValueError, ProcessLookupError) as e:
-                log_warn(f"Não foi possível parar o processo de {service_name}: {e}")
-            finally:
-                os.remove(state_file)
-
-def download_latest_version():
-    """Baixa a versão mais recente do repositório Git."""
-    log_info(f"Baixando a versão mais recente de {REPO_URL}...")
-    if not shutil.which('git'):
-        log_error("O comando 'git' não foi encontrado. Por favor, instale o git para continuar.")
-        sys.exit(1)
-    run_command(['git', 'clone', '--depth', '1', REPO_URL, TMP_DIR])
-
-def replace_installation():
-    """Remove a instalação antiga e a substitui pela nova."""
-    log_info("Removendo a instalação antiga...")
-    if os.path.isdir(INSTALL_DIR):
-        shutil.rmtree(INSTALL_DIR)
-    os.makedirs(INSTALL_DIR, exist_ok=True)
-
-    log_info("Instalando a nova versão...")
-    # Copia o conteúdo do diretório temporário para o diretório de instalação
-    for item in os.listdir(TMP_DIR):
-        source = os.path.join(TMP_DIR, item)
-        destination = os.path.join(INSTALL_DIR, item)
-        if os.path.isdir(source):
-            shutil.copytree(source, destination, symlinks=True)
-        else:
-            shutil.copy2(source, destination)
-
-def apply_permissions():
-    """Aplica permissões de execução para scripts .py e .sh."""
-    log_info("Aplicando permissões de execução...")
-    for root, _, files in os.walk(INSTALL_DIR):
-        for name in files:
-            if name.endswith((".py", ".sh")):
-                filepath = os.path.join(root, name)
-                try:
-                    # Adiciona permissão de execução para o dono, grupo e outros
-                    os.chmod(filepath, os.stat(filepath).st_mode | 0o111)
-                except OSError as e:
-                    log_warn(f"Não foi possível definir permissão para {filepath}: {e}")
-
-def cleanup():
-    """Remove o diretório temporário de atualização."""
-    log_info("Limpando arquivos temporários...")
-    if os.path.isdir(TMP_DIR):
-        shutil.rmtree(TMP_DIR)
+def update_local_commit_sha(sha):
+    """Atualiza o arquivo com o SHA do commit local."""
+    sha_file = os.path.join(INSTALL_DIR, '.git_sha')
+    with open(sha_file, 'w') as f:
+        f.write(sha)
 
 def main():
-    """Função principal que orquestra a atualização."""
-    if not check_root():
-        log_error("Este script de atualização deve ser executado como root.")
-        sys.exit(1)
+    """Função principal para verificar e aplicar atualizações."""
+    limpar_tela()
+    print_header("Atualizador MultiFlow")
+    print_center("Verificando atualizações...")
 
-    try:
-        uninstall_services()
-        download_latest_version()
-        replace_installation()
-        apply_permissions()
-        print("\n" + "="*60)
-        log_info("Atualização do Multiflow concluída com sucesso!")
-        log_warn("Os serviços foram parados/desinstalados durante a atualização.")
-        log_warn("É necessário reiniciar a aplicação para que as alterações tenham efeito.")
-        print("="*60 + "\n")
-    except Exception as e:
-        log_error(f"Ocorreu um erro inesperado durante a atualização: {e}")
-        sys.exit(1)
-    finally:
-        cleanup()
+    latest_sha = get_latest_commit_sha()
+    if not latest_sha:
+        return
+
+    local_sha = get_local_commit_sha()
+
+    if latest_sha == local_sha:
+        print_center("Você já está com a versão mais recente.")
+    else:
+        print_center("Nova versão encontrada! Atualizando...")
+        try:
+            # Comando para baixar e executar o script de instalação/atualização
+            update_command = "wget -O /tmp/install.sh https://raw.githubusercontent.com/mycroft440/multiflow/main/install.sh && bash /tmp/install.sh"
+            
+            # Usamos subprocess.run para executar o comando
+            process = subprocess.run(update_command, shell=True, check=True, capture_output=True, text=True)
+            
+            print_center("Atualização concluída com sucesso!")
+            # Atualiza o SHA local após a atualização bem-sucedida
+            update_local_commit_sha(latest_sha)
+        except subprocess.CalledProcessError as e:
+            print_error("Falha na atualização.")
+            print_error(f"Saída do erro:\n{e.stderr}")
+        except Exception as e:
+            print_error(f"Ocorreu um erro inesperado: {e}")
+
+    print_line()
+    input("Pressione Enter para voltar ao menu principal...")
+
+def limpar_tela():
+    """Limpa a tela do terminal."""
+    os.system('clear' if os.name == 'posix' else 'cls')
 
 if __name__ == "__main__":
+    if os.geteuid() != 0:
+        print_error("Este script precisa ser executado como root.")
+        sys.exit(1)
     main()
