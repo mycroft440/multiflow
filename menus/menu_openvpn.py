@@ -64,10 +64,26 @@ class OpenVPNManager:
             print(f"\n{COLORS.RED}Ocorreu um erro: {e}{COLORS.END}")
             return False
 
+    def get_openvpn_version(self):
+        """Obtém a versão do OpenVPN instalada."""
+        if not shutil.which("openvpn"):
+            return "N/A"
+        try:
+            result = self._run_command(["openvpn", "--version"])
+            if result and result.returncode == 0:
+                # Pega a primeira linha da saída, ex: "OpenVPN 2.5.1 x86_64-pc-linux-gnu ..."
+                first_line = result.stdout.splitlines()[0]
+                match = re.search(r"OpenVPN\s+([\d\.]+)", first_line)
+                if match:
+                    return match.group(1)
+            return "Desconhecida"
+        except Exception:
+            return "Erro"
+
     def get_status(self):
         """Obtém e formata o status atual do serviço OpenVPN."""
         if not self._is_installed():
-            return f"Status: {COLORS.YELLOW}Não Instalado{COLORS.END}"
+            return [f"Status: {COLORS.YELLOW}Não Instalado{COLORS.END}"]
 
         try:
             result = self._run_command(["systemctl", "is-active", "openvpn@server"], check=False)
@@ -79,10 +95,14 @@ class OpenVPNManager:
             
             port = port_match.group(1) if port_match else "N/A"
             protocol = proto_match.group(1).upper() if proto_match else "N/A"
+            version = self.get_openvpn_version()
             
-            return f"Status: {status} | Porta: {COLORS.CYAN}{port}{COLORS.END} | Protocolo: {COLORS.CYAN}{protocol}{COLORS.END}"
+            status_line1 = f"Status: {status} | Porta: {COLORS.CYAN}{port}{COLORS.END} | Protocolo: {COLORS.CYAN}{protocol}{COLORS.END}"
+            status_line2 = f"Versão Instalada: {COLORS.CYAN}{version}{COLORS.END}"
+            
+            return [status_line1, status_line2]
         except Exception as e:
-            return f"Status: {COLORS.RED}Erro ao obter informações ({e}){COLORS.END}"
+            return [f"Status: {COLORS.RED}Erro ao obter informações ({e}){COLORS.END}"]
 
     def install_openvpn(self):
         """Executa o script de instalação interativo do OpenVPN."""
@@ -243,8 +263,8 @@ def main_menu():
     
     while True:
         clear_screen()
-        status_line = manager.get_status()
-        print_colored_box("GERENCIADOR OPENVPN", [status_line])
+        status_lines = manager.get_status()
+        print_colored_box("GERENCIADOR OPENVPN", status_lines)
         
         is_installed = manager._is_installed()
         
