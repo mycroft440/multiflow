@@ -545,18 +545,12 @@ def conexoes_menu():
         TerminalManager.after_input()
 
         if choice == "1":
-            TerminalManager.leave_alt_screen()
-            try:
-                menu_openvpn.main_menu()
-            finally:
-                TerminalManager.enter_alt_screen()
+            # NÃO sair do alt-screen aqui; o submenu gerencia isso quando necessário
+            menu_openvpn.main_menu()
             status = "OpenVPN: operação concluída."
         elif choice == "2":
-            TerminalManager.leave_alt_screen()
-            try:
-                menu_proxysocks.main()
-            finally:
-                TerminalManager.enter_alt_screen()
+            # NÃO sair do alt-screen; o submenu mantém a UI
+            menu_proxysocks.main_menu()
             status = "ProxySocks: operação concluída."
         elif choice == "0":
             return
