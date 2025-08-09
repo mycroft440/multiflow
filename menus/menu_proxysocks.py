@@ -1,161 +1,151 @@
-#!/usr/bin/env python
-# encoding: utf-8
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import sys
 import subprocess
-import time
 import signal
+import time
+import socket
 
-# Importa as ferramentas de estilo para manter a consistência visual
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 try:
-    from menus.menu_style_utils import Colors, BoxChars, print_colored_box, print_menu_option, clear_screen
-except ImportError:
-    # Fallback para o caso de o script ser executado de forma isolada
-    print("Aviso: Módulo de estilo não encontrado. O menu será exibido sem formatação.")
-    class Colors:
-        RED = GREEN = YELLOW = CYAN = BOLD = END = ""
-    class BoxChars:
-        BOTTOM_LEFT = BOTTOM_RIGHT = HORIZONTAL = ""
-    def clear_screen(): os.system('cls' if os.name == 'nt' else 'clear')
-    def print_colored_box(title, content=None): print(f"--- {title} ---")
-    def print_menu_option(num, desc, **kwargs): print(f"{num}. {desc}")
+    from menus.menu_style_utils import (
+        MC, Icons, TerminalManager,
+        modern_box, menu_option, footer_line, simple_header
+    )
+except ImportError as e:
+    print(f"Erro ao importar utilitários: {e}")
+    sys.exit(1)
 
-# Instancia as cores
-COLORS = Colors()
-
-# Nome do script do proxy que será gerenciado
-# O ideal é que este script esteja no mesmo diretório ou em um caminho conhecido
 PROXY_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), '..', 'conexoes', 'proxysocks.py')
-# Arquivo para salvar o estado (PID e Porta) do proxy
 STATE_FILE = "/tmp/proxy.state"
 
+def get_ip_address():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('10.255.255.255', 1)); IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
 def check_status():
-    """Verifica se o processo do proxy está ativo e retorna seu status."""
     if not os.path.exists(STATE_FILE):
-        return ("Inativo", None)
-
-    with open(STATE_FILE, 'r') as f:
-        try:
-            pid, port = f.read().strip().split(':')
-            pid = int(pid)
-        except ValueError:
-            os.remove(STATE_FILE)
-            return ("Inativo", None)
-
+        return ("Inativo", None, None)
+    try:
+        with open(STATE_FILE, 'r') as f:
+            pid_s, port_s = f.read().strip().split(':')
+        pid = int(pid_s); port=int(port_s)
+    except Exception:
+        try: os.remove(STATE_FILE)
+        except Exception: pass
+        return ("Inativo", None, None)
     try:
         os.kill(pid, 0)
+        return ("Ativo", pid, port)
     except OSError:
-        os.remove(STATE_FILE)
-        return ("Inativo", None)
+        try: os.remove(STATE_FILE)
+        except Exception: pass
+        return ("Inativo", None, None)
+
+def build_main_frame(status_msg=""):
+    s=[]
+    s.append(simple_header("GERENCIADOR PROXY SOCKS (SIMPLIFICADO)"))
+    st, pid, port = check_status()
+    if st=="Ativo":
+        ip = get_ip_address()
+        status_lines = [
+            f"{MC.CYAN_LIGHT}{Icons.SERVER} Status:{MC.RESET} {MC.GREEN_GRADIENT}{Icons.ACTIVE} Ativo (PID: {pid}){MC.RESET}",
+            f"{MC.CYAN_LIGHT}{Icons.NETWORK} Endereço:{MC.RESET} {MC.WHITE}{ip}:{port}{MC.RESET}",
+        ]
     else:
-        return ("Ativo", port)
+        status_lines = [
+            f"{MC.CYAN_LIGHT}{Icons.SERVER} Status:{MC.RESET} {MC.RED_GRADIENT}{Icons.INACTIVE} Inativo{MC.RESET}",
+            f"{MC.CYAN_LIGHT}{Icons.INFO} Info:{MC.RESET} {MC.WHITE}Proxy simples em Python (sem autenticação){MC.RESET}",
+        ]
+    s.append(modern_box("STATUS DO SERVIÇO", status_lines, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
+    s.append("\n")
+    s.append(modern_box("OPÇÕES DISPONÍVEIS", [], Icons.SETTINGS, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
+    s.append("\n")
+    if st=="Ativo":
+        s.append(menu_option("2", "Alterar Porta (reinicia)", Icons.EDIT, MC.CYAN_GRADIENT))
+        s.append(menu_option("3", "Desativar / Parar Proxy", Icons.TRASH, MC.RED_GRADIENT))
+    else:
+        s.append(menu_option("1", "Instalar / Iniciar Proxy", Icons.DOWNLOAD, MC.GREEN_GRADIENT, badge="RECOMENDADO"))
+    s.append("\n")
+    s.append(menu_option("0", "Voltar", Icons.BACK, MC.YELLOW_GRADIENT))
+    s.append(footer_line(status_msg))
+    return "".join(s)
 
-def install_start():
-    """Inicia o processo do proxy em segundo plano."""
-    status, port = check_status()
-    if status == "Ativo":
-        print(f"\n{COLORS.YELLOW}O proxy já está ativo na porta {port}.{COLORS.END}")
-        return
-
+def start_proxy(port):
     if not os.path.exists(PROXY_SCRIPT_PATH):
-        print(f"\n{COLORS.RED}Erro: O arquivo do proxy ('{os.path.basename(PROXY_SCRIPT_PATH)}') não foi encontrado no caminho esperado.{COLORS.END}")
-        return
-
+        return False, f"Script não encontrado em {PROXY_SCRIPT_PATH}"
     try:
-        new_port = input(f"{COLORS.CYAN}Digite a porta para iniciar o proxy (padrão: 80): {COLORS.END}") or "80"
-        if not new_port.isdigit():
-            print(f"\n{COLORS.RED}Porta inválida.{COLORS.END}")
-            return
-        
-        # Inicia o proxy.py como um novo processo
-        process = subprocess.Popen([sys.executable, PROXY_SCRIPT_PATH, new_port], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
+        p = subprocess.Popen([sys.executable, PROXY_SCRIPT_PATH, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with open(STATE_FILE, 'w') as f:
-            f.write(f"{process.pid}:{new_port}")
-            
-        print(f"\n{COLORS.GREEN}Proxy iniciado com sucesso na porta {new_port} (PID: {process.pid}).{COLORS.END}")
-
+            f.write(f"{p.pid}:{port}")
+        return True, f"Iniciado na porta {port} (PID {p.pid})"
     except Exception as e:
-        print(f"\n{COLORS.RED}Ocorreu um erro ao iniciar o proxy: {e}{COLORS.END}")
+        return False, str(e)
 
-def deactivate_remove():
-    """Para o processo do proxy."""
-    status, port = check_status()
-    if status == "Inativo":
-        print(f"\n{COLORS.YELLOW}O proxy já está inativo.{COLORS.END}")
-        return
-
-    with open(STATE_FILE, 'r') as f:
-        pid, _ = f.read().strip().split(':')
-        pid = int(pid)
-
+def stop_proxy():
+    st, pid, _ = check_status()
+    if st!="Ativo":
+        return True, "Já está inativo"
     try:
         os.kill(pid, signal.SIGTERM)
-        print(f"\n{COLORS.GREEN}Proxy (PID: {pid}) finalizado com sucesso.{COLORS.END}")
     except OSError:
-        print(f"\n{COLORS.YELLOW}O processo com PID {pid} não foi encontrado. Pode já ter sido finalizado.{COLORS.END}")
-    except Exception as e:
-        print(f"\n{COLORS.RED}Ocorreu um erro ao parar o proxy: {e}{COLORS.END}")
-    finally:
-        if os.path.exists(STATE_FILE):
-            os.remove(STATE_FILE)
+        pass
+    try:
+        if os.path.exists(STATE_FILE): os.remove(STATE_FILE)
+    except Exception:
+        pass
+    return True, "Parado com sucesso"
 
-def change_port():
-    """Altera a porta do proxy (reinicia com uma nova porta)."""
-    status, old_port = check_status()
-    if status == "Inativo":
-        print(f"\n{COLORS.YELLOW}O proxy não está ativo. Inicie-o primeiro para alterar a porta.{COLORS.END}")
-        return
-    
-    print(f"\nO proxy está atualmente na porta {old_port}.")
-    print("Desativando o proxy atual para alterar a porta...")
-    deactivate_remove()
-    
-    time.sleep(1)
-    
-    print("\nAgora, vamos iniciar na nova porta.")
-    install_start()
-
-def display_menu():
-    """Exibe o menu principal e o status atual."""
-    clear_screen()
-    status, port = check_status()
-    
-    status_color = COLORS.GREEN if status == "Ativo" else COLORS.RED
-    status_text = f"{status_color}{status}{COLORS.END}"
-    if port:
-        status_text += f", Porta: {COLORS.YELLOW}{port}{COLORS.END}"
-
-    print_colored_box("GERENCIADOR DE PROXY SOCKS", [f"Status: {status_text}"])
-    print_menu_option("1", "Instalar / Iniciar Proxy", color=COLORS.CYAN)
-    print_menu_option("2", "Alterar Porta do Proxy", color=COLORS.CYAN)
-    print_menu_option("3", "Desativar / Remover Proxy", color=COLORS.CYAN)
-    print_menu_option("0", "Voltar ao Menu Anterior", color=COLORS.YELLOW)
-    print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
-
-def main():
-    """Loop principal do menu."""
-    # Garante que o script seja executado com permissões adequadas se necessário
+def main_menu():
     if os.geteuid() != 0:
-        print(f"{COLORS.RED}Este script deve ser executado como root para gerenciar processos.{COLORS.END}")
+        print(f"{MC.RED_GRADIENT}Este script deve ser executado como root.{MC.RESET}")
         sys.exit(1)
-        
-    while True:
-        display_menu()
-        choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}")
-        
-        if choice == '1':
-            install_start()
-        elif choice == '2':
-            change_port()
-        elif choice == '3':
-            deactivate_remove()
-        elif choice == '0':
-            break
-        else:
-            print(f"\n{COLORS.RED}Opção inválida. Tente novamente.{COLORS.END}")
-        
-        input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
+    TerminalManager.enter_alt_screen()
+    status=""
+    try:
+        while True:
+            TerminalManager.render(build_main_frame(status))
+            TerminalManager.before_input()
+            choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
+            TerminalManager.after_input()
+            if choice == "1":
+                TerminalManager.before_input()
+                port = input(f"\n{MC.CYAN_GRADIENT}Porta para iniciar (padrão 80): {MC.RESET}").strip() or "80"
+                TerminalManager.after_input()
+                if port.isdigit() and 1<=int(port)<=65535:
+                    ok,msg = start_proxy(int(port)); status = msg if ok else f"Erro: {msg}"
+                else:
+                    status = "Porta inválida"
+            elif choice == "2":
+                st, _, old_port = check_status()
+                if st!="Ativo":
+                    status="Proxy não está ativo"
+                else:
+                    TerminalManager.before_input()
+                    port = input(f"\n{MC.CYAN_GRADIENT}Nova porta (atual {old_port}): {MC.RESET}").strip()
+                    TerminalManager.after_input()
+                    if port.isdigit() and 1<=int(port)<=65535:
+                        stop_proxy(); time.sleep(0.5); ok,msg = start_proxy(int(port)); status = msg if ok else f"Erro: {msg}"
+                    else:
+                        status="Porta inválida"
+            elif choice == "3":
+                ok,msg = stop_proxy(); status = msg if ok else f"Erro: {msg}"
+            elif choice == "0":
+                break
+            else:
+                status="Opção inválida"
+            time.sleep(0.5)
+    finally:
+        TerminalManager.leave_alt_screen()
 
 if __name__ == '__main__':
-    main()
+    main_menu()
