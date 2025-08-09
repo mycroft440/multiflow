@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Script para instalar e configurar o BadVPN, com tratamento de erros aprimorado.
 
 # --- Configurações de Segurança e Cores ---
@@ -59,21 +60,22 @@ log_info "Clonando o repositório do BadVPN..."
 git clone https://github.com/ambrop72/badvpn.git "$TMP_DIR"
 cd "$TMP_DIR"
 
-log_info "Configurando o ambiente de compilação com CMake..."
-# REMOVIDO: Flags -DBUILD_NOTHING_BY_DEFAULT e -DENABLE_UDPGW.
-# Deixa o CMake fazer a compilação padrão, que agora deve funcionar com todas as dependências instaladas.
-cmake -B build -S .
+log_info "Criando diretório de build..."
+mkdir -p build
+cd build
 
-log_info "Compilando o BadVPN com \'make\'..."
-make -C build
+log_info "Configurando o ambiente de compilação com CMake..."
+cmake ..
+
+log_info "Compilando o BadVPN com 'make'..."
+make
 
 # Verifica se a compilação foi bem-sucedida
-if [[ -f "build/badvpn-udpgw/badvpn-udpgw" ]]; then
-    cp "build/badvpn-udpgw/badvpn-udpgw" /usr/local/bin/
+if [[ -f "udpgw/badvpn-udpgw" ]]; then
+    cp "udpgw/badvpn-udpgw" /usr/local/bin/
     chmod +x /usr/local/bin/badvpn-udpgw
     log_info "badvpn-udpgw compilado e instalado com sucesso em /usr/local/bin/badvpn-udpgw"
 else
-    # Esta mensagem agora é uma segurança extra, pois o \'set -e\' deve parar o script antes
     log_error "O binário \'badvpn-udpgw\' não foi encontrado. A compilação falhou."
     exit 1
 fi
@@ -148,5 +150,3 @@ if systemctl is-active --quiet badvpn-udpgw; then
 else
     log_error "O serviço BadVPN falhou ao iniciar. Verifique os logs com: journalctl -u badvpn-udpgw.service -l"
 fi
-
-
