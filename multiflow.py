@@ -27,6 +27,9 @@ except ImportError as e:
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
     _in_alt = False
+    # Alguns terminais móveis (ex.: Termius) não respeitam bem o alt-screen.
+    # Deixe False se perceber flicker ou comportamento estranho.
+    USE_ALT = True
 
     @staticmethod
     def size():
@@ -35,44 +38,66 @@ class TerminalManager:
 
     @staticmethod
     def enter_alt_screen():
-        if not TerminalManager._in_alt:
-            sys.stdout.write("\033[?1049h\033[H\033[2J\033[3J\033[?25l")
+        if TerminalManager.USE_ALT and not TerminalManager._in_alt:
+            # Tenta alt-screen. Se não funcionar, continuaremos com limpeza manual.
+            sys.stdout.write("\033[?1049h")
             sys.stdout.flush()
             TerminalManager._in_alt = True
 
     @staticmethod
     def leave_alt_screen():
         if TerminalManager._in_alt:
-            sys.stdout.write("\033[?25h\033[?1049l")
+            sys.stdout.write("\033[?1049l")
             sys.stdout.flush()
             TerminalManager._in_alt = False
 
     @staticmethod
-    def hard_clear():
-        # Limpa tela e scrollback e garante área em branco
+    def _manual_clear_all_cells():
+        """
+        Limpa cada célula da tela sem usar newlines (evita scroll e ‘resíduos’).
+        Move o cursor linha a linha com posicionamento absoluto e preenche com espaços.
+        Compatível com Termius/Android, tmux, etc.
+        """
         cols, lines = TerminalManager.size()
-        sys.stdout.write("\033[0m\033[H\033[2J\033[3J")
-        blank = (" " * cols + "\n") * (lines - 1) + (" " * cols)
-        sys.stdout.write(blank)
-        sys.stdout.write("\033[H\033[2J")
+        blank_line = " " * cols
+        # Reset de atributos, desabilita wrap temporariamente para evitar artefatos
+        sys.stdout.write("\033[0m\033[?7l")
+        # Preenche cada linha com espaços, sem '\n' (usa endereço absoluto)
+        for row in range(1, lines + 1):
+            sys.stdout.write(f"\033[{row};1H{blank_line}")
+        # Volta para o topo e reabilita wrap
+        sys.stdout.write("\033[1;1H\033[?7h")
         sys.stdout.flush()
 
     @staticmethod
     def render(frame_str):
-        # Renderiza um frame completo de uma vez, sem telas intermediárias
+        """
+        Renderiza um frame completo:
+        - oculta cursor
+        - limpa tela por sobrescrita absoluta (sem dependência de 2J/3J)
+        - posiciona no topo e imprime tudo de uma vez
+        """
+        # Oculta cursor
         sys.stdout.write("\033[?25l")
-        TerminalManager.hard_clear()
-        sys.stdout.write("\033[H")  # Garante cursor no topo
+        sys.stdout.flush()
+
+        # Limpeza manual robusta (evita ‘duplicatas’ no Termius)
+        TerminalManager._manual_clear_all_cells()
+
+        # Garante cursor no topo e imprime frame
+        sys.stdout.write("\033[1;1H")
         sys.stdout.write(frame_str)
         sys.stdout.flush()
 
     @staticmethod
     def before_input():
-        sys.stdout.write("\033[?25h")
+        # Mostra cursor e limpa a linha atual para evitar prompt “fantasma”
+        sys.stdout.write("\033[?25h\033[2K\r")
         sys.stdout.flush()
 
     @staticmethod
     def after_input():
+        # Oculta cursor novamente para próximo redraw
         sys.stdout.write("\033[?25l")
         sys.stdout.flush()
 
@@ -223,7 +248,6 @@ def footer_line(status_msg=""):
 
 # ==================== INFO DO SISTEMA ====================
 def monitorar_uso_recursos(intervalo_cpu=0.10):
-    # intervalo pequeno para não atrasar o frame
     try:
         ram = psutil.virtual_memory()
         cpu_percent = psutil.cpu_percent(interval=intervalo_cpu)
@@ -393,10 +417,14 @@ def check_root():
     try:
         if os.geteuid() != 0:
             TerminalManager.enter_alt_screen()
-            TerminalManager.render(modern_header() + modern_box("AVISO DE SEGURANÇA", [
-                f"{MC.RED_GRADIENT}{Icons.WARNING} Este script precisa ser executado como root!{MC.RESET}",
-                f"{MC.YELLOW_GRADIENT}Algumas operações podem falhar sem privilégios adequados.{MC.RESET}"
-            ], Icons.SHIELD, MC.RED_GRADIENT, MC.RED_LIGHT) + footer_line())
+            TerminalManager.render(
+                modern_header() +
+                modern_box("AVISO DE SEGURANÇA", [
+                    f"{MC.RED_GRADIENT}{Icons.WARNING} Este script precisa ser executado como root!{MC.RESET}",
+                    f"{MC.YELLOW_GRADIENT}Algumas operações podem falhar sem privilégios adequados.{MC.RESET}"
+                ], Icons.SHIELD, MC.RED_GRADIENT, MC.RED_LIGHT) +
+                footer_line()
+            )
             TerminalManager.before_input()
             resp = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar mesmo assim? (s/n): {MC.RESET}").strip().lower()
             TerminalManager.after_input()
@@ -426,7 +454,6 @@ def conexoes_menu():
         TerminalManager.after_input()
 
         if choice == "1":
-            # OpenVPN
             try:
                 script_real_path = os.path.realpath(__file__)
                 script_dir = os.path.dirname(script_real_path)
@@ -504,7 +531,6 @@ def atualizar_multiflow():
             script_dir = os.path.dirname(os.path.realpath(__file__))
             update_script_path = os.path.join(script_dir, 'update.py')
             if not os.path.exists(update_script_path):
-                # Mostra erro no mesmo frame (sem telas intermediárias)
                 TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} 'update.py' não encontrado!{MC.RESET}\n")
                 time.sleep(2.0)
                 return
@@ -515,7 +541,6 @@ def atualizar_multiflow():
                 time.sleep(1.0)
                 sys.exit(0)
             finally:
-                # Caso retorne
                 TerminalManager.enter_alt_screen()
         except subprocess.CalledProcessError:
             TerminalManager.enter_alt_screen()
@@ -537,7 +562,6 @@ def main_menu():
 
     while True:
         try:
-            # Render do frame completo, sempre
             TerminalManager.render(build_main_frame(status))
             TerminalManager.before_input()
             choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
@@ -574,7 +598,7 @@ def main_menu():
                 time.sleep(0.4)
                 break
             else:
-                # Importante: sem telas intermediárias. Apenas atualizamos status
+                # Pressionar Enter vazio cai aqui e redesenha o frame inteiro
                 status = "Opção inválida. Pressione 1-6 ou 0 para sair."
 
         except KeyboardInterrupt:
