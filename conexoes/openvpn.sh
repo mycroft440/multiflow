@@ -12,7 +12,13 @@ readonly YELLOW=$'\e[1;33m'
 readonly BLUE=$'\e[1;34m'
 readonly CYAN=$'\e[1;36m'
 readonly WHITE=$'\e[1;37m'
+readonly MAGENTA=$'\e[1;35m'
 readonly SCOLOR=$'\e[0m'
+readonly BOLD=$'\e[1m'
+
+# --- Variáveis de Interface ---
+readonly SCRIPT_VERSION="2.0.1"
+readonly SCRIPT_NAME="OpenVPN Manager Pro"
 
 # --- Funções de Utilidade ---
 die() {
@@ -26,6 +32,38 @@ warn() {
 
 success() {
     echo -e "${GREEN}[SUCESSO] $1${SCOLOR}"
+}
+
+info() {
+    echo -e "${CYAN}[INFO] $1${SCOLOR}"
+}
+
+print_line() {
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════${SCOLOR}"
+}
+
+print_header() {
+    clear
+    print_line
+    echo -e "${BOLD}${WHITE}                    ${SCRIPT_NAME} v${SCRIPT_VERSION}${SCOLOR}"
+    print_line
+}
+
+print_footer() {
+    print_line
+    echo -e "${CYAN}          Desenvolvido com ❤️  para a comunidade VPN${SCOLOR}"
+    print_line
+}
+
+loading_animation() {
+    local text="$1"
+    local dots=""
+    for i in {1..3}; do
+        echo -ne "\r${CYAN}${text}${dots}${SCOLOR}   "
+        dots="${dots}."
+        sleep 0.5
+    done
+    echo -ne "\r                                          \r"
 }
 
 fun_bar() {
@@ -96,7 +134,7 @@ check_dependencies() {
             die "Instalação das dependências é necessária."
         fi
     else
-        echo -e "${GREEN}Todas as dependências estão presentes.${SCOLOR}"
+        echo -e "${GREEN}✓ Todas as dependências estão presentes.${SCOLOR}"
     fi
 
     local ovpn_version
@@ -133,8 +171,19 @@ detect_os() {
 
 # --- Funções de Configuração do OpenVPN ---
 install_openvpn() {
-    clear
-    echo -e "${BLUE}--- Instalador OpenVPN ---${SCOLOR}"
+    print_header
+    echo -e "${BOLD}${CYAN}              🚀 INSTALAÇÃO DO OPENVPN 🚀${SCOLOR}"
+    print_line
+    echo
+    echo -e "${WHITE}Este assistente irá configurar um servidor OpenVPN seguro.${SCOLOR}"
+    echo -e "${WHITE}O processo pode levar alguns minutos.${SCOLOR}"
+    echo
+    print_line
+    echo -ne "${YELLOW}Pressione ENTER para continuar ou CTRL+C para cancelar...${SCOLOR}"
+    read -r
+    
+    echo
+    loading_animation "Preparando instalação"
 
     local EASY_RSA_DIR="/etc/openvpn/easy-rsa"
     mkdir -p "$EASY_RSA_DIR" || die "Falha ao criar diretório $EASY_RSA_DIR."
@@ -142,13 +191,23 @@ install_openvpn() {
     chmod +x "$EASY_RSA_DIR/easyrsa" || die "Falha ao ajustar permissões do EasyRSA."
     cd "$EASY_RSA_DIR" || die "Não foi possível acessar $EASY_RSA_DIR."
     
-    echo -e "${CYAN}A configurar EasyRSA...${SCOLOR}"
+    echo
+    info "Configurando infraestrutura de chaves (PKI)..."
     ./easyrsa init-pki || die "Falha ao inicializar PKI."
+    
+    info "Criando Autoridade Certificadora (CA)..."
     echo "Easy-RSA CA" | ./easyrsa build-ca nopass || die "Falha ao criar CA."
+    
+    info "Gerando certificado do servidor..."
     echo "yes" | ./easyrsa build-server-full server nopass || die "Falha ao criar certificado do servidor."
+    
+    info "Gerando parâmetros Diffie-Hellman (pode demorar)..."
     ./easyrsa gen-dh || die "Falha ao gerar DH."
+    
+    info "Gerando chave de autenticação TLS..."
     openvpn --genkey secret pki/ta.key || die "Falha ao gerar chave TA."
 
+    info "Copiando arquivos de configuração..."
     cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem pki/ta.key /etc/openvpn/ || die "Falha ao copiar arquivos."
     chown root:root /etc/openvpn/*.{key,crt,pem} || die "Falha ao ajustar propriedade."
     chmod 600 /etc/openvpn/*.{key,crt,pem} || die "Falha ao ajustar permissões."
@@ -156,37 +215,72 @@ install_openvpn() {
     configure_server
     configure_firewall
     start_openvpn_service
-    success "OpenVPN instalado e iniciado com sucesso!"
+    
+    echo
+    print_line
+    echo -e "${GREEN}${BOLD}     ✅ OPENVPN INSTALADO COM SUCESSO! ✅${SCOLOR}"
+    print_line
+    echo
+    
+    info "Criando primeiro cliente de demonstração..."
     create_client "cliente1"
-    echo -e "\n${CYAN}Pressione ENTER para voltar ao menu...${SCOLOR}"
+    
+    echo
+    print_footer
+    echo -ne "${CYAN}Pressione ENTER para voltar ao menu principal...${SCOLOR}"
     read -r
 }
 
 configure_server() {
-    echo -e "${CYAN}A configurar o servidor OpenVPN...${SCOLOR}"
+    echo
+    print_line
+    echo -e "${BOLD}${WHITE}           ⚙️  CONFIGURAÇÃO DO SERVIDOR ⚙️${SCOLOR}"
+    print_line
+    echo
+    
     local IP
     IP=$(curl -s ifconfig.me 2>/dev/null || wget -4qO- "http://ifconfig.me" 2>/dev/null || hostname -I | awk '{print $1}')
     [[ -z "$IP" ]] && die "Não foi possível determinar o IP público."
     
-    echo -ne "${WHITE}Porta para o OpenVPN [padrão: 1194]: ${SCOLOR}"
+    echo -e "${GREEN}✓${SCOLOR} IP Público detectado: ${BOLD}${WHITE}$IP${SCOLOR}"
+    echo
+    
+    echo -e "${CYAN}📌 Configuração da Porta:${SCOLOR}"
+    echo -ne "${WHITE}   Digite a porta para o OpenVPN [${GREEN}1194${WHITE}]: ${SCOLOR}"
     read -r PORT
     [[ -z "$PORT" ]] && PORT="1194"
+    echo -e "${GREEN}   ✓${SCOLOR} Porta selecionada: ${BOLD}$PORT${SCOLOR}"
+    echo
 
-    echo -ne "${WHITE}Protocolo [1] UDP (padrão) [2] TCP: ${SCOLOR}"
+    echo -e "${CYAN}📌 Configuração do Protocolo:${SCOLOR}"
+    echo -e "${WHITE}   [1] UDP ${GREEN}(recomendado)${SCOLOR}"
+    echo -e "${WHITE}   [2] TCP${SCOLOR}"
+    echo -ne "${WHITE}   Escolha [${GREEN}1${WHITE}]: ${SCOLOR}"
     read -r PROTOCOL_CHOICE
-    PROTOCOL=${PROTOCOL_CHOICE:-1}
-    PROTOCOL=${PROTOCOL:+"tcp"} || PROTOCOL="udp"
+    case $PROTOCOL_CHOICE in
+        2) PROTOCOL="tcp"; PROTO_DISPLAY="TCP" ;;
+        *) PROTOCOL="udp"; PROTO_DISPLAY="UDP" ;;
+    esac
+    echo -e "${GREEN}   ✓${SCOLOR} Protocolo selecionado: ${BOLD}$PROTO_DISPLAY${SCOLOR}"
+    echo
 
-    echo -ne "${WHITE}DNS [1] Google (padrão) [2] Cloudflare [3] OpenDNS: ${SCOLOR}"
+    echo -e "${CYAN}📌 Configuração de DNS:${SCOLOR}"
+    echo -e "${WHITE}   [1] Google DNS ${GREEN}(8.8.8.8)${SCOLOR}"
+    echo -e "${WHITE}   [2] Cloudflare ${GREEN}(1.1.1.1)${SCOLOR}"
+    echo -e "${WHITE}   [3] OpenDNS ${GREEN}(208.67.222.222)${SCOLOR}"
+    echo -ne "${WHITE}   Escolha [${GREEN}1${WHITE}]: ${SCOLOR}"
     read -r DNS_CHOICE
     case $DNS_CHOICE in
-        2) DNS1="1.1.1.1"; DNS2="1.0.0.1" ;;
-        3) DNS1="208.67.222.222"; DNS2="208.67.220.220" ;;
-        *) DNS1="8.8.8.8"; DNS2="8.8.4.4" ;;
+        2) DNS1="1.1.1.1"; DNS2="1.0.0.1"; DNS_NAME="Cloudflare" ;;
+        3) DNS1="208.67.222.222"; DNS2="208.67.220.220"; DNS_NAME="OpenDNS" ;;
+        *) DNS1="8.8.8.8"; DNS2="8.8.4.4"; DNS_NAME="Google" ;;
     esac
+    echo -e "${GREEN}   ✓${SCOLOR} DNS selecionado: ${BOLD}$DNS_NAME${SCOLOR}"
 
     mkdir -p /var/log/openvpn || die "Falha ao criar diretório de logs."
     chown nobody:"$GROUPNAME" /var/log/openvpn || die "Falha ao ajustar permissões de logs."
+    
+    loading_animation "Gerando configuração do servidor"
     
     cat > /etc/openvpn/server.conf << EOF
 port $PORT
@@ -224,10 +318,13 @@ EOF
     cp pki/crl.pem /etc/openvpn/crl.pem || die "Falha ao copiar CRL."
     chown root:root /etc/openvpn/crl.pem
     chmod 644 /etc/openvpn/crl.pem
+    
+    success "Servidor configurado com sucesso!"
 }
 
 configure_firewall() {
-    echo -e "${CYAN}A configurar o firewall...${SCOLOR}"
+    echo
+    info "Configurando firewall e roteamento..."
     sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
     sysctl -p >/dev/null || die "Falha ao ativar encaminhamento de IP."
 
@@ -248,23 +345,30 @@ configure_firewall() {
         firewall-cmd --add-masquerade --permanent || die "Falha ao adicionar masquerade."
         firewall-cmd --reload || die "Falha ao recarregar firewalld."
     fi
+    success "Firewall configurado!"
 }
 
 start_openvpn_service() {
-    echo -e "${CYAN}A iniciar o serviço OpenVPN...${SCOLOR}"
+    echo
+    info "Iniciando serviço OpenVPN..."
     if command -v systemctl >/dev/null 2>&1; then
         systemctl enable openvpn@server || die "Falha ao habilitar o serviço."
         systemctl start openvpn@server || die "Falha ao iniciar o serviço."
     else
         service openvpn@server start || die "Falha ao iniciar o serviço sem systemd."
     fi
+    success "Serviço OpenVPN iniciado!"
 }
 
 create_client() {
     local CLIENT_NAME="${1:-}"
     
     if [[ -z "$CLIENT_NAME" ]]; then
-        echo -ne "${WHITE}Nome do cliente: ${SCOLOR}"
+        print_header
+        echo -e "${BOLD}${CYAN}              👤 CRIAR NOVO CLIENTE 👤${SCOLOR}"
+        print_line
+        echo
+        echo -ne "${WHITE}Digite o nome do cliente: ${SCOLOR}"
         read -r CLIENT_NAME
         [[ -z "$CLIENT_NAME" ]] && warn "Nome inválido." && return
     fi
@@ -272,7 +376,8 @@ create_client() {
     cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado."
     [[ -f "pki/issued/${CLIENT_NAME}.crt" ]] && warn "Cliente '$CLIENT_NAME' já existe." && return
 
-    echo -e "${CYAN}A gerar certificado para '$CLIENT_NAME'...${SCOLOR}"
+    echo
+    loading_animation "Gerando certificado para '$CLIENT_NAME'"
     echo "yes" | ./easyrsa build-client-full "$CLIENT_NAME" nopass || die "Falha ao gerar certificado do cliente."
 
     local IP PROTOCOL PORT
@@ -283,6 +388,8 @@ create_client() {
     local OVPN_DIR=~/ovpn-clients
     mkdir -p "$OVPN_DIR" || die "Falha ao criar diretório $OVPN_DIR."
 
+    loading_animation "Criando arquivo de configuração"
+    
     cat > "${OVPN_DIR}/${CLIENT_NAME}.ovpn" << EOF
 client
 dev tun
@@ -310,57 +417,119 @@ $(cat "/etc/openvpn/easy-rsa/pki/private/${CLIENT_NAME}.key")
 $(cat /etc/openvpn/ta.key)
 </tls-auth>
 EOF
-    success "Configuração do cliente salva em: ${OVPN_DIR}/${CLIENT_NAME}.ovpn"
+    
+    echo
+    print_line
+    echo -e "${GREEN}${BOLD}     ✅ CLIENTE CRIADO COM SUCESSO! ✅${SCOLOR}"
+    print_line
+    echo
+    echo -e "${WHITE}📁 Arquivo de configuração salvo em:${SCOLOR}"
+    echo -e "${CYAN}   ${OVPN_DIR}/${CLIENT_NAME}.ovpn${SCOLOR}"
+    echo
+    echo -e "${YELLOW}💡 Dica: Transfira este arquivo para o dispositivo cliente${SCOLOR}"
+    echo -e "${YELLOW}   e importe no aplicativo OpenVPN.${SCOLOR}"
+    echo
+    print_footer
 }
 
 revoke_client() {
+    print_header
+    echo -e "${BOLD}${CYAN}              🚫 REVOGAR CLIENTE 🚫${SCOLOR}"
+    print_line
+    echo
+    
     cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado."
     
     local clients=()
     while IFS= read -r file; do
         clients+=("$(basename "$file" .crt)")
-    done < <(ls -1 pki/issued/*.crt 2>/dev/null)
+    done < <(ls -1 pki/issued/*.crt 2>/dev/null | grep -v server.crt)
 
-    [[ ${#clients[@]} -eq 0 ]] && warn "Nenhum cliente para revogar." && return
+    if [[ ${#clients[@]} -eq 0 ]]; then
+        echo -e "${YELLOW}⚠️  Nenhum cliente disponível para revogar.${SCOLOR}"
+        echo
+        print_footer
+        echo -ne "${CYAN}Pressione ENTER para voltar...${SCOLOR}"
+        read -r
+        return
+    fi
 
-    echo -e "${YELLOW}Selecione o cliente a revogar:${SCOLOR}"
+    echo -e "${WHITE}Selecione o cliente que deseja revogar:${SCOLOR}"
+    echo
     for i in "${!clients[@]}"; do
-        echo " $((i + 1))) ${clients[$i]}"
+        echo -e "  ${CYAN}[$((i + 1))]${SCOLOR} ${WHITE}${clients[$i]}${SCOLOR}"
     done
-    
-    echo -ne "${WHITE}Número do cliente: ${SCOLOR}"
+    echo
+    echo -e "  ${RED}[0]${SCOLOR} ${WHITE}Cancelar${SCOLOR}"
+    echo
+    print_line
+    echo -ne "${WHITE}Digite sua escolha: ${SCOLOR}"
     read -r choice
 
+    if [[ "$choice" == "0" ]]; then
+        return
+    fi
+    
     if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#clients[@]} )); then
         warn "Seleção inválida."
+        sleep 2
         return
     fi
 
     local CLIENT_TO_REVOKE="${clients[$((choice - 1))]}"
     
-    echo -ne "${YELLOW}Tem certeza que deseja revogar '$CLIENT_TO_REVOKE'? [s/N]: ${SCOLOR}"
+    echo
+    echo -e "${RED}⚠️  ATENÇÃO: Esta ação não pode ser desfeita!${SCOLOR}"
+    echo -ne "${YELLOW}Confirma a revogação de '${WHITE}${CLIENT_TO_REVOKE}${YELLOW}'? [s/N]: ${SCOLOR}"
     read -r confirmation
     
     if [[ "$confirmation" =~ ^[sS]$ ]]; then
-        echo -e "${CYAN}A revogar o cliente...${SCOLOR}"
+        echo
+        loading_animation "Revogando cliente '$CLIENT_TO_REVOKE'"
         echo "yes" | ./easyrsa revoke "$CLIENT_TO_REVOKE" || die "Falha ao revogar cliente."
         ./easyrsa gen-crl || die "Falha ao gerar CRL."
         cp pki/crl.pem /etc/openvpn/crl.pem || die "Falha ao atualizar CRL."
         start_openvpn_service
         rm -f ~/ovpn-clients/"$CLIENT_TO_REVOKE".ovpn
-        success "Cliente '$CLIENT_TO_REVOKE' revogado."
+        
+        echo
+        print_line
+        echo -e "${GREEN}${BOLD}     ✅ CLIENTE REVOGADO COM SUCESSO! ✅${SCOLOR}"
+        print_line
+        echo
+        echo -e "${WHITE}Cliente '${CLIENT_TO_REVOKE}' foi revogado e removido do sistema.${SCOLOR}"
+        echo
+        print_footer
     else
+        echo
         warn "Operação cancelada."
     fi
+    
+    echo -ne "${CYAN}Pressione ENTER para voltar...${SCOLOR}"
+    read -r
 }
 
 uninstall_openvpn() {
-    echo -ne "${RED}Tem CERTEZA que deseja remover o OpenVPN? [s/N]: ${SCOLOR}"
+    print_header
+    echo -e "${BOLD}${RED}           ⚠️  DESINSTALAÇÃO DO OPENVPN ⚠️${SCOLOR}"
+    print_line
+    echo
+    echo -e "${YELLOW}Esta ação irá:${SCOLOR}"
+    echo -e "${WHITE}  • Parar o serviço OpenVPN${SCOLOR}"
+    echo -e "${WHITE}  • Remover todos os pacotes relacionados${SCOLOR}"
+    echo -e "${WHITE}  • Apagar todas as configurações${SCOLOR}"
+    echo -e "${WHITE}  • Remover todos os certificados de clientes${SCOLOR}"
+    echo
+    echo -e "${RED}⚠️  ESTA AÇÃO NÃO PODE SER DESFEITA!${SCOLOR}"
+    echo
+    print_line
+    echo -ne "${RED}Digite 'CONFIRMAR' para prosseguir com a desinstalação: ${SCOLOR}"
     read -r confirmation
 
-    if [[ "$confirmation" =~ ^[sS]$ ]]; then
-        echo -e "${RED}A remover o OpenVPN...${SCOLOR}"
-
+    if [[ "$confirmation" == "CONFIRMAR" ]]; then
+        echo
+        loading_animation "Parando serviços"
+        
         if command -v systemctl >/dev/null 2>&1; then
             systemctl stop openvpn@server 2>/dev/null
             systemctl disable openvpn@server 2>/dev/null
@@ -368,6 +537,8 @@ uninstall_openvpn() {
             service openvpn@server stop 2>/dev/null
         fi
 
+        loading_animation "Removendo pacotes"
+        
         if [[ "$OS" = "debian" ]]; then
             fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y"
             iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -j MASQUERADE 2>/dev/null
@@ -383,58 +554,166 @@ uninstall_openvpn() {
             firewall-cmd --reload 2>/dev/null
         fi
 
+        loading_animation "Removendo arquivos de configuração"
         rm -rf /etc/openvpn ~/ovpn-clients
-        success "OpenVPN removido com sucesso."
+        
+        echo
+        print_line
+        echo -e "${GREEN}${BOLD}     ✅ OPENVPN REMOVIDO COM SUCESSO! ✅${SCOLOR}"
+        print_line
+        echo
+        print_footer
     else
-        warn "Remoção cancelada."
+        echo
+        warn "Desinstalação cancelada."
     fi
+    
+    echo -ne "${CYAN}Pressione ENTER para sair...${SCOLOR}"
+    read -r
+    exit 0
 }
 
-# --- Menus de Gestão ---
+# --- Menu Principal ---
 main_menu() {
     while true; do
-        clear
-        echo -e "${BLUE}--- OpenVPN Installer & Manager ---${SCOLOR}"
-        echo -e "${CYAN}Versão Funcional Revisada${SCOLOR}\n"
-
+        print_header
+        
         if systemctl is-active --quiet openvpn@server 2>/dev/null; then
-            local port proto
-            port=$(grep '^port' /etc/openvpn/server.conf | awk '{print $2}')
-            proto=$(grep '^proto' /etc/openvpn/server.conf | awk '{print $2}')
-            echo -e "${GREEN}STATUS: Ativo${SCOLOR} | ${WHITE}Porta: $port ($proto)${SCOLOR}\n"
-            echo -e "${YELLOW}1)${SCOLOR} Criar um novo cliente"
-            echo -e "${YELLOW}2)${SCOLOR} Revogar um cliente existente"
-            echo -e "${YELLOW}3)${SCOLOR} Desinstalar o OpenVPN"
-            echo -e "${YELLOW}0)${SCOLOR} Sair"
+            local port proto clients_count
+            port=$(grep '^port' /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}')
+            proto=$(grep '^proto' /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}' | tr '[:lower:]' '[:upper:]')
+            clients_count=$(ls -1 /etc/openvpn/easy-rsa/pki/issued/*.crt 2>/dev/null | grep -v server.crt | wc -l)
+            
+            echo -e "${BOLD}${WHITE}                   📊 STATUS DO SERVIDOR${SCOLOR}"
+            print_line
+            echo
+            echo -e "  ${GREEN}●${SCOLOR} Status: ${GREEN}${BOLD}ATIVO${SCOLOR}"
+            echo -e "  ${WHITE}📡${SCOLOR} Porta: ${CYAN}${port}${SCOLOR}"
+            echo -e "  ${WHITE}🔌${SCOLOR} Protocolo: ${CYAN}${proto}${SCOLOR}"
+            echo -e "  ${WHITE}👥${SCOLOR} Clientes: ${CYAN}${clients_count}${SCOLOR}"
+            echo
+            print_line
+            echo -e "${BOLD}${WHITE}                      MENU DE OPÇÕES${SCOLOR}"
+            print_line
+            echo
+            echo -e "  ${CYAN}[1]${SCOLOR} ${WHITE}👤 Criar novo cliente${SCOLOR}"
+            echo -e "  ${CYAN}[2]${SCOLOR} ${WHITE}🚫 Revogar cliente existente${SCOLOR}"
+            echo -e "  ${CYAN}[3]${SCOLOR} ${WHITE}📋 Listar clientes ativos${SCOLOR}"
+            echo -e "  ${CYAN}[4]${SCOLOR} ${WHITE}🗑️  Desinstalar OpenVPN${SCOLOR}"
+            echo
+            echo -e "  ${MAGENTA}[0]${SCOLOR} ${WHITE}🚪 Sair${SCOLOR}"
         else
-            echo -e "${RED}STATUS: Não Instalado${SCOLOR}\n"
-            echo -e "${YELLOW}1)${SCOLOR} Instalar OpenVPN"
-            echo -e "${YELLOW}0)${SCOLOR} Sair"
+            echo -e "${BOLD}${WHITE}                   📊 STATUS DO SERVIDOR${SCOLOR}"
+            print_line
+            echo
+            echo -e "  ${RED}●${SCOLOR} Status: ${RED}${BOLD}NÃO INSTALADO${SCOLOR}"
+            echo
+            print_line
+            echo -e "${BOLD}${WHITE}                      MENU DE OPÇÕES${SCOLOR}"
+            print_line
+            echo
+            echo -e "  ${CYAN}[1]${SCOLOR} ${WHITE}🚀 Instalar OpenVPN${SCOLOR}"
+            echo
+            echo -e "  ${MAGENTA}[0]${SCOLOR} ${WHITE}🚪 Sair${SCOLOR}"
         fi
-
-        echo -ne "\n${WHITE}Escolha uma opção: ${SCOLOR}"
+        
+        echo
+        print_line
+        echo -ne "${WHITE}Digite sua opção: ${SCOLOR}"
         read -r choice
 
-        case "$choice" in
-            1) [[ -n "$port" ]] && create_client || install_openvpn ;;
-            2) revoke_client ;;
-            3) uninstall_openvpn; main_menu ;;
-            0) exit 0 ;;
-            *) warn "Opção inválida." ;;
-        esac
-
-        [[ -n "$choice" && "$choice" != "0" ]] && echo -e "\n${CYAN}Pressione ENTER para continuar...${SCOLOR}" && read -r
+        if systemctl is-active --quiet openvpn@server 2>/dev/null; then
+            case "$choice" in
+                1) create_client ;;
+                2) revoke_client ;;
+                3) 
+                    print_header
+                    echo -e "${BOLD}${CYAN}              📋 CLIENTES ATIVOS 📋${SCOLOR}"
+                    print_line
+                    echo
+                    local client_list=()
+                    while IFS= read -r file; do
+                        client_list+=("$(basename "$file" .crt)")
+                    done < <(ls -1 /etc/openvpn/easy-rsa/pki/issued/*.crt 2>/dev/null | grep -v server.crt)
+                    
+                    if [[ ${#client_list[@]} -eq 0 ]]; then
+                        echo -e "${YELLOW}  Nenhum cliente cadastrado.${SCOLOR}"
+                    else
+                        for client in "${client_list[@]}"; do
+                            echo -e "  ${GREEN}✓${SCOLOR} ${WHITE}${client}${SCOLOR}"
+                        done
+                    fi
+                    echo
+                    print_footer
+                    echo -ne "${CYAN}Pressione ENTER para voltar...${SCOLOR}"
+                    read -r
+                    ;;
+                4) uninstall_openvpn ;;
+                0) 
+                    print_footer
+                    echo -e "${WHITE}Obrigado por usar ${SCRIPT_NAME}!${SCOLOR}"
+                    echo
+                    exit 0 
+                    ;;
+                *) 
+                    warn "Opção inválida!"
+                    sleep 1
+                    ;;
+            esac
+        else
+            case "$choice" in
+                1) install_openvpn ;;
+                0) 
+                    print_footer
+                    echo -e "${WHITE}Obrigado por usar ${SCRIPT_NAME}!${SCOLOR}"
+                    echo
+                    exit 0 
+                    ;;
+                *) 
+                    warn "Opção inválida!"
+                    sleep 1
+                    ;;
+            esac
+        fi
     done
 }
 
 # --- Ponto de Entrada ---
 main() {
-    clear
     check_root
     check_bash
     check_tun
     detect_os
+    
+    print_header
+    echo -e "${BOLD}${WHITE}              🔍 VERIFICAÇÃO DO SISTEMA 🔍${SCOLOR}"
+    print_line
+    echo
+    
+    echo -e "${CYAN}Verificando requisitos do sistema...${SCOLOR}"
+    echo
+    
+    echo -ne "  ${WHITE}Sistema Operacional:${SCOLOR} "
+    loading_animation ""
+    echo -e "${GREEN}✓${SCOLOR} ${WHITE}$(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)${SCOLOR}"
+    
+    echo -ne "  ${WHITE}Permissões ROOT:${SCOLOR} "
+    loading_animation ""
+    echo -e "${GREEN}✓${SCOLOR} ${WHITE}Confirmado${SCOLOR}"
+    
+    echo -ne "  ${WHITE}Dispositivo TUN/TAP:${SCOLOR} "
+    loading_animation ""
+    echo -e "${GREEN}✓${SCOLOR} ${WHITE}Disponível${SCOLOR}"
+    
+    echo -ne "  ${WHITE}Verificando dependências:${SCOLOR} "
+    loading_animation ""
     check_dependencies
+    
+    echo
+    print_footer
+    echo -ne "${CYAN}Pressione ENTER para continuar...${SCOLOR}"
+    read -r
+    
     main_menu
 }
 
