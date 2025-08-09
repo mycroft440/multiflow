@@ -4,182 +4,252 @@
 import os
 import re
 import sys
+import shutil
 
-def supports_color():
-    """Verifica se o terminal suporta cores ANSI."""
-    plat = sys.platform
-    supported_platform = plat != 'win32' or 'ANSICON' in os.environ
-    
-    try:
-        is_a_tty = sys.stdout.isatty()
-    except AttributeError:
-        is_a_tty = False
-    
-    return supported_platform and is_a_tty
+# ==================== SISTEMA DE CORES MODERNO ====================
+class MC:
+    """Modern Colors - Sistema de cores gradiente do Multiflow"""
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    ITALIC = '\033[3m'
+    UNDERLINE = '\033[4m'
+    REVERSE = '\033[7m'
 
-class Colors:
-    """Códigos ANSI para colorir a saída do terminal."""
-    _enabled = supports_color()
+    # Gradientes de cores
+    PURPLE_GRADIENT = '\033[38;2;147;51;234m'
+    PURPLE_LIGHT = '\033[38;2;196;181;253m'
+    PURPLE_DARK = '\033[38;2;107;33;168m'
     
-    @classmethod
-    def _get_color(cls, code):
-        return code if cls._enabled else ''
+    CYAN_GRADIENT = '\033[38;2;6;182;212m'
+    CYAN_LIGHT = '\033[38;2;165;243;252m'
+    CYAN_DARK = '\033[38;2;14;116;144m'
     
-    HEADER = property(lambda self: self._get_color('\033[95m'))
-    BLUE = property(lambda self: self._get_color('\033[94m'))
-    CYAN = property(lambda self: self._get_color('\033[96m'))
-    GREEN = property(lambda self: self._get_color('\033[92m'))
-    YELLOW = property(lambda self: self._get_color('\033[93m'))
-    RED = property(lambda self: self._get_color('\033[91m'))
-    WHITE = property(lambda self: self._get_color('\033[97m'))
-    BOLD = property(lambda self: self._get_color('\033[1m'))
-    UNDERLINE = property(lambda self: self._get_color('\033[4m'))
-    END = property(lambda self: self._get_color('\033[0m'))
+    GREEN_GRADIENT = '\033[38;2;34;197;94m'
+    GREEN_LIGHT = '\033[38;2;134;239;172m'
+    GREEN_DARK = '\033[38;2;22;163;74m'
+    
+    ORANGE_GRADIENT = '\033[38;2;251;146;60m'
+    ORANGE_LIGHT = '\033[38;2;254;215;170m'
+    ORANGE_DARK = '\033[38;2;234;88;12m'
+    
+    RED_GRADIENT = '\033[38;2;239;68;68m'
+    RED_LIGHT = '\033[38;2;254;202;202m'
+    RED_DARK = '\033[38;2;185;28;28m'
+    
+    YELLOW_GRADIENT = '\033[38;2;250;204;21m'
+    YELLOW_LIGHT = '\033[38;2;254;240;138m'
+    YELLOW_DARK = '\033[38;2;202;138;4m'
+    
+    BLUE_GRADIENT = '\033[38;2;59;130;246m'
+    BLUE_LIGHT = '\033[38;2;191;219;254m'
+    BLUE_DARK = '\033[38;2;29;78;216m'
+    
+    PINK_GRADIENT = '\033[38;2;236;72;153m'
+    PINK_LIGHT = '\033[38;2;251;207;232m'
+    
+    WHITE = '\033[97m'
+    GRAY = '\033[38;2;156;163;175m'
+    LIGHT_GRAY = '\033[38;2;229;231;235m'
+    DARK_GRAY = '\033[38;2;75;85;99m'
+
+# ==================== SISTEMA DE ÍCONES ====================
+class Icons:
+    """Ícones Unicode para interface moderna"""
+    SERVER = "🖥️ "
+    USERS = "👥 "
+    NETWORK = "🌐 "
+    TOOLS = "🔧 "
+    SHIELD = "🛡️ "
+    CHART = "📊 "
+    CPU = "⚙️ "
+    RAM = "💾 "
+    ACTIVE = "🟢"
+    INACTIVE = "🔴"
+    BACK = "◀ "
+    EXIT = "🚪 "
+    CLOCK = "🕐 "
+    SYSTEM = "💻 "
+    UPDATE = "🔄 "
+    DOWNLOAD = "📥 "
+    UPLOAD = "📤 "
+    KEY = "🔑 "
+    LOCK = "🔒 "
+    UNLOCK = "🔓 "
+    CHECK = "✅ "
+    CROSS = "❌ "
+    WARNING = "⚠️ "
+    INFO = "ℹ️ "
+    ROCKET = "🚀 "
+    DIAMOND = "💎 "
+    FOLDER = "📁 "
+    FILE = "📄 "
+    SETTINGS = "⚙️ "
+    TRASH = "🗑️ "
+    PLUS = "➕ "
+    MINUS = "➖ "
+    EDIT = "✏️ "
+    SAVE = "💾 "
+    
+    # Box drawing
+    BOX_TOP_LEFT = "╭"
+    BOX_TOP_RIGHT = "╮"
+    BOX_BOTTOM_LEFT = "╰"
+    BOX_BOTTOM_RIGHT = "╯"
+    BOX_HORIZONTAL = "─"
+    BOX_VERTICAL = "│"
+
+# ==================== TERMINAL MANAGER ====================
+class TerminalManager:
+    """Gerenciador de renderização do terminal"""
+    _in_alt = False
+    USE_ALT = True
+    
+    @staticmethod
+    def size():
+        ts = shutil.get_terminal_size(fallback=(80, 24))
+        return ts.columns, ts.lines
+    
+    @staticmethod
+    def clear():
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    @staticmethod
+    def enter_alt_screen():
+        if TerminalManager.USE_ALT and not TerminalManager._in_alt:
+            sys.stdout.write("\033[?1049h")
+            sys.stdout.flush()
+            TerminalManager._in_alt = True
+    
+    @staticmethod
+    def leave_alt_screen():
+        if TerminalManager._in_alt:
+            sys.stdout.write("\033[?1049l")
+            sys.stdout.flush()
+            TerminalManager._in_alt = False
+    
+    @staticmethod
+    def render(frame_str):
+        """Renderiza um frame completo"""
+        sys.stdout.write("\033[?25l")  # Hide cursor
+        TerminalManager.clear()
+        sys.stdout.write("\033[1;1H")
+        sys.stdout.write(frame_str)
+        sys.stdout.flush()
+    
+    @staticmethod
+    def before_input():
+        """Prepara terminal para input"""
+        sys.stdout.write("\033[?25h\033[2K\r")  # Show cursor
+        sys.stdout.flush()
+    
+    @staticmethod
+    def after_input():
+        """Restaura estado após input"""
+        sys.stdout.write("\033[?25l")  # Hide cursor
+        sys.stdout.flush()
+
+# ==================== HELPERS DE UI ====================
+def gradient_line(width=80, char='═', colors=(MC.PURPLE_GRADIENT, MC.CYAN_GRADIENT, MC.BLUE_GRADIENT)):
+    """Cria uma linha com gradiente de cores"""
+    seg = max(1, width // len(colors))
+    out = []
+    used = 0
+    for i, c in enumerate(colors):
+        run = seg if i < len(colors) - 1 else (width - used)
+        out.append(f"{c}{char * run}")
+        used += run
+    return "".join(out) + MC.RESET + "\n"
+
+def modern_box(title, content_lines, icon="", primary=MC.CYAN_GRADIENT, secondary=MC.CYAN_LIGHT):
+    """Cria uma caixa moderna com título e conteúdo"""
+    cols, _ = TerminalManager.size()
+    width = max(54, min(cols - 6, 100))
+    title_text = f" {icon}{title} " if icon else f" {title} "
+    
+    header = (f"{primary}{Icons.BOX_TOP_LEFT}{Icons.BOX_HORIZONTAL * 10}"
+              f"{secondary}┤{MC.BOLD}{MC.WHITE}{title_text}{MC.RESET}{secondary}├"
+              f"{primary}{Icons.BOX_HORIZONTAL * (width - len(title_text) - 12)}"
+              f"{Icons.BOX_TOP_RIGHT}{MC.RESET}\n")
+    
+    body = ""
+    for line in content_lines:
+        clean = re.sub(r'\033\[[0-9;]*m', '', line)
+        pad = width - len(clean) - 2
+        if pad < 0:
+            vis = clean[:width - 5] + "..."
+            line = line.replace(clean, vis)
+            pad = width - len(vis) - 2
+        body += f"{primary}{Icons.BOX_VERTICAL}{MC.RESET} {line}{' ' * pad} {primary}{Icons.BOX_VERTICAL}{MC.RESET}\n"
+    
+    footer = f"{primary}{Icons.BOX_BOTTOM_LEFT}{Icons.BOX_HORIZONTAL * width}{Icons.BOX_BOTTOM_RIGHT}{MC.RESET}\n"
+    return header + body + footer
+
+def menu_option(number, text, icon="", color=MC.CYAN_GRADIENT, badge=""):
+    """Formata uma opção de menu"""
+    num = f"{color}{MC.BOLD}[{number}]{MC.RESET}" if number != "0" else f"{MC.RED_GRADIENT}{MC.BOLD}[0]{MC.RESET}"
+    b = f" {MC.PURPLE_GRADIENT}{MC.WHITE}{MC.BOLD} {badge} {MC.RESET}" if badge else ""
+    return f"  {num} {icon}{MC.WHITE}{text}{b}{MC.RESET}\n"
+
+def progress_bar(percent, width=18):
+    """Cria uma barra de progresso colorida"""
+    filled = int(percent * width / 100)
+    empty = width - filled
+    if percent < 30: 
+        c = MC.GREEN_GRADIENT
+    elif percent < 60: 
+        c = MC.YELLOW_GRADIENT
+    elif percent < 80: 
+        c = MC.ORANGE_GRADIENT
+    else: 
+        c = MC.RED_GRADIENT
+    return f"[{c}{'█' * filled}{MC.DARK_GRAY}{'░' * empty}{MC.RESET}] {c}{percent:5.1f}%{MC.RESET}"
+
+def footer_line(status_msg=""):
+    """Cria linha de rodapé"""
+    cols, _ = TerminalManager.size()
+    width = max(60, min(cols - 2, 100))
+    bar = f"\n{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
+    status = f"{MC.GRAY}MultiFlow │ Sistema Avançado de Gerenciamento VPS{MC.RESET}"
+    if status_msg:
+        status += f"  {MC.YELLOW_GRADIENT}{status_msg}{MC.RESET}"
+    return bar + status + "\n" + f"{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
+
+def simple_header(title):
+    """Header simplificado para submenus"""
+    cols, _ = TerminalManager.size()
+    width = max(60, min(cols - 2, 100))
+    s = []
+    s.append(gradient_line(width))
+    s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}{title.center(width)}{MC.RESET}\n")
+    s.append(f"{MC.GRAY}{'═' * width}{MC.RESET}\n\n")
+    return "".join(s)
+
+# ==================== COMPATIBILIDADE LEGACY ====================
+# Mantém compatibilidade com código antigo
+Colors = MC  # Alias para compatibilidade
 
 class BoxChars:
-    """Caracteres Unicode para desenhar bordas."""
-    if supports_color():
-        TOP_LEFT = '╔'
-        TOP_RIGHT = '╗'
-        BOTTOM_LEFT = '╚'
-        BOTTOM_RIGHT = '╝'
-        
-        HORIZONTAL = '═'
-        VERTICAL = '║'
-        
-        T_DOWN = '╦'
-        T_UP = '╩'
-        T_RIGHT = '╠'
-        T_LEFT = '╣'
-        
-        CROSS = '╬'
-    else:
-        TOP_LEFT = '+'
-        TOP_RIGHT = '+'
-        BOTTOM_LEFT = '+'
-        BOTTOM_RIGHT = '+'
-        
-        HORIZONTAL = '-'
-        VERTICAL = '|'
-        
-        T_DOWN = '+'
-        T_UP = '+'
-        T_RIGHT = '+'
-        T_LEFT = '+'
-        
-        CROSS = '+'
-
-def visible_length(text):
-    """Calcula o comprimento visível de uma string, ignorando códigos ANSI."""
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    clean_text = ansi_escape.sub('', text)
-    return len(clean_text)
+    """Compatibilidade com código antigo"""
+    TOP_LEFT = Icons.BOX_TOP_LEFT
+    TOP_RIGHT = Icons.BOX_TOP_RIGHT
+    BOTTOM_LEFT = Icons.BOX_BOTTOM_LEFT
+    BOTTOM_RIGHT = Icons.BOX_BOTTOM_RIGHT
+    HORIZONTAL = Icons.BOX_HORIZONTAL
+    VERTICAL = Icons.BOX_VERTICAL
 
 def clear_screen():
-    """Limpa a tela do console."""
-    os.system("cls" if os.name == "nt" else "clear")
+    """Compatibilidade"""
+    TerminalManager.clear()
 
-def print_centered(text, width=60, char=' '):
-    """Imprime texto centralizado com uma largura específica."""
-    print(text.center(width, char))
-
-def print_colored_box(title, content_lines=None, width=60, title_color=None):
-    """Imprime uma caixa colorida com título e conteúdo."""
+def print_colored_box(title, content_lines=None):
+    """Compatibilidade - imprime diretamente"""
     if content_lines is None:
         content_lines = []
-    if title_color is None:
-        title_color = Colors().CYAN
-    
-    colors = Colors()
+    print(modern_box(title, content_lines, primary=MC.CYAN_GRADIENT))
 
-    print(f"{BoxChars.TOP_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.TOP_RIGHT}")
-    
-    title_text = f" {title_color}{colors.BOLD}{title}{colors.END} "
-    visible_title_len = visible_length(title_text)
-    padding = width - visible_title_len - 2
-    left_padding = padding // 2
-    right_padding = padding - left_padding
-    print(f"{BoxChars.VERTICAL}{' ' * left_padding}{title_text}{' ' * right_padding}{BoxChars.VERTICAL}")
-    
-    if content_lines:
-        print(f"{BoxChars.T_RIGHT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.T_LEFT}")
-        
-        for line in content_lines:
-            current_visible_len = visible_length(line)
-            max_content_width = width - 4
-            if current_visible_len > max_content_width:
-                truncated_line = ""
-                visible_chars_count = 0
-                for char in line:
-                    if re.match(r'\\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', char):
-                        truncated_line += char
-                    else:
-                        if visible_chars_count < max_content_width - 3:
-                            truncated_line += char
-                            visible_chars_count += 1
-                        else:
-                            break
-                line_to_print = truncated_line + "..." + colors.END
-            else:
-                line_to_print = line
-            padding = width - visible_length(line_to_print) - 2
-            print(f"{BoxChars.VERTICAL} {line_to_print}{' ' * padding}{BoxChars.VERTICAL}")
-    
-    print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * (width - 2)}{BoxChars.BOTTOM_RIGHT}")
-
-def print_menu_option(number, description, status=None, color=None, width=60):
-    """Formata uma opção de menu com possível status."""
-    colors = Colors()
+def print_menu_option(number, description, color=None):
+    """Compatibilidade - imprime diretamente"""
     if color is None:
-        color = colors.WHITE
-
-    number_text = f"{colors.BOLD}{color}[{number}]{colors.END}"
-    
-    if status:
-        status_text = f"{status}"
-        available_desc_space = width - visible_length(number_text) - visible_length(status_text) - 4
-    else:
-        available_desc_space = width - visible_length(number_text) - 3
-    current_desc_visible_len = visible_length(description)
-    if current_desc_visible_len > available_desc_space:
-        truncated_description = ""
-        visible_chars_count = 0
-        for char in description:
-            if re.match(r'\\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', char):
-                truncated_description += char
-            else:
-                if visible_chars_count < available_desc_space - 3:
-                    truncated_description += char
-                    visible_chars_count += 1
-                else:
-                    break
-        description_to_print = truncated_description + "..." + colors.END
-    else:
-        description_to_print = description
-    if status:
-        option_text = f" {number_text} {description_to_print}"
-        padding = width - visible_length(option_text) - visible_length(status_text) - 2
-        print(f"{BoxChars.VERTICAL}{option_text}{' ' * padding}{status_text} {BoxChars.VERTICAL}")
-    else:
-        option_text = f" {number_text} {description_to_print}"
-        padding = width - visible_length(option_text) - 2
-        print(f"{BoxChars.VERTICAL}{option_text}{' ' * padding}{BoxChars.VERTICAL}")
-
-# === Helpers compatíveis com scripts antigos (ex: update.py) ===
-def print_header(title="Multiflow"):
-    """Wrapper para print_colored_box, compatível com cabeçalhos simples."""
-    clear_screen()
-    print_colored_box(title)
-
-def print_center(text, width=60):
-    """Wrapper para print_centered."""
-    print_centered(text, width)
-
-def print_line(width=60):
-    """Imprime uma linha horizontal."""
-    print("-" * width)
-
-def print_error(msg):
-    """Imprime uma mensagem de erro em vermelho."""
-    colors = Colors()
-    print(f"{colors.RED}{msg}{colors.END}")
+        color = MC.CYAN_GRADIENT
+    print(menu_option(number, description, color=color), end='')
