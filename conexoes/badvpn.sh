@@ -1,13 +1,16 @@
 #!/bin/bash
+# Script para instalar e configurar o BadVPN, com tratamento de erros aprimorado.
 
-# Cores para a saída do terminal
+# --- Configurações de Segurança e Cores ---
+set -e # Encerra o script imediatamente se um comando falhar
+set -o pipefail # Garante que falhas em pipelines sejam capturadas
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Função para exibir mensagens de status
+# --- Funções de Log ---
 function log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -16,21 +19,22 @@ function log_error() {
     echo -e "${RED}[ERRO]${NC} $1"
 }
 
-function log_warn() {
-    echo -e "${YELLOW}[AVISO]${NC} $1"
-}
-
-# Função para limpar em caso de falha
-function cleanup_on_failure() {
+# --- Tratamento de Erros ---
+# Esta função será chamada sempre que um comando falhar (devido ao 'set -e')
+function handle_error() {
+    local exit_code=$?
+    local line_no=$1
+    log_error "Ocorreu um erro na linha $line_no com o código de saída $exit_code."
     log_error "A instalação falhou. Removendo diretório temporário..."
+    # Garante que a variável TMP_DIR existe antes de tentar remover o diretório
     [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
-    exit 1
+    exit $exit_code
 }
 
-# Captura de erros para executar a limpeza
-trap cleanup_on_failure ERR
+# Registra a função handle_error para ser executada no evento de erro (ERR)
+trap 'handle_error $LINENO' ERR
 
-# Verifica se o script está sendo executado como root
+# --- Verificação de Root ---
 if [[ $EUID -ne 0 ]]; then
    log_error "Este script deve ser executado como root!"
    exit 1
@@ -43,43 +47,34 @@ fi
 log_info "Iniciando a instalação e configuração do BadVPN..."
 
 # Instalar dependências para compilação e execução
-log_info "Instalando dependências (git, cmake, build-essential, screen)..."
-# Redireciona a saída do apt-get para um log para não poluir a tela, mas ainda ser depurável
+# ADICIONADO: pkg-config e libssl-dev para corrigir a falha de compilação do CMake
+log_info "Instalando dependências (git, cmake, build-essential, screen, pkg-config, libssl-dev)..."
 apt-get update -y > /tmp/badvpn_install.log 2>&1
-apt-get install -y git cmake build-essential screen >> /tmp/badvpn_install.log 2>&1
+apt-get install -y git cmake build-essential screen pkg-config libssl-dev >> /tmp/badvpn_install.log 2>&1
 
-# Compilar badvpn-udpgw a partir do código-fonte para garantir compatibilidade
+# Compilar badvpn-udpgw
 log_info "Compilando badvpn-udpgw a partir do código-fonte..."
 TMP_DIR="/tmp/badvpn-src-$$"
 
 log_info "Clonando o repositório do BadVPN..."
-# REMOVIDO: Redirecionamento de saída para permitir a visualização de erros
-if ! git clone https://github.com/ambrop72/badvpn.git "$TMP_DIR"; then
-    log_error "Falha ao clonar o repositório do BadVPN. Verifique sua conexão com a internet ou a saída de erro acima."
-    # A trap de erro cuidará da limpeza
-fi
+git clone https://github.com/ambrop72/badvpn.git "$TMP_DIR"
 cd "$TMP_DIR"
 
 log_info "Configurando o ambiente de compilação com CMake..."
-# REMOVIDO: Redirecionamento de saída
-if ! cmake .; then
-    log_error "O comando 'cmake' falhou. Verifique se todas as dependências foram instaladas corretamente."
-fi
+cmake .
 
 log_info "Compilando o BadVPN com 'make'..."
-# REMOVIDO: Redirecionamento de saída
-if ! make; then
-    log_error "O comando 'make' falhou. Verifique a saída de erro acima para identificar a causa."
-fi
+make
 
 # Verifica se a compilação foi bem-sucedida
 if [[ -f "badvpn-udpgw/badvpn-udpgw" ]]; then
-    # Usa /usr/local/bin, uma prática recomendada para binários compilados pelo usuário
     cp "badvpn-udpgw/badvpn-udpgw" /usr/local/bin/
     chmod +x /usr/local/bin/badvpn-udpgw
     log_info "badvpn-udpgw compilado e instalado com sucesso em /usr/local/bin/badvpn-udpgw"
 else
-    log_error "O binário 'badvpn-udpgw' não foi encontrado após a compilação. A compilação falhou."
+    # Esta mensagem agora é uma segurança extra, pois o 'set -e' deve parar o script antes
+    log_error "O binário 'badvpn-udpgw' não foi encontrado. A compilação falhou."
+    exit 1
 fi
 
 # Limpa os arquivos de código-fonte
@@ -103,7 +98,6 @@ log_info "Configurações sysctl aplicadas."
 # Cria o arquivo de serviço systemd para badvpn-udpgw
 SERVICE_FILE="/etc/systemd/system/badvpn-udpgw.service"
 log_info "Criando ou atualizando o serviço systemd para o BadVPN..."
-# Atualiza o caminho do executável para /usr/local/bin/
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=BadVPN UDP Gateway
@@ -122,7 +116,7 @@ systemctl enable badvpn-udpgw > /dev/null 2>&1
 log_info "Serviço badvpn-udpgw criado e habilitado para iniciar no boot."
 
 # ==============================================================================
-# 2. Lógica de Reconfiguração da Porta
+# 2. Lógica de Reconfiguração da Porta e Inicialização
 # ==============================================================================
 
 # Se um argumento de porta ($1) for passado, reconfigure e reinicie o serviço.
