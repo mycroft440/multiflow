@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Script para instalar e configurar o BadVPN, com tratamento de erros aprimorado.
 
 # --- Configurações de Segurança e Cores ---
-set -e # Encerra o script imediatamente se um comando falhar
-set -o pipefail # Garante que falhas em pipelines sejam capturadas
+set -Eeuo pipefail  # Fail-fast: erro em comandos, pipelines, variáveis não definidas; herda ERR em funções
+set -o errtrace     # Herda traps em subshells e funções
 
 RED="\033[0;31m"
 GREEN="\033[0;32m"
@@ -17,23 +17,25 @@ function log_info() {
 }
 
 function log_error() {
-    echo -e "${RED}[ERRO]${NC} $1"
+    echo -e "${RED}[ERRO]${NC} $1" >&2
 }
 
 # --- Tratamento de Erros ---
-# Esta função será chamada sempre que um comando falhar (devido ao \'set -e\')
-function handle_error() {
+# Função chamada no evento ERR: captura código, comando, fonte e linha
+function _on_err() {
     local exit_code=$?
-    local line_no=$1
-    log_error "Ocorreu um erro na linha $line_no com o código de saída $exit_code."
+    local cmd="${BASH_COMMAND}"
+    local src="${BASH_SOURCE[1]:-$0}"
+    local line="${BASH_LINENO[0]:-$LINENO}"
+    log_error "Erro ($exit_code) em $src:$line => Comando: '$cmd'"
     log_error "A instalação falhou. Removendo diretório temporário..."
-    # Garante que a variável TMP_DIR existe antes de tentar remover o diretório
-    [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
-    exit $exit_code
+    # Garante que TMP_DIR existe antes de remover (evita erro unbound)
+    [ -n "${TMP_DIR:-}" ] && [ -d "${TMP_DIR:-}" ] && rm -rf "$TMP_DIR" || true
+    exit "$exit_code"
 }
 
-# Registra a função handle_error para ser executada no evento de erro (ERR)
-trap handle_error $LINENO ERR
+# Registra o trap com aspas simples para evitar expansão prematura
+trap '_on_err' ERR
 
 # --- Verificação de Root ---
 if [[ $EUID -ne 0 ]]; then
@@ -64,8 +66,8 @@ log_info "Criando diretório de build..."
 mkdir -p build
 cd build
 
-log_info "Configurando o ambiente de compilação com CMake..."
-cmake ..
+log_info "Configurando o ambiente de compilação com CMake (somente udpgw)..."
+cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
 
 log_info "Compilando o BadVPN com 'make'..."
 make
@@ -76,7 +78,7 @@ if [[ -f "udpgw/badvpn-udpgw" ]]; then
     chmod +x /usr/local/bin/badvpn-udpgw
     log_info "badvpn-udpgw compilado e instalado com sucesso em /usr/local/bin/badvpn-udpgw"
 else
-    log_error "O binário \'badvpn-udpgw\' não foi encontrado. A compilação falhou."
+    log_error "O binário 'badvpn-udpgw' não foi encontrado. A compilação falhou."
     exit 1
 fi
 
@@ -88,8 +90,8 @@ cd / # Retorna para um diretório seguro
 # Aplicar ajustes no kernel Linux (sysctl)
 log_info "Aplicando otimizações no kernel Linux (sysctl) para UDP..."
 SYSCTL_CONFIG="/etc/sysctl.conf"
-if ! grep -q "net.core.rmem_max" "$SYSCTL_CONFIG"; then
-    echo -e "\\n# Otimizações para BadVPN UDP" >> "$SYSCTL_CONFIG"
+if ! grep -q "net.core.rmem_max" "$SYSCTL_CONFIG" || true; then  # Evita disparar ERR se grep falhar (saída 1 esperada)
+    echo -e "\n# Otimizações para BadVPN UDP" >> "$SYSCTL_CONFIG"
     echo "net.core.rmem_max = 4194304" >> "$SYSCTL_CONFIG"
     echo "net.core.wmem_max = 4194304" >> "$SYSCTL_CONFIG"
     echo "net.ipv4.udp_mem = 1048576 4194304 8388608" >> "$SYSCTL_CONFIG"
@@ -104,11 +106,14 @@ log_info "Criando ou atualizando o serviço systemd para o BadVPN..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=BadVPN UDP Gateway
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 10000 --max-connections-for-client-ip 8 --client-socket-sndbuf 1048576
+Type=simple
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 10000 --client-socket-sndbuf 1048576
 Restart=always
+RestartSec=2
 User=root
 
 [Install]
@@ -133,7 +138,8 @@ if [ ! -z "$1" ]; then
     fi
     
     log_info "Reconfigurando a porta do BadVPN para $NEW_PORT..."
-    sed -i "s/--listen-addr 127.0.0.1:[0-9]*/--listen-addr 127.0.0.1:$NEW_PORT/g" "$SERVICE_FILE"
+    # Sed melhorado: usa ERE, escapa pontos e limita a porta (2-5 dígitos)
+    sed -E -i "s/--listen-addr 127\.0\.0\.1:[0-9]{2,5}/--listen-addr 127.0.0.1:$NEW_PORT/g" "$SERVICE_FILE"
     systemctl daemon-reload
     systemctl restart badvpn-udpgw
     log_info "Porta do BadVPN alterada para $NEW_PORT e serviço reiniciado."
@@ -150,3 +156,9 @@ if systemctl is-active --quiet badvpn-udpgw; then
 else
     log_error "O serviço BadVPN falhou ao iniciar. Verifique os logs com: journalctl -u badvpn-udpgw.service -l"
 fi
+
+# --- Checklist de Validação (como comentário para depuração) ---
+# - Verifique trap com: bash -x script.sh (para traçar comandos)
+# - Teste falha intencional: adicione 'false' em algum lugar e veja o handler
+# - Valide sed: echo o SERVICE_FILE antes/depois da substituição
+# - Systemd: systemctl cat badvpn-udpgw.service para inspecionar
