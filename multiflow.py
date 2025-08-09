@@ -12,6 +12,8 @@ import json
 import shutil
 from datetime import datetime
 import random
+import termios
+import tty
 
 # Importando os módulos necessários no início
 try:
@@ -27,6 +29,61 @@ except ImportError as e:
 
 from menus.menu_style_utils import Colors, BoxChars, visible_length, clear_screen, print_colored_box, print_menu_option
 
+# ==================== FUNÇÕES DE LIMPEZA DE TELA APRIMORADAS ====================
+def force_clear_screen():
+    """Limpa completamente a tela do terminal com múltiplos métodos."""
+    # Método 1: Usar o comando do sistema operacional
+    if os.name == 'nt':  # Windows
+        os.system('cls')
+    else:  # Unix/Linux/Mac
+        os.system('clear')
+    
+    # Método 2: Códigos ANSI para limpar e resetar
+    print('\033[2J\033[H', end='')  # Clear screen and move cursor to home
+    print('\033[3J', end='')        # Clear scrollback buffer
+    print('\033c', end='')          # Reset terminal
+    print('\033[0m', end='')        # Reset all attributes
+    
+    # Método 3: Flush do buffer
+    sys.stdout.flush()
+    
+    # Pequena pausa para garantir que a limpeza seja processada
+    time.sleep(0.01)
+
+def reset_terminal():
+    """Reseta completamente o estado do terminal."""
+    # Reset usando tput se disponível
+    try:
+        subprocess.run(['tput', 'reset'], capture_output=True, timeout=0.5)
+    except:
+        pass
+    
+    # Reset códigos ANSI
+    print('\033c', end='')
+    print('\033[0m', end='')
+    print('\033[?25h', end='')  # Mostra o cursor
+    print('\033[?1049l', end='') # Sai do buffer alternativo
+    sys.stdout.flush()
+
+def clear_with_buffer():
+    """Limpa a tela e gerencia o buffer do terminal."""
+    # Salva a posição do cursor
+    print('\033[s', end='')
+    
+    # Limpa toda a tela e scrollback
+    print('\033[2J', end='')
+    print('\033[3J', end='')
+    print('\033[H', end='')
+    
+    # Limpa linha por linha (garante limpeza completa)
+    for _ in range(100):  # Limpa 100 linhas
+        print('\033[2K', end='')  # Limpa linha atual
+        print('\033[1A', end='')  # Move uma linha acima
+    
+    # Volta ao topo
+    print('\033[H', end='')
+    sys.stdout.flush()
+
 # ==================== CORES E ESTILOS MODERNOS ====================
 class ModernColors:
     # Reset e modificadores
@@ -37,6 +94,8 @@ class ModernColors:
     UNDERLINE = '\033[4m'
     BLINK = '\033[5m'
     REVERSE = '\033[7m'
+    HIDDEN = '\033[8m'
+    STRIKETHROUGH = '\033[9m'
     
     # Cores principais com gradientes RGB
     PURPLE_GRADIENT = '\033[38;2;147;51;234m'  # Purple-600
@@ -85,10 +144,7 @@ class ModernColors:
     BG_SUCCESS = '\033[48;2;34;197;94m'        # Background sucesso
     BG_ERROR = '\033[48;2;239;68;68m'          # Background erro
     BG_WARNING = '\033[48;2;250;204;21m'       # Background aviso
-    
-    # Efeitos especiais
-    GLOW = '\033[38;2;255;255;255;5m'
-    SHADOW = '\033[38;2;0;0;0;2m'
+    BG_CLEAR = '\033[49m'                      # Clear background
 
 MC = ModernColors()
 
@@ -193,7 +249,7 @@ def print_gradient_line(width=80, char='═', colors=[MC.PURPLE_GRADIENT, MC.CYA
 
 def print_modern_header():
     """Exibe um cabeçalho moderno com arte ASCII e efeitos."""
-    clear_screen()
+    # Não limpa a tela aqui, pois já foi limpa antes
     
     # Linha superior com gradiente
     print_gradient_line(76)
@@ -424,6 +480,8 @@ def print_footer():
 def check_root():
     """Verifica se o script está sendo executado como root."""
     if os.geteuid() != 0:
+        force_clear_screen()
+        print_modern_header()
         print_modern_box("AVISO DE SEGURANÇA", [
             f"{MC.RED_GRADIENT}{Icons.WARNING} Este script precisa ser executado como root!{MC.RESET}",
             f"{MC.YELLOW_GRADIENT}Algumas operações podem falhar sem privilégios adequados.{MC.RESET}"
@@ -462,13 +520,13 @@ def get_system_info():
 # ==================== MENUS (mantidos do código original com visual melhorado) ====================
 def ssh_users_main_menu():
     """Redireciona para o menu de gerenciamento de usuários SSH."""
-    clear_screen()
+    force_clear_screen()
     manusear_usuarios.main()
 
 def conexoes_menu():
     """Menu para gerenciar conexões."""
     while True:
-        clear_screen()
+        force_clear_screen()
         print_modern_header()
         show_combined_system_panel()
         
@@ -486,7 +544,7 @@ def conexoes_menu():
         choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}╰─➤ Escolha uma opção: {MC.RESET}")
         
         if choice == "1":
-            clear_screen()
+            force_clear_screen()
             try:
                 script_real_path = os.path.realpath(__file__)
                 script_dir = os.path.dirname(script_real_path)
@@ -514,7 +572,7 @@ def conexoes_menu():
 
 def otimizadorvps_menu():
     """Redireciona para o script otimizadorvps.py."""
-    clear_screen()
+    force_clear_screen()
     try:
         script_real_path = os.path.realpath(__file__)
         script_dir = os.path.dirname(script_real_path)
@@ -527,7 +585,7 @@ def otimizadorvps_menu():
 def ferramentas_menu():
     """Menu para acessar as ferramentas de otimização."""
     while True:
-        clear_screen()
+        force_clear_screen()
         print_modern_header()
         show_combined_system_panel()
         
@@ -556,7 +614,7 @@ def ferramentas_menu():
 
 def atualizar_multiflow():
     """Executa o script de atualização em Python e encerra o programa."""
-    clear_screen()
+    force_clear_screen()
     print_modern_header()
     
     print()
@@ -589,6 +647,7 @@ def atualizar_multiflow():
             print(f"\n{MC.GREEN_GRADIENT}{Icons.CHECK} O programa foi atualizado com sucesso!{MC.RESET}")
             print(f"{MC.YELLOW_GRADIENT}{Icons.INFO} Encerrando agora. Por favor, inicie novamente com 'multiflow'.{MC.RESET}")
             time.sleep(3)
+            force_clear_screen()
             sys.exit(0)
 
         except subprocess.CalledProcessError:
@@ -607,13 +666,16 @@ def main_menu():
     check_root()
     
     # Animação inicial (opcional)
-    clear_screen()
+    force_clear_screen()
     print_modern_header()
     Animations.loading_animation(1, "Inicializando sistema")
     
     while True:
         try:
-            clear_screen()
+            # Limpa completamente a tela antes de redesenhar
+            force_clear_screen()
+            
+            # Redesenha toda a interface
             print_modern_header()
             show_combined_system_panel()
             show_welcome_message()
@@ -640,17 +702,21 @@ def main_menu():
             elif choice == "2":
                 conexoes_menu()
             elif choice == "3":
+                force_clear_screen()
                 menu_badvpn.main_menu()
             elif choice == "4":
                 ferramentas_menu()
             elif choice == "5":
                 atualizar_multiflow()
             elif choice == "6":
+                force_clear_screen()
                 menu_servidor_download.main()
             elif choice == "0":
+                force_clear_screen()
                 print(f"\n{MC.GREEN_GRADIENT}{Icons.CHECK} Encerrando o MultiFlow...{MC.RESET}")
                 Animations.loading_animation(1, "Finalizando")
                 print(f"{MC.CYAN_GRADIENT}Obrigado por usar o MultiFlow! Até logo!{MC.RESET}\n")
+                force_clear_screen()
                 break
             else:
                 print(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Opção inválida! Tente novamente.{MC.RESET}")
@@ -660,14 +726,21 @@ def main_menu():
             print(f"\n\n{MC.YELLOW_GRADIENT}{Icons.WARNING} Operação interrompida pelo usuário.{MC.RESET}")
             confirm = input(f"{MC.BOLD}Deseja realmente sair? (s/n): {MC.RESET}")
             if confirm.lower() == 's':
+                force_clear_screen()
                 print(f"\n{MC.GREEN_GRADIENT}Saindo do MultiFlow...{MC.RESET}\n")
                 break
 
 # ==================== EXECUÇÃO PRINCIPAL ====================
 if __name__ == "__main__":
     try:
+        # Reset inicial do terminal
+        reset_terminal()
         main_menu()
+        # Reset final do terminal
+        reset_terminal()
     except Exception as e:
+        force_clear_screen()
         print(f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro crítico: {e}{MC.RESET}")
         print(f"{MC.YELLOW_GRADIENT}Por favor, reporte este erro aos desenvolvedores.{MC.RESET}\n")
+        reset_terminal()
         sys.exit(1)
