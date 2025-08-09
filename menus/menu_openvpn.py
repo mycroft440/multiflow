@@ -1,54 +1,90 @@
-import os
-import subprocess
-from menus.menu_style_utils import print_header, clear_screen
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# --- Funções de Verificação e Auxiliares ---
+import os
+import sys
+import subprocess
+
+# Garante que o diretório pai (raiz do projeto) esteja no sys.path quando executado isolado
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from menus.menu_style_utils import Colors, BoxChars, print_colored_box, print_menu_option, clear_screen
+except ImportError as e:
+    print(f"Erro: não foi possível importar utilitários de estilo: {e}")
+    sys.exit(1)
+
+COLORS = Colors()
 
 def verificar_openvpn_instalado():
-    """Verifica se o OpenVPN está instalado procurando pelo arquivo de configuração."""
-    return os.path.exists('/etc/openvpn/server.conf')
+    """
+    Verifica se o OpenVPN está instalado.
+    Considera as localizações mais comuns usadas pelo script do Angristan:
+    - /etc/openvpn/server/server.conf
+    - /etc/openvpn/server.conf (legacy)
+    E também verifica o serviço systemd openvpn-server@server.
+    """
+    try:
+        if os.path.exists('/etc/openvpn/server/server.conf'):
+            return True
+        if os.path.exists('/etc/openvpn/server.conf'):
+            return True
+        r = subprocess.run(
+            ["systemctl", "is-active", "openvpn-server@server"],
+            capture_output=True, text=True, check=False
+        )
+        if r.returncode == 0 and r.stdout.strip() == "active":
+            return True
+    except Exception:
+        pass
+    return False
 
 def obter_caminho_script_instalacao():
-    """Encontra o script de instalação do OpenVPN para garantir a execução."""
-    # O script principal (multiflow.py) define o diretório de trabalho,
-    # então um caminho relativo deve funcionar.
-    caminho_relativo = "conexoes/openvpn.sh"
-    if os.path.exists(caminho_relativo):
-        return caminho_relativo
-    # Fallback para um caminho absoluto se o script for chamado de um local inesperado
-    caminho_absoluto = "/opt/multiflow/conexoes/openvpn.sh"
-    if os.path.exists(caminho_absoluto):
-        return caminho_absoluto
+    """
+    Resolve o caminho do script conexoes/openvpn.sh, primeiro relativo à raiz do projeto,
+    depois cai no caminho padrão de instalação (/opt/multiflow/conexoes/openvpn.sh).
+    """
+    # Caminho relativo à estrutura do projeto
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rel_path = os.path.join(root_dir, "conexoes", "openvpn.sh")
+    if os.path.exists(rel_path):
+        return rel_path
+
+    # Caminho padrão de instalação
+    abs_path = "/opt/multiflow/conexoes/openvpn.sh"
+    if os.path.exists(abs_path):
+        return abs_path
+
     return None
 
 def executar_script_instalacao():
-    """Executa o script de instalação/gerenciamento do OpenVPN."""
+    """
+    Executa o script de instalação/gerenciamento do OpenVPN (openvpn.sh).
+    Esse script já é não-interativo para instalação inicial e delega ao script do Angristan.
+    """
     script_path = obter_caminho_script_instalacao()
     if not script_path:
-        print("\n[ERRO] Script 'openvpn.sh' não encontrado.")
+        print(f"\n{COLORS.RED}Script 'openvpn.sh' não encontrado em conexoes/.{COLORS.END}")
         input("Pressione Enter para continuar...")
         return
 
-    # O script 'openvpn.sh' já está configurado para uma instalação automática.
-    # Quando executado novamente, o script original do angristan (que é chamado por dentro)
-    # lida com a adição, remoção e desinstalação de forma interativa, que é o desejado.
     try:
-        # Garante que o script seja executável
+        # Garante permissão de execução e executa com bash
         subprocess.run(['chmod', '+x', script_path], check=True)
-        # Executa o script
         subprocess.run(['bash', script_path], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"\n[ERRO] Ocorreu um erro ao executar o script: {e}")
+        print(f"\n{COLORS.RED}Ocorreu um erro ao executar '{script_path}':{COLORS.END}\n{e}")
         input("Pressione Enter para continuar...")
     except FileNotFoundError:
-        print(f"\n[ERRO] O comando 'bash' não foi encontrado. Verifique se ele está instalado.")
+        print(f"\n{COLORS.RED}O comando 'bash' não foi encontrado.{COLORS.END}")
         input("Pressione Enter para continuar...")
 
 def listar_clientes_ovpn():
-    """Lista os arquivos de configuração de cliente (.ovpn) encontrados no diretório /root."""
+    """
+    Lista arquivos .ovpn do diretório /root.
+    """
     clear_screen()
-    print_header()
-    print("--- Clientes OpenVPN (.ovpn) Encontrados em /root/ ---")
+    print_colored_box("CLIENTES OPENVPN (.ovpn) EM /root")
     try:
         files = os.listdir('/root')
         ovpn_files = [f for f in files if f.endswith('.ovpn')]
@@ -56,80 +92,85 @@ def listar_clientes_ovpn():
         if not ovpn_files:
             print("\nNenhum arquivo de cliente (.ovpn) encontrado no diretório /root.")
         else:
-            print("\nOs seguintes arquivos de configuração foram encontrados:")
+            print("\nArquivos de configuração de clientes encontrados:")
             for filename in ovpn_files:
                 print(f"  - /root/{filename}")
-            print("\nUse um cliente SFTP (como FileZilla ou Termius) para baixar esses arquivos.")
-
-    except FileNotFoundError:
-        print("\n[AVISO] O diretório /root não foi encontrado ou não pôde ser acessado.")
+            print("\nDica: use SFTP (FileZilla/Termius) para baixar os arquivos.")
     except Exception as e:
-        print(f"\n[ERRO] Ocorreu um erro ao listar os arquivos: {e}")
+        print(f"\n{COLORS.RED}Erro ao listar /root: {e}{COLORS.END}")
 
     input("\nPressione Enter para voltar ao menu...")
 
-# --- Funções do Menu ---
-
 def menu_instalado():
-    """Exibe o menu de gerenciamento quando o OpenVPN está instalado."""
+    """
+    Menu quando OpenVPN está instalado: delega as operações ao openvpn.sh.
+    """
     while True:
         clear_screen()
-        print_header()
-        print("--- Gerenciar OpenVPN (Instalado) ---")
-        print("\n1. Adicionar um novo cliente")
-        print("2. Remover um cliente existente")
-        print("3. Listar arquivos de cliente (.ovpn)")
-        print("4. Desinstalar o OpenVPN")
-        print("5. Voltar ao menu principal")
+        print_colored_box("GERENCIAR OPENVPN (INSTALADO)")
+        print_menu_option("1", "Adicionar um novo cliente", color=COLORS.CYAN)
+        print_menu_option("2", "Remover um cliente existente", color=COLORS.CYAN)
+        print_menu_option("3", "Listar arquivos de cliente (.ovpn)", color=COLORS.CYAN)
+        print_menu_option("4", "Desinstalar o OpenVPN", color=COLORS.RED)
+        print_menu_option("0", "Voltar ao menu principal", color=COLORS.YELLOW)
+        print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
 
-        escolha = input("\nEscolha uma opção: ")
+        escolha = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}").strip()
 
-        if escolha == '1' or escolha == '2' or escolha == '4':
+        if escolha in ('1', '2', '4'):
             clear_screen()
-            print_header()
-            print("Iniciando o assistente do OpenVPN...")
-            print("Siga as instruções na tela.")
+            print_colored_box("ASSISTENTE DO OPENVPN", ["Siga as instruções exibidas pelo script..."])
             executar_script_instalacao()
             input("\nAssistente finalizado. Pressione Enter para voltar ao menu.")
         elif escolha == '3':
             listar_clientes_ovpn()
-        elif escolha == '5':
+        elif escolha == '0':
             break
         else:
-            print("Opção inválida. Tente novamente.")
-            input("Pressione Enter para continuar...")
+            print(f"\n{COLORS.RED}Opção inválida. Tente novamente.{COLORS.END}")
+            input("\nPressione Enter para continuar...")
 
 def menu_nao_instalado():
-    """Exibe o menu quando o OpenVPN não está instalado."""
+    """
+    Menu quando OpenVPN não está instalado: oferta instalação automática.
+    """
     clear_screen()
-    print_header()
-    print("--- Gerenciar OpenVPN (Não Instalado) ---")
-    print("\nO OpenVPN não parece estar instalado.")
-    print("\nA instalação será totalmente automática com as seguintes configurações:")
-    print("  - Protocolo: TCP")
-    print("  - DNS: O mesmo da VPS")
-    print("  - Primeiro Cliente: 'cliente1' (salvo em /root/cliente1.ovpn)")
+    lines = [
+        "O OpenVPN não parece estar instalado.",
+        "",
+        "A instalação será automática com os padrões:",
+        " - Protocolo: TCP",
+        " - DNS: o mesmo da VPS",
+        " - Primeiro cliente: 'cliente1' salvo em /root/cliente1.ovpn",
+    ]
+    print_colored_box("GERENCIAR OPENVPN (NÃO INSTALADO)", lines)
 
-    escolha = input("\nDeseja instalar o OpenVPN agora? (s/n): ").lower()
-
+    escolha = input(f"\n{COLORS.BOLD}Deseja instalar agora? (s/n): {COLORS.END}").strip().lower()
     if escolha == 's':
         clear_screen()
-        print_header()
-        print("Iniciando a instalação automática do OpenVPN...")
-        print("Por favor, aguarde, este processo pode levar alguns minutos.")
+        print_colored_box("INSTALAÇÃO DO OPENVPN", ["Instalação em andamento... Aguarde alguns minutos."])
         executar_script_instalacao()
-        print("\nVerificação pós-instalação...")
+
+        print("\nVerificando instalação...")
         if verificar_openvpn_instalado():
-             print("\n[SUCESSO] OpenVPN instalado com sucesso!")
+            print(f"\n{COLORS.GREEN}✓ OpenVPN instalado com sucesso!{COLORS.END}")
         else:
-             print("\n[FALHA] A instalação parece não ter sido concluída. Verifique os logs.")
-        input("Pressione Enter para continuar...")
+            print(f"\n{COLORS.RED}✗ A instalação não parece ter concluído. Verifique os logs.{COLORS.END}")
+        input("\nPressione Enter para continuar...")
 
-# --- Função Principal de Gerenciamento ---
+def main_menu():
+    """
+    Entrada principal do menu de OpenVPN (usada por multiflow.py).
+    """
+    if os.geteuid() != 0:
+        print(f"{COLORS.RED}Este menu precisa ser executado como root.{COLORS.END}")
+        input("Pressione Enter para voltar...")
+        return
 
-def gerenciar_openvpn():
-    """Função principal que direciona para o menu apropriado."""
     if verificar_openvpn_instalado():
         menu_instalado()
     else:
         menu_nao_instalado()
+
+if __name__ == "__main__":
+    main_menu()
