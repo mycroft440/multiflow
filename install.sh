@@ -143,34 +143,26 @@ find "$INSTALL_DIR" -type f -name "*.py" -print0 | while IFS= read -r -d $'\0' s
 done
 find "$INSTALL_DIR" -type f -name "*.sh" -exec $SUDO chmod +x {} +
 
-# 8. Instalação de Ferramentas de Otimização (ZRAM e SWAP) - AGORA INTERATIVO
-log_info "Configuração das ferramentas de otimização..."
-if [ -t 0 ]; then
-    read -p "Deseja configurar ZRAM e SWAP para otimizar o uso de memória? (s/n): " -n 1 -r; echo
-    if [[ $REPLY =~ ^[Ss]$ ]]; then
-        # Instalação do ZRAM
-        ZRAM_SCRIPT="$INSTALL_DIR/ferramentas/zram.py"
-        if [ -f "$ZRAM_SCRIPT" ]; then
-            log_info "A instalar o gestor ZRAM..."
-            $SUDO python3 "$ZRAM_SCRIPT" install "$ZRAM_SCRIPT" || log_warn "Não foi possível instalar o serviço ZRAM."
-            $SUDO python3 "$ZRAM_SCRIPT" setup || log_warn "Não foi possível ativar o ZRAM."
-        else
-            log_warn "Script do ZRAM não encontrado."
-        fi
+# 8. Instalação Automática de Ferramentas de Otimização (ZRAM e SWAP)
+log_info "A configurar automaticamente as ferramentas de otimização..."
 
-        # Instalação do SWAP
-        SWAP_SCRIPT="$INSTALL_DIR/ferramentas/swap.py"
-        if [ -f "$SWAP_SCRIPT" ]; then
-            log_info "A configurar ficheiro de SWAP..."
-            $SUDO python3 "$SWAP_SCRIPT" setup || log_warn "Não foi possível configurar o SWAP."
-        else
-            log_warn "Script de SWAP não encontrado."
-        fi
-    else
-        log_info "Instalação das ferramentas de otimização ignorada."
-    fi
+# Instalação do ZRAM
+ZRAM_SCRIPT="$INSTALL_DIR/ferramentas/zram.py"
+if [ -f "$ZRAM_SCRIPT" ]; then
+    log_info "A instalar o gestor ZRAM..."
+    $SUDO python3 "$ZRAM_SCRIPT" install "$ZRAM_SCRIPT" || log_warn "Não foi possível instalar o serviço ZRAM."
+    $SUDO python3 "$ZRAM_SCRIPT" setup || log_warn "Não foi possível ativar o ZRAM."
 else
-    log_warn "A executar em modo não interativo. Ferramentas de otimização não serão instaladas."
+    log_warn "Script do ZRAM não encontrado."
+fi
+
+# Instalação do SWAP
+SWAP_SCRIPT="$INSTALL_DIR/ferramentas/swap.py"
+if [ -f "$SWAP_SCRIPT" ]; then
+    log_info "A configurar ficheiro de SWAP..."
+    $SUDO python3 "$SWAP_SCRIPT" setup || log_warn "Não foi possível configurar o SWAP."
+else
+    log_warn "Script de SWAP não encontrado."
 fi
 
 # 9. Criação de Links Simbólicos
