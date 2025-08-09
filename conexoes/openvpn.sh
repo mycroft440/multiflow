@@ -106,22 +106,70 @@ check_tun() {
     [[ ! -e /dev/net/tun ]] && die "O dispositivo TUN/TAP não está disponível."
 }
 
-add_openvpn_repo() {
-    echo "Adicionando repositório oficial da OpenVPN..."
-    
-    apt-get update -qq
-    apt-get install -y -qq curl gnupg lsb-release || die "Falha ao instalar ferramentas."
+check_dependencies() {
+    local missing=()
+    local packages=("openvpn" "easy-rsa" "iptables" "lsof")
+    local checks=("command -v openvpn" "[ -d /usr/share/easy-rsa ] || [ -d /usr/lib/easy-rsa ] || [ -d /usr/lib64/easy-rsa ]" "command -v iptables" "command -v lsof")
 
-    curl -fsSL https://packages.openvpn.net/packages-repo.gpg | gpg --dearmor -o /usr/share/keyrings/openvpn-archive-keyring.gpg
+    if [[ "$OS" == "debian" ]]; then
+        packages+=("iptables-persistent")
+        checks+=("command -v iptables-save")
+    fi
 
-    local codename
-    codename="$(lsb_release -sc)"
-    
-    echo "deb [signed-by=/usr/share/keyrings/openvpn-archive-keyring.gpg] https://packages.openvpn.net/openvpn2/debian ${codename} main" | tee /etc/apt/sources.list.d/openvpn-packages.list
+    for i in "${!packages[@]}"; do
+        if ! eval "${checks[$i]}"; then
+            missing+=("${packages[$i]}")
+        fi
+    done
 
-    apt-get update -qq
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${YELLOW}Dependências em falta: ${missing[*]}${SCOLOR}"
+        echo -ne "${WHITE}Deseja instalá-las automaticamente? [s/N]: ${SCOLOR}"
+        read -r install_choice
+        if [[ "$install_choice" =~ ^[sS]$ ]]; then
+            echo -e "${CYAN}Instalando dependências...${SCOLOR}"
+            fun_bar "apt update -qq && apt install -y -qq ${missing[*]}"
+            check_remaining_dependencies "${packages[@]}" "${checks[@]}"
+        else
+            die "Instalação das dependências é necessária."
+        fi
+    else
+        echo -e "${GREEN}✓ Todas as dependências estão presentes.${SCOLOR}"
+    fi
+
+    local ovpn_version
+    ovpn_version=$(openvpn --version | head -1 | awk '{print $2}')
+    [[ "$ovpn_version" < "2.5" ]] && warn "Versão do OpenVPN ($ovpn_version) é antiga. Recomendo atualizar."
 }
 
+check_remaining_dependencies() {
+    local packages=("$@")
+    local checks=("${!#}")
+    local still_missing=()
+    
+    for i in "${!packages[@]}"; do
+        if ! eval "${checks[$i]}"; then
+            still_missing+=("${packages[$i]}")
+        fi
+    done
+
+    [[ ${#still_missing[@]} -gt 0 ]] && die "Falha ao instalar: ${still_missing[*]}."
+    success "Dependências instaladas com sucesso!"
+}
+
+# --- Detecção de Sistema Operacional ---
+detect_os() {
+    [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
+    source /etc/os-release
+    OS_ID="$ID"
+    case "$OS_ID" in
+        ubuntu|debian) OS="debian"; GROUPNAME="nogroup" ;;
+        centos|fedora|rhel) OS="centos"; GROUPNAME="nobody" ;;
+        *) die "Sistema operacional '$OS_ID' não suportado." ;;
+    esac
+}
+
+# --- Funções de Configuração do OpenVPN ---
 install_openvpn() {
     print_header
     echo -e "${BOLD}${CYAN}              🚀 INSTALAÇÃO DO OPENVPN 🚀${SCOLOR}"
@@ -137,14 +185,32 @@ install_openvpn() {
     echo
     loading_animation "Preparando instalação"
 
-    add_openvpn_repo
+    local EASY_RSA_DIR="/etc/openvpn/easy-rsa"
+    mkdir -p "$EASY_RSA_DIR" || die "Falha ao criar diretório $EASY_RSA_DIR."
+    cp -r /usr/share/easy-rsa/* "$EASY_RSA_DIR/" 2>/dev/null || cp -r /usr/lib/easy-rsa/* "$EASY_RSA_DIR/" 2>/dev/null || cp -r /usr/lib64/easy-rsa/* "$EASY_RSA_DIR/" 2>/dev/null || die "EasyRSA não encontrado."
+    chmod +x "$EASY_RSA_DIR/easyrsa" || die "Falha ao ajustar permissões do EasyRSA."
+    cd "$EASY_RSA_DIR" || die "Não foi possível acessar $EASY_RSA_DIR."
+    
+    echo
+    info "Configurando infraestrutura de chaves (PKI)..."
+    ./easyrsa init-pki || die "Falha ao inicializar PKI."
+    
+    info "Criando Autoridade Certificadora (CA)..."
+    echo "Easy-RSA CA" | ./easyrsa build-ca nopass || die "Falha ao criar CA."
+    
+    info "Gerando certificado do servidor..."
+    echo "yes" | ./easyrsa build-server-full server nopass || die "Falha ao criar certificado do servidor."
+    
+    info "Gerando parâmetros Diffie-Hellman (pode demorar)..."
+    ./easyrsa gen-dh || die "Falha ao gerar DH."
+    
+    info "Gerando chave de autenticação TLS..."
+    openvpn --genkey secret pki/ta.key || die "Falha ao gerar chave TA."
 
-    echo -e "${CYAN}Instalando OpenVPN...${SCOLOR}"
-    fun_bar "apt-get install -y openvpn easy-rsa iptables lsof"
-
-    local ovpn_version
-    ovpn_version=$(openvpn --version | head -1 | awk '{print $2}')
-    echo -e "${GREEN}✓ OpenVPN instalado: ${BOLD}${ovpn_version}${SCOLOR}"
+    info "Copiando arquivos de configuração..."
+    cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem pki/ta.key /etc/openvpn/ || die "Falha ao copiar arquivos."
+    chown root:root /etc/openvpn/*.{key,crt,pem} || die "Falha ao ajustar propriedade."
+    chmod 600 /etc/openvpn/*.{key,crt,pem} || die "Falha ao ajustar permissões."
 
     configure_server
     configure_firewall
@@ -212,7 +278,7 @@ configure_server() {
     echo -e "${GREEN}   ✓${SCOLOR} DNS selecionado: ${BOLD}$DNS_NAME${SCOLOR}"
 
     mkdir -p /var/log/openvpn || die "Falha ao criar diretório de logs."
-    chown nobody:"nogroup" /var/log/openvpn || die "Falha ao ajustar permissões de logs."
+    chown nobody:"$GROUPNAME" /var/log/openvpn || die "Falha ao ajustar permissões de logs."
     
     loading_animation "Gerando configuração do servidor"
     
@@ -238,7 +304,7 @@ cipher AES-256-GCM
 ncp-ciphers AES-256-GCM:AES-128-GCM
 tls-version-min 1.2
 user nobody
-group nogroup
+group $GROUPNAME
 persist-key
 persist-tun
 status /var/log/openvpn/openvpn-status.log
@@ -262,24 +328,35 @@ configure_firewall() {
     sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
     sysctl -p >/dev/null || die "Falha ao ativar encaminhamento de IP."
 
-    local IFACE
-    IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-    [[ -z "$IFACE" ]] && die "Não foi possível determinar a interface de rede."
-    iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE
-    iptables -A INPUT -i tun+ -j ACCEPT
-    iptables -A FORWARD -i tun+ -j ACCEPT
-    iptables -A FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables-save > /etc/iptables/rules.v4 || die "Falha ao salvar regras iptables."
-    netfilter-persistent save || die "Falha ao persistir regras."
-    
+    if [[ "$OS" = "debian" ]]; then
+        local IFACE
+        IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+        [[ -z "$IFACE" ]] && die "Não foi possível determinar a interface de rede."
+        iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE
+        iptables -A INPUT -i tun+ -j ACCEPT
+        iptables -A FORWARD -i tun+ -j ACCEPT
+        iptables -A FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT
+        iptables-save > /etc/iptables/rules.v4 || die "Falha ao salvar regras iptables."
+        netfilter-persistent save || die "Falha ao persistir regras."
+    elif [[ "$OS" = "centos" ]]; then
+        systemctl start firewalld || die "Falha ao iniciar firewalld."
+        systemctl enable firewalld || die "Falha ao habilitar firewalld."
+        firewall-cmd --add-service=openvpn --permanent || die "Falha ao adicionar serviço OpenVPN."
+        firewall-cmd --add-masquerade --permanent || die "Falha ao adicionar masquerade."
+        firewall-cmd --reload || die "Falha ao recarregar firewalld."
+    fi
     success "Firewall configurado!"
 }
 
 start_openvpn_service() {
     echo
     info "Iniciando serviço OpenVPN..."
-    systemctl enable openvpn@server || die "Falha ao habilitar o serviço."
-    systemctl start openvpn@server || die "Falha ao iniciar o serviço."
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable openvpn@server || die "Falha ao habilitar o serviço."
+        systemctl start openvpn@server || die "Falha ao iniciar o serviço."
+    else
+        service openvpn@server start || die "Falha ao iniciar o serviço sem systemd."
+    fi
     success "Serviço OpenVPN iniciado!"
 }
 
@@ -355,6 +432,148 @@ EOF
     print_footer
 }
 
+revoke_client() {
+    print_header
+    echo -e "${BOLD}${CYAN}              🚫 REVOGAR CLIENTE 🚫${SCOLOR}"
+    print_line
+    echo
+    
+    cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado."
+    
+    local clients=()
+    while IFS= read -r file; do
+        clients+=("$(basename "$file" .crt)")
+    done < <(ls -1 pki/issued/*.crt 2>/dev/null | grep -v server.crt)
+
+    if [[ ${#clients[@]} -eq 0 ]]; then
+        echo -e "${YELLOW}⚠️  Nenhum cliente disponível para revogar.${SCOLOR}"
+        echo
+        print_footer
+        echo -ne "${CYAN}Pressione ENTER para voltar...${SCOLOR}"
+        read -r
+        return
+    fi
+
+    echo -e "${WHITE}Selecione o cliente que deseja revogar:${SCOLOR}"
+    echo
+    for i in "${!clients[@]}"; do
+        echo -e "  ${CYAN}[$((i + 1))]${SCOLOR} ${WHITE}${clients[$i]}${SCOLOR}"
+    done
+    echo
+    echo -e "  ${RED}[0]${SCOLOR} ${WHITE}Cancelar${SCOLOR}"
+    echo
+    print_line
+    echo -ne "${WHITE}Digite sua escolha: ${SCOLOR}"
+    read -r choice
+
+    if [[ "$choice" == "0" ]]; then
+        return
+    fi
+    
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#clients[@]} )); then
+        warn "Seleção inválida."
+        sleep 2
+        return
+    fi
+
+    local CLIENT_TO_REVOKE="${clients[$((choice - 1))]}"
+    
+    echo
+    echo -e "${RED}⚠️  ATENÇÃO: Esta ação não pode ser desfeita!${SCOLOR}"
+    echo -ne "${YELLOW}Confirma a revogação de '${WHITE}${CLIENT_TO_REVOKE}${YELLOW}'? [s/N]: ${SCOLOR}"
+    read -r confirmation
+    
+    if [[ "$confirmation" =~ ^[sS]$ ]]; then
+        echo
+        loading_animation "Revogando cliente '$CLIENT_TO_REVOKE'"
+        echo "yes" | ./easyrsa revoke "$CLIENT_TO_REVOKE" || die "Falha ao revogar cliente."
+        ./easyrsa gen-crl || die "Falha ao gerar CRL."
+        cp pki/crl.pem /etc/openvpn/crl.pem || die "Falha ao atualizar CRL."
+        start_openvpn_service
+        rm -f ~/ovpn-clients/"$CLIENT_TO_REVOKE".ovpn
+        
+        echo
+        print_line
+        echo -e "${GREEN}${BOLD}     ✅ CLIENTE REVOGADO COM SUCESSO! ✅${SCOLOR}"
+        print_line
+        echo
+        echo -e "${WHITE}Cliente '${CLIENT_TO_REVOKE}' foi revogado e removido do sistema.${SCOLOR}"
+        echo
+        print_footer
+    else
+        echo
+        warn "Operação cancelada."
+    fi
+    
+    echo -ne "${CYAN}Pressione ENTER para voltar...${SCOLOR}"
+    read -r
+}
+
+uninstall_openvpn() {
+    print_header
+    echo -e "${BOLD}${RED}           ⚠️  DESINSTALAÇÃO DO OPENVPN ⚠️${SCOLOR}"
+    print_line
+    echo
+    echo -e "${YELLOW}Esta ação irá:${SCOLOR}"
+    echo -e "${WHITE}  • Parar o serviço OpenVPN${SCOLOR}"
+    echo -e "${WHITE}  • Remover todos os pacotes relacionados${SCOLOR}"
+    echo -e "${WHITE}  • Apagar todas as configurações${SCOLOR}"
+    echo -e "${WHITE}  • Remover todos os certificados de clientes${SCOLOR}"
+    echo
+    echo -e "${RED}⚠️  ESTA AÇÃO NÃO PODE SER DESFEITA!${SCOLOR}"
+    echo
+    print_line
+    echo -ne "${RED}Digite 'CONFIRMAR' para prosseguir com a desinstalação: ${SCOLOR}"
+    read -r confirmation
+
+    if [[ "$confirmation" == "CONFIRMAR" ]]; then
+        echo
+        loading_animation "Parando serviços"
+        
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop openvpn@server 2>/dev/null
+            systemctl disable openvpn@server 2>/dev/null
+        else
+            service openvpn@server stop 2>/dev/null
+        fi
+
+        loading_animation "Removendo pacotes"
+        
+        if [[ "$OS" = "debian" ]]; then
+            fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y"
+            iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -j MASQUERADE 2>/dev/null
+            iptables -D INPUT -i tun+ -j ACCEPT 2>/dev/null
+            iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null
+            iptables -D FORWARD -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null
+            netfilter-persistent save 2>/dev/null
+        elif [[ "$OS" = "centos" ]]; then
+            fun_bar "yum remove -y openvpn easy-rsa firewalld lsof"
+            firewall-cmd --remove-service=openvpn --permanent 2>/dev/null
+            firewall-cmd --remove-masquerade --permanent 2>/dev/null
+            firewall-cmd --reload 2>/dev/null
+        fi
+
+        loading_animation "Removendo arquivos de configuração"
+        rm -rf /etc/openvpn ~/ovpn-clients
+        
+        echo
+        print_line
+        echo -e "${GREEN}${BOLD}     ✅ OPENVPN REMOVIDO COM SUCESSO! ✅${SCOLOR}"
+        print_line
+        echo
+        print_footer
+    else
+        echo
+        warn "Desinstalação cancelada."
+    fi
+    
+    echo -ne "${CYAN}Pressione ENTER para sair...${SCOLOR}"
+    read -r
+    exit 0
+}
+
+# --- Menu Principal ---
 main_menu() {
     while true; do
         print_header
@@ -486,8 +705,9 @@ main() {
     loading_animation ""
     echo -e "${GREEN}✓${SCOLOR} ${WHITE}Disponível${SCOLOR}"
     
-    echo
-    install_openvpn
+    echo -ne "  ${WHITE}Verificando dependências:${SCOLOR} "
+    loading_animation ""
+    check_dependencies
     
     echo
     print_footer
