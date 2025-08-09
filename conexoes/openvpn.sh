@@ -14,22 +14,13 @@ error_exit() {
     exit 1
 }
 
-# Verifica se o diretório de conexões existe
-if [ ! -d "/root/multiflow/conexoes" ]; then
-    error_exit "Diretório /root/multiflow/conexoes não encontrado."
-fi
-
-cd /root/multiflow/conexoes || error_exit "Não foi possível mudar para o diretório /root/multiflow/conexoes."
+# Determina o diretório do script e muda para ele.
+# Isso torna o script mais robusto e independente do diretório de onde é chamado.
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+cd "$SCRIPT_DIR" || error_exit "Falha ao mudar para o diretório do script: $SCRIPT_DIR"
 
 # URL direta para o script de instalação do OpenVPN
 URL="https://raw.githubusercontent.com/angristan/openvpn-install/master/openvpn-install.sh"
-
-# Verifica se a URL está vazia (verificação de segurança)
-if [ -z "$URL" ]; then
-	echo
-	echo "URL de instalação não definida. Saindo."
-	exit 1
-fi
 
 # Baixa o script de instalação do OpenVPN
 echo "Baixando o script de instalação do OpenVPN..."
