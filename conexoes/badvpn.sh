@@ -47,7 +47,6 @@ fi
 log_info "Iniciando a instalação e configuração do BadVPN..."
 
 # Instalar dependências para compilação e execução
-# ADICIONADO: libnss3-dev para corrigir a falha de compilação final do CMake
 log_info "Instalando dependências (git, cmake, build-essential, screen, pkg-config, libssl-dev, libnspr4-dev, libnss3-dev)..."
 apt-get update -y > /tmp/badvpn_install.log 2>&1
 apt-get install -y git cmake build-essential screen pkg-config libssl-dev libnspr4-dev libnss3-dev >> /tmp/badvpn_install.log 2>&1
@@ -61,7 +60,8 @@ git clone https://github.com/ambrop72/badvpn.git "$TMP_DIR"
 cd "$TMP_DIR"
 
 log_info "Configurando o ambiente de compilação com CMake..."
-cmake .
+# ADICIONADO: Flags para garantir que APENAS o badvpn-udpgw seja compilado.
+cmake . -DBUILD_NOTHING_BY_DEFAULT=1 -DENABLE_UDPGW=1
 
 log_info "Compilando o BadVPN com 'make'..."
 make
