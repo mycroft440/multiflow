@@ -28,9 +28,7 @@ except ImportError as e:
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
     _in_alt = False
-    # Alguns terminais móveis (ex.: Termius) não respeitam bem o alt-screen.
-    # Deixe False se perceber flicker ou comportamento estranho.
-    USE_ALT = True
+    USE_ALT = True  # Deixe False se perceber flicker ou comportamento estranho.
 
     @staticmethod
     def size():
@@ -40,7 +38,6 @@ class TerminalManager:
     @staticmethod
     def enter_alt_screen():
         if TerminalManager.USE_ALT and not TerminalManager._in_alt:
-            # Tenta alt-screen. Se não funcionar, continuaremos com limpeza manual.
             sys.stdout.write("\033[?1049h")
             sys.stdout.flush()
             TerminalManager._in_alt = True
@@ -54,51 +51,30 @@ class TerminalManager:
 
     @staticmethod
     def _manual_clear_all_cells():
-        """
-        Limpa cada célula da tela sem usar newlines (evita scroll e ‘resíduos’).
-        Move o cursor linha a linha com posicionamento absoluto e preenche com espaços.
-        Compatível com Termius/Android, tmux, etc.
-        """
         cols, lines = TerminalManager.size()
         blank_line = " " * cols
-        # Reset de atributos, desabilita wrap temporariamente para evitar artefatos
         sys.stdout.write("\033[0m\033[?7l")
-        # Preenche cada linha com espaços, sem '\n' (usa endereço absoluto)
         for row in range(1, lines + 1):
             sys.stdout.write(f"\033[{row};1H{blank_line}")
-        # Volta para o topo e reabilita wrap
         sys.stdout.write("\033[1;1H\033[?7h")
         sys.stdout.flush()
 
     @staticmethod
     def render(frame_str):
-        """
-        Renderiza um frame completo:
-        - oculta cursor
-        - limpa tela por sobrescrita absoluta (sem dependência de 2J/3J)
-        - posiciona no topo e imprime tudo de uma vez
-        """
-        # Oculta cursor
         sys.stdout.write("\033[?25l")
         sys.stdout.flush()
-
-        # Limpeza manual robusta (evita ‘duplicatas’ no Termius)
         TerminalManager._manual_clear_all_cells()
-
-        # Garante cursor no topo e imprime frame
         sys.stdout.write("\033[1;1H")
         sys.stdout.write(frame_str)
         sys.stdout.flush()
 
     @staticmethod
     def before_input():
-        # Mostra cursor e limpa a linha atual para evitar prompt “fantasma”
         sys.stdout.write("\033[?25h\033[2K\r")
         sys.stdout.flush()
 
     @staticmethod
     def after_input():
-        # Oculta cursor novamente para próximo redraw
         sys.stdout.write("\033[?25l")
         sys.stdout.flush()
 
@@ -174,8 +150,7 @@ class Icons:
     BOX_VERTICAL = "│"
 
 # ==================== HELPERS DE UI (RETORNAM STRING) ====================
-def gradient_line(width=80, char='═',
-                  colors=(MC.PURPLE_GRADIENT, MC.CYAN_GRADIENT, MC.BLUE_GRADIENT)):
+def gradient_line(width=80, char='═', colors=(MC.PURPLE_GRADIENT, MC.CYAN_GRADIENT, MC.BLUE_GRADIENT)):
     seg = max(1, width // len(colors))
     out = []
     used = 0
@@ -273,7 +248,9 @@ def get_system_uptime():
     try:
         with open('/proc/uptime', 'r') as f:
             up = float(f.readline().split()[0])
-        d = int(up // 86400); h = int((up % 86400) // 3600); m = int((up % 3600) // 60)
+        d = int(up // 86400)
+        h = int((up % 86400) // 3600)
+        m = int((up % 3600) // 60)
         if d: return f"{d}d {h}h {m}m"
         if h: return f"{h}h {m}m"
         return f"{m}m"
@@ -457,7 +434,6 @@ def conexoes_menu():
         if choice == "1":
             TerminalManager.leave_alt_screen()
             try:
-                # Chama o novo menu Python em vez do script shell
                 menu_openvpn.main_menu()
             finally:
                 TerminalManager.enter_alt_screen()
@@ -590,7 +566,6 @@ def main_menu():
                 time.sleep(0.4)
                 break
             else:
-                # Pressionar Enter vazio cai aqui e redesenha o frame inteiro
                 status = "Opção inválida. Pressione 1-6 ou 0 para sair."
 
         except KeyboardInterrupt:
@@ -607,4 +582,3 @@ def main_menu():
 # ==================== EXECUÇÃO ====================
 if __name__ == "__main__":
     main_menu()
-�
