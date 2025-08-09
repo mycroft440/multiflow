@@ -4,53 +4,82 @@
 import urllib.request
 import re
 import json
+import sys
 
-def find_latest_openvpn_url():
-    """
-    Encontra a URL do código-fonte da versão estável mais recente do OpenVPN.
-    
-    Tenta primeiro via API do GitHub, que é mais confiável. Se falhar,
-    usa como fallback a página de downloads da comunidade.
-    """
-    # --- Método 1: API do GitHub (Preferencial) ---
-    try:
-        api_url = "https://api.github.com/repos/OpenVPN/openvpn/releases/latest"
-        with urllib.request.urlopen(api_url, timeout=10) as response:
-            data = json.loads(response.read().decode())
-            # Procura pelo arquivo tar.gz nos assets da release
-            for asset in data.get("assets", []):
-                if asset.get("name", "").endswith(".tar.gz"):
-                    return asset.get("browser_download_url")
-    except Exception:
-        # Se a API do GitHub falhar, ignora e tenta o método 2
-        pass
+UA = "OpenVPNVersionFinder/1.1 (+https://openvpn.net/)"
 
-    # --- Método 2: Scraping da Página de Downloads (Fallback) ---
+
+def http_get(url, timeout=12):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="ignore")
+
+
+def parse_versions_from_swupdate(html):
+    # Captura apenas releases estáveis do diretório de releases
+    # Ex.: openvpn-2.6.12.tar.gz
+    pattern = re.compile(r'href="(openvpn-([0-9]+)\.([0-9]+)\.([0-9]+)\.tar\.gz)"')
+    matches = pattern.findall(html)
+    versions = []
+    for fname, major, minor, patch in matches:
+        versions.append((int(major), int(minor), int(patch), fname))
+    return versions
+
+
+def find_latest_from_swupdate():
+    base = "https://swupdate.openvpn.net/community/releases/"
     try:
-        community_url = "https://community.openvpn.net/openvpn/wiki/OpenvpnDownloads"
-        with urllib.request.urlopen(community_url, timeout=10) as response:
-            html_content = response.read().decode('utf-8')
-        
-        # Expressão regular para encontrar links como 'openvpn-2.6.11.tar.gz'
-        # Prioriza versões estáveis (sem 'alpha', 'beta', 'rc')
-        regex = r'href="(https://swupdate\.openvpn\.net/community/releases/openvpn-[\d\.]+\.tar\.gz)"'
-        matches = re.findall(regex, html_content)
-        
-        if matches:
-            # A página pode listar várias versões, a mais recente geralmente está no topo.
-            # A regex já filtra para garantir que seja um link de release da comunidade.
-            return matches[0]
-            
+        html = http_get(base, timeout=12)
+        versions = parse_versions_from_swupdate(html)
+        if not versions:
+            return None
+        # Escolhe a maior versão sem rc/beta/alpha (não aparecem nesse padrão)
+        versions.sort(reverse=True)
+        fname = versions[0][3]
+        return base + fname
     except Exception:
         return None
 
-    return None
+
+def find_latest_from_github():
+    # Tenta via releases do GitHub (estáveis) e usa asset tar.gz se existir,
+    # caso contrário usa o tarball "Source code".
+    try:
+        api_url = "https://api.github.com/repos/OpenVPN/openvpn/releases?per_page=20"
+        data = json.loads(http_get(api_url, timeout=12))
+        # Filtra releases estáveis
+        releases = [r for r in data if not r.get("prerelease", False)]
+        if not releases:
+            return None
+        # Ordena por created_at desc
+        releases.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        for rel in releases:
+            # Procura um asset .tar.gz oficial (raramente presente)
+            for asset in rel.get("assets", []):
+                name = asset.get("name", "")
+                if name.endswith(".tar.gz") and name.startswith("openvpn-"):
+                    return asset.get("browser_download_url")
+            # Fallback: tarball do código-fonte (pode exigir autoreconf na compilação)
+            tag = rel.get("tag_name", "").lstrip("v")
+            if re.match(r"^\d+\.\d+\.\d+$", tag):
+                return f"https://github.com/OpenVPN/openvpn/archive/refs/tags/v{tag}.tar.gz"
+        return None
+    except Exception:
+        return None
+
+
+def find_latest_openvpn_url():
+    # Preferimos o tarball do servidor de releases oficial (tem configure pronto).
+    url = find_latest_from_swupdate()
+    if url:
+        return url
+    # Fallback: GitHub (pode precisar de autoreconf)
+    return find_latest_from_github()
+
 
 if __name__ == "__main__":
     latest_url = find_latest_openvpn_url()
     if latest_url:
-        # Imprime a URL para que o script shell possa capturá-la
         print(latest_url)
-    else:
-        # Sai com um código de erro se não encontrar
-        exit(1)
+        sys.exit(0)
+    sys.exit(1)
