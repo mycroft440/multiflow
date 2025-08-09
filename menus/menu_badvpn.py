@@ -2,212 +2,247 @@
 # -*- coding: utf-8 -*-
 
 import os
-import subprocess
 import sys
+import subprocess
 import re
 import time
 from pathlib import Path
 
-# Adiciona o diretório pai ao sys.path para permitir importações de outros módulos do projeto
 sys.path.append(str(Path(__file__).parent.parent))
 
 try:
-    from menus.menu_style_utils import Colors, BoxChars, print_colored_box, print_menu_option, clear_screen
+    from menus.menu_style_utils import (
+        MC, Icons, TerminalManager,
+        modern_box, menu_option, footer_line, simple_header
+    )
     from ferramentas import bbr_manager
 except ImportError as e:
-    print(f"Erro de importação: {e}. Verifique se todos os arquivos do projeto estão nos diretórios corretos.")
-    # Fallback para o caso de o script ser executado de forma isolada
-    class Colors:
-        RED = GREEN = YELLOW = CYAN = BOLD = END = ""
-    class BoxChars:
-        BOTTOM_LEFT = BOTTOM_RIGHT = HORIZONTAL = ""
-    def clear_screen(): os.system('cls' if os.name == 'nt' else 'clear')
-    def print_colored_box(title, content=None): print(f"--- {title} ---")
-    def print_menu_option(num, desc, **kwargs): print(f"{num}. {desc}")
-    # Se o bbr_manager falhar, criamos um dummy
-    class bbr_manager:
-        @staticmethod
-        def check_status(): return "erro"
-        @staticmethod
-        def is_bbr_persistent(): return False
-        @staticmethod
-        def enable(): return False, "Módulo bbr_manager não encontrado."
-        @staticmethod
-        def disable(): return False, "Módulo bbr_manager não encontrado."
+    print(f"Erro de importação: {e}")
+    sys.exit(1)
 
-
-# Instancia as cores
-COLORS = Colors()
-
+# ==================== GERENCIADOR BADVPN ====================
 class BadVPNManager:
     def __init__(self):
-        # Define os caminhos de forma robusta
         self.base_dir = Path(__file__).parent.parent
-        self.install_script_path = self.base_dir / 'conexoes' / 'badvpn.sh'
-        self.service_file_path = Path("/etc/systemd/system/badvpn-udpgw.service")
-
-    def _is_installed(self):
-        """Verifica se o serviço BadVPN parece estar instalado."""
-        return self.service_file_path.exists()
-
-    def _run_command_interactive(self, command):
-        """Executa um comando e mostra sua saída em tempo real."""
-        try:
-            process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr, text=True)
-            process.wait()
-            return process.returncode == 0
-        except FileNotFoundError:
-            print(f"\n{COLORS.RED}Erro: Comando '{command[0]}' não encontrado.{COLORS.END}")
-            return False
-        except Exception as e:
-            print(f"\n{COLORS.RED}Ocorreu um erro inesperado: {e}{COLORS.END}")
-            return False
-
+        self.install_script = self.base_dir / 'conexoes' / 'badvpn.sh'
+        self.service_file = Path("/etc/systemd/system/badvpn-udpgw.service")
+    
+    def is_installed(self):
+        return self.service_file.exists()
+    
     def get_status(self):
-        """Verifica o status do serviço, a porta e o status do BBR."""
-        # Status do Serviço BadVPN
-        if not self._is_installed():
-            service_status = f"{COLORS.YELLOW}Não Instalado{COLORS.END}"
-            port = "N/A"
-        else:
-            try:
-                result = subprocess.run(["systemctl", "is-active", "badvpn-udpgw"], capture_output=True, text=True, check=False)
-                status = f"{COLORS.GREEN}Ativo{COLORS.END}" if result.stdout.strip() == "active" else f"{COLORS.RED}Inativo{COLORS.END}"
-                service_status = status
-                port = "N/A"
-                with self.service_file_path.open('r') as f:
-                    content = f.read()
-                    match = re.search(r'--listen-addr 127.0.0.1:(\d+)', content)
-                    if match:
-                        port = match.group(1)
-            except Exception:
-                service_status = f"{COLORS.RED}Erro ao obter status{COLORS.END}"
-                port = "N/A"
-
-        # Status do BBR
-        bbr_raw_status = bbr_manager.check_status()
-        bbr_status = f"{COLORS.GREEN}Ativo ({bbr_raw_status}){COLORS.END}" if bbr_raw_status == 'bbr' else f"{COLORS.YELLOW}Inativo ({bbr_raw_status}){COLORS.END}"
-
-        return f"Serviço: {service_status} | Porta: {COLORS.CYAN}{port}{COLORS.END}", f"Otimização BBR: {bbr_status}"
-
-    def install_or_change_port(self):
-        """Instala o BadVPN ou altera a porta se já estiver instalado."""
-        clear_screen()
-        action = "Alterar Porta" if self._is_installed() else "Instalar"
-        print_colored_box(f"{action.upper()} BADVPN")
+        """Retorna status formatado do BadVPN"""
+        if not self.is_installed():
+            return f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Não Instalado{MC.RESET}", "N/A"
         
         try:
-            port = input(f"{COLORS.CYAN}Digite a porta para o BadVPN (ex: 7300): {COLORS.END}").strip()
-            if not port.isdigit() or not (1 <= int(port) <= 65535):
-                print(f"\n{COLORS.RED}✗ Porta inválida. Tente novamente.{COLORS.END}")
-                return
-
-            print(f"\n{COLORS.YELLOW}Executando script de configuração... Acompanhe a saída abaixo.{COLORS.END}")
-            print("-" * 60)
+            result = subprocess.run(
+                ["systemctl", "is-active", "badvpn-udpgw"],
+                capture_output=True, text=True, check=False
+            )
             
-            command = ["sudo", "bash", str(self.install_script_path), port]
-            success = self._run_command_interactive(command)
-            
-            print("-" * 60)
-            if success:
-                print(f"\n{COLORS.GREEN}✓ Operação concluída com sucesso!{COLORS.END}")
+            if result.stdout.strip() == "active":
+                status = f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} Ativo{MC.RESET}"
             else:
-                print(f"\n{COLORS.RED}✗ A operação encontrou um erro.{COLORS.END}")
+                status = f"{MC.RED_GRADIENT}{Icons.INACTIVE} Inativo{MC.RESET}"
+            
+            # Obtém porta
+            port = "7300"  # default
+            with self.service_file.open('r') as f:
+                content = f.read()
+                match = re.search(r'--listen-addr 127.0.0.1:(\d+)', content)
+                if match:
+                    port = match.group(1)
+            
+            return status, port
+        except:
+            return f"{MC.RED_GRADIENT}{Icons.CROSS} Erro{MC.RESET}", "N/A"
+    
+    def get_bbr_status(self):
+        """Retorna status do BBR"""
+        bbr = bbr_manager.check_status()
+        if bbr == 'bbr':
+            return f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} BBR Ativo{MC.RESET}"
+        else:
+            return f"{MC.YELLOW_GRADIENT}{Icons.INACTIVE} BBR Inativo ({bbr}){MC.RESET}"
 
-        except KeyboardInterrupt:
-            print(f"\n{COLORS.YELLOW}Operação cancelada.{COLORS.END}")
+# ==================== FRAMES ====================
+def build_main_frame(manager, status_msg=""):
+    """Frame principal do BadVPN"""
+    s = []
+    s.append(simple_header("GERENCIADOR BADVPN"))
+    
+    # Status
+    service_status, port = manager.get_status()
+    bbr_status = manager.get_bbr_status()
+    
+    status_lines = [
+        f"{MC.CYAN_LIGHT}{Icons.SERVER} Serviço:{MC.RESET} {service_status}",
+        f"{MC.CYAN_LIGHT}{Icons.NETWORK} Porta:{MC.RESET} {MC.WHITE}{port}{MC.RESET}",
+        f"{MC.CYAN_LIGHT}{Icons.ROCKET} Otimização:{MC.RESET} {bbr_status}"
+    ]
+    
+    s.append(modern_box("STATUS DO SISTEMA", status_lines, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
+    s.append("\n")
+    
+    # Menu
+    s.append(modern_box("OPÇÕES DISPONÍVEIS", [], Icons.SETTINGS, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
+    s.append("\n")
+    
+    if manager.is_installed():
+        s.append(menu_option("1", "Alterar Porta", Icons.EDIT, MC.CYAN_GRADIENT))
+        s.append(menu_option("2", "Iniciar Serviço", Icons.ACTIVE, MC.GREEN_GRADIENT))
+        s.append(menu_option("3", "Parar Serviço", Icons.INACTIVE, MC.RED_GRADIENT))
+        s.append(menu_option("4", "Reiniciar Serviço", Icons.UPDATE, MC.YELLOW_GRADIENT))
+    else:
+        s.append(menu_option("1", "Instalar BadVPN", Icons.DOWNLOAD, MC.GREEN_GRADIENT, badge="NECESSÁRIO"))
+    
+    s.append(menu_option("5", "Gerenciar BBR", Icons.ROCKET, MC.PURPLE_GRADIENT))
+    s.append("\n")
+    s.append(menu_option("0", "Voltar", Icons.BACK, MC.YELLOW_GRADIENT))
+    
+    s.append(footer_line(status_msg))
+    return "".join(s)
 
-    def _control_service(self, action):
-        """Função auxiliar para iniciar, parar ou reiniciar o serviço."""
-        if not self._is_installed():
-            print(f"\n{COLORS.YELLOW}BadVPN não está instalado. Instale primeiro.{COLORS.END}")
-            return
+def build_bbr_frame(status_msg=""):
+    """Frame do gerenciador BBR"""
+    s = []
+    s.append(simple_header("OTIMIZAÇÃO TCP BBR"))
+    
+    current = bbr_manager.check_status()
+    persistent = bbr_manager.is_bbr_persistent()
+    
+    status_lines = [
+        f"{MC.CYAN_LIGHT}{Icons.CPU} Algoritmo Atual:{MC.RESET} {MC.WHITE}{current}{MC.RESET}",
+        f"{MC.CYAN_LIGHT}{Icons.SAVE} Persistente:{MC.RESET} {MC.GREEN_GRADIENT if persistent else MC.YELLOW_GRADIENT}{'Sim' if persistent else 'Não'}{MC.RESET}"
+    ]
+    
+    if current == 'bbr':
+        status_lines.append(f"{MC.GREEN_GRADIENT}{Icons.CHECK} BBR está ativo e otimizando a rede{MC.RESET}")
+    else:
+        status_lines.append(f"{MC.YELLOW_GRADIENT}{Icons.INFO} BBR pode melhorar a performance da rede{MC.RESET}")
+    
+    s.append(modern_box("STATUS BBR", status_lines, Icons.ROCKET, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
+    s.append("\n")
+    
+    s.append(menu_option("1", "Ativar BBR", Icons.ACTIVE, MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "Desativar BBR", Icons.INACTIVE, MC.RED_GRADIENT))
+    s.append("\n")
+    s.append(menu_option("0", "Voltar", Icons.BACK, MC.YELLOW_GRADIENT))
+    
+    s.append(footer_line(status_msg))
+    return "".join(s)
 
-        clear_screen()
-        print_colored_box(f"{action.upper()} SERVIÇO BADVPN")
-        command = ["sudo", "systemctl", action, "badvpn-udpgw.service"]
-        self._run_command_interactive(command)
-        # Adiciona uma verificação de status após a ação
-        subprocess.run(["sudo", "systemctl", "status", "badvpn-udpgw.service", "--no-pager"], check=False)
+def build_operation_frame(operation, port=None):
+    """Frame para operações"""
+    s = []
+    s.append(simple_header("EXECUTANDO OPERAÇÃO"))
+    
+    if operation == "install":
+        title = "Instalando BadVPN"
+        icon = Icons.DOWNLOAD
+        color = MC.GREEN_GRADIENT
+        msg = f"Configurando na porta {port}..." if port else "Instalando serviço..."
+    elif operation == "port":
+        title = "Alterando Porta"
+        icon = Icons.EDIT
+        color = MC.CYAN_GRADIENT
+        msg = f"Mudando para porta {port}..."
+    else:
+        title = "Processando"
+        icon = Icons.SETTINGS
+        color = MC.YELLOW_GRADIENT
+        msg = "Aguarde..."
+    
+    s.append(modern_box(title, [
+        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Não interrompa o processo{MC.RESET}",
+        f"{MC.WHITE}{msg}{MC.RESET}"
+    ], icon, color, MC.CYAN_LIGHT))
+    
+    s.append(footer_line("Processando..."))
+    return "".join(s)
 
-    def manage_bbr(self):
-        """Menu para gerenciar a otimização BBR."""
+# ==================== MENU PRINCIPAL ====================
+def main_menu():
+    """Menu principal do BadVPN"""
+    if os.geteuid() != 0:
+        print(f"{MC.RED_GRADIENT}Este script deve ser executado como root.{MC.RESET}")
+        sys.exit(1)
+    
+    manager = BadVPNManager()
+    TerminalManager.enter_alt_screen()
+    status = ""
+    
+    try:
         while True:
-            clear_screen()
-            bbr_status = bbr_manager.check_status()
-            is_persistent = bbr_manager.is_bbr_persistent()
+            TerminalManager.render(build_main_frame(manager, status))
+            TerminalManager.before_input()
+            choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
+            TerminalManager.after_input()
             
-            status_line = f"{COLORS.GREEN}Ativo ({bbr_status}){COLORS.END}" if bbr_status == 'bbr' else f"{COLORS.YELLOW}Inativo ({bbr_status}){COLORS.END}"
-            persistence_line = f"Persistente ao Reiniciar: {COLORS.CYAN}{'Sim' if is_persistent else 'Não'}{COLORS.END}"
-
-            print_colored_box("GERENCIAR OTIMIZAÇÃO TCP BBR", [status_line, persistence_line])
+            if choice == "1":
+                # Instalar ou alterar porta
+                TerminalManager.before_input()
+                port = input(f"\n{MC.CYAN_GRADIENT}Digite a porta (ex: 7300): {MC.RESET}").strip()
+                TerminalManager.after_input()
+                
+                if port.isdigit() and 1 <= int(port) <= 65535:
+                    TerminalManager.render(build_operation_frame("install" if not manager.is_installed() else "port", port))
+                    TerminalManager.leave_alt_screen()
+                    
+                    try:
+                        subprocess.run(['sudo', 'bash', str(manager.install_script), port], check=True)
+                        status = f"Porta configurada: {port}"
+                    except:
+                        status = "Erro na configuração"
+                    
+                    TerminalManager.enter_alt_screen()
+                else:
+                    status = "Porta inválida"
             
-            print_menu_option("1", "Ativar BBR", color=COLORS.GREEN)
-            print_menu_option("2", "Desativar BBR", color=COLORS.RED)
-            print_menu_option("0", "Voltar", color=COLORS.YELLOW)
-            print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
-
-            choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}").strip()
-
-            if choice == '1':
-                success, msg = bbr_manager.enable()
-                if success:
-                    print(f"\n{COLORS.GREEN}✓ {msg}{COLORS.END}")
-                else:
-                    print(f"\n{COLORS.RED}✗ {msg}{COLORS.END}")
-                input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
-            elif choice == '2':
-                success, msg = bbr_manager.disable()
-                if success:
-                    print(f"\n{COLORS.GREEN}✓ {msg}{COLORS.END}")
-                else:
-                    print(f"\n{COLORS.RED}✗ {msg}{COLORS.END}")
-                input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
-            elif choice == '0':
+            elif choice == "2" and manager.is_installed():
+                subprocess.run(['sudo', 'systemctl', 'start', 'badvpn-udpgw'], check=False)
+                status = "Serviço iniciado"
+            
+            elif choice == "3" and manager.is_installed():
+                subprocess.run(['sudo', 'systemctl', 'stop', 'badvpn-udpgw'], check=False)
+                status = "Serviço parado"
+            
+            elif choice == "4" and manager.is_installed():
+                subprocess.run(['sudo', 'systemctl', 'restart', 'badvpn-udpgw'], check=False)
+                status = "Serviço reiniciado"
+            
+            elif choice == "5":
+                # Submenu BBR
+                bbr_status = ""
+                while True:
+                    TerminalManager.render(build_bbr_frame(bbr_status))
+                    TerminalManager.before_input()
+                    bbr_choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha: {MC.RESET}").strip()
+                    TerminalManager.after_input()
+                    
+                    if bbr_choice == "1":
+                        success, msg = bbr_manager.enable()
+                        bbr_status = "BBR ativado!" if success else f"Erro: {msg}"
+                    elif bbr_choice == "2":
+                        success, msg = bbr_manager.disable()
+                        bbr_status = "BBR desativado!" if success else f"Erro: {msg}"
+                    elif bbr_choice == "0":
+                        break
+                    else:
+                        bbr_status = "Opção inválida"
+                
+                status = "Configuração BBR atualizada"
+            
+            elif choice == "0":
                 break
             else:
-                print(f"\n{COLORS.RED}Opção inválida.{COLORS.END}")
-                time.sleep(1)
-
-def main_menu():
-    if os.geteuid() != 0:
-        print(f"{COLORS.RED}Este script deve ser executado como root.{COLORS.END}")
-        sys.exit(1)
-
-    manager = BadVPNManager()
+                status = "Opção inválida"
     
-    while True:
-        try:
-            clear_screen()
-            service_status_line, bbr_status_line = manager.get_status()
-            print_colored_box("GERENCIADOR BADVPN", [service_status_line, bbr_status_line])
-            
-            print_menu_option("1", "Instalar / Alterar Porta", color=COLORS.CYAN)
-            print_menu_option("2", "Iniciar Serviço", color=COLORS.GREEN)
-            print_menu_option("3", "Parar Serviço", color=COLORS.RED)
-            print_menu_option("4", "Reiniciar Serviço", color=COLORS.YELLOW)
-            print_menu_option("5", "Gerenciar Otimização BBR", color=COLORS.CYAN)
-            print_menu_option("0", "Voltar ao Menu Anterior", color=COLORS.YELLOW)
-            print(f"{BoxChars.BOTTOM_LEFT}{BoxChars.HORIZONTAL * 58}{BoxChars.BOTTOM_RIGHT}")
-            
-            choice = input(f"\n{COLORS.BOLD}Escolha uma opção: {COLORS.END}").strip()
-            
-            if choice == '1': manager.install_or_change_port()
-            elif choice == '2': manager._control_service('start')
-            elif choice == '3': manager._control_service('stop')
-            elif choice == '4': manager._control_service('restart')
-            elif choice == '5': manager.manage_bbr()
-            elif choice == '0': break
-            else: print(f"\n{COLORS.RED}Opção inválida. Tente novamente.{COLORS.END}")
-                
-            input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{COLORS.END}")
-            
-        except KeyboardInterrupt:
-            print("\n\nSaindo...")
-            break
-        except Exception as e:
-            print(f"\n{COLORS.RED}Erro inesperado: {e}{COLORS.END}")
-            input(f"\n{COLORS.BOLD}Pressione Enter para continuar...{END}")
+    except KeyboardInterrupt:
+        status = "Operação cancelada"
+    finally:
+        TerminalManager.leave_alt_screen()
 
 if __name__ == "__main__":
     main_menu()
