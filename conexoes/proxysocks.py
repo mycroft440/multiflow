@@ -6,8 +6,7 @@ import select
 import sys
 import time
 import base64
-import os
-import signal
+from os import system
 
 # --- Configurações Globais ---
 IP = '0.0.0.0'
@@ -213,67 +212,34 @@ class ConnectionHandler(threading.Thread):
                 error = True
         
 def main():
+    system("clear")
     # Tenta pegar a porta do argumento da linha de comando, senão usa 80
     try:
         port = int(sys.argv[1])
     except (IndexError, ValueError):
         port = 80
 
-    # Daemonize the process
-    try:
-        pid = os.fork()
-        if pid > 0:
-            # Exit first parent
-            sys.exit(0)
-    except OSError as e:
-        sys.stderr.write(f"fork #1 failed: {e}\n")
-        sys.exit(1)
-
-    os.setsid()
-    os.umask(0)
-
-    try:
-        pid = os.fork()
-        if pid > 0:
-            # Exit second parent
-            sys.exit(0)
-    except OSError as e:
-        sys.stderr.write(f"fork #2 failed: {e}\n")
-        sys.exit(1)
-
-    # Redirect standard file descriptors
-    sys.stdout.flush()
-    sys.stderr.flush()
-    si = open(os.devnull, 'r')
-    so = open(os.devnull, 'a+')
-    se = open(os.devnull, 'a+')
-    os.dup2(si.fileno(), sys.stdin.fileno())
-    os.dup2(so.fileno(), sys.stdout.fileno())
-    os.dup2(se.fileno(), sys.stderr.fileno())
-
-    # Write PID to file
-    pid_file = f"/tmp/proxysocks_{port}.pid"
-    with open(pid_file, 'w') as f:
-        f.write(str(os.getpid()))
-
-    # Handle signals for graceful shutdown
-    def signal_handler(signum, frame):
-        try:
-            os.remove(pid_file)
-        except OSError:
-            pass
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGHUP, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-
+    # Corrigido: Usando f-strings e sintaxe de print do Python 3
+    print("\033[0;34m━"*8,"\033[1;32m PROXY SOCKS INICIADO","\033[0;34m━"*8,"\n")
+    print(f"\033[1;33mIP:\033[1;32m {IP}")
+    print(f"\033[1;33mPORTA:\033[1;32m {port}\n")
+    print("\033[0;34m━"*35,"\n")
+    
     server = Server(IP, port)
     server.start()
     
-    # Keep the main thread alive
-    while True:
-        time.sleep(1)
+    # O servidor proxy agora roda em uma thread separada.
+    # O processo principal precisa continuar rodando para manter a thread viva.
+    # Um loop simples que dorme é suficiente para isso.
+    try:
+        while True:
+            time.sleep(1) # Mantém o processo principal vivo
+    except KeyboardInterrupt:
+        print('\nParando o proxy...')
+    finally:
+        server.close()
+        server.join() # Espera a thread do servidor terminar
+        print('Proxy parado com sucesso.')
 
 if __name__ == '__main__':
     main()
