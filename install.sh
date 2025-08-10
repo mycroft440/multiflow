@@ -1,201 +1,181 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script de Instalação Remota do Multiflow (v2.2 - Revisado)
+# Script de Instalação para o MultiFlow Manager
 #
-# - Removida a compilação do wrapper C (badvpn.c) que não existe mais.
-# - Removidas as dependências de compilação C desnecessárias.
-# - Adicionada interatividade para a instalação das ferramentas de otimização.
+# Este script prepara o ambiente para o MultiFlow Manager, instalando todas as
+# dependências de sistema e de Python necessárias para todas as ferramentas.
 # ==============================================================================
 
-# --- Configuração do Script ---
-set -e
-set -o pipefail
+# --- Cores para a Saída ---
+R='\033[1;31m'
+G='\033[1;32m'
+Y='\033[1;33m'
+C='\033[1;36m'
+W='\033[0m'
 
-# --- Configuração de Cores e Funções de Log ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# --- Funções Auxiliares ---
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+# Imprime um cabeçalho formatado
+print_header() {
+    clear
+    echo -e "${C}===============================================${W}"
+    echo -e "${C}      Instalador do MultiFlow Manager      ${W}"
+    echo -e "${C}===============================================${W}"
+    echo
 }
 
-log_warn() {
-    echo -e "${YELLOW}[AVISO]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERRO]${NC} $1" >&2
-}
-
-error_exit() {
-    log_error "$1"
-    # Limpa o diretório temporário em caso de erro
-    if [ -d "$TMP_DIR" ]; then
-        log_info "A limpar ficheiros temporários..."
-        rm -rf "$TMP_DIR"
+# Verifica se o script está sendo executado como root
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+      echo -e "${R}Erro: Este script precisa ser executado como root.${W}"
+      echo -e "${Y}Por favor, execute com: sudo bash install.sh${W}"
+      exit 1
     fi
-    exit 1
 }
 
-# --- Função para Aguardar o APT ---
-wait_for_apt() {
-    log_info "A verificar se o gestor de pacotes (APT) está disponível..."
-    local max_attempts=30
-    local attempt=0
+# Instala todas as dependências do sistema
+install_system_deps() {
+    echo -e "${Y}>>> Atualizando a lista de pacotes do sistema (apt-get update)...${W}"
+    if ! apt-get update -y; then
+        echo -e "${R}Falha ao atualizar a lista de pacotes. Verifique sua conexão e repositórios.${W}"
+        exit 1
+    fi
     
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
-          fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
-          fuser /var/cache/apt/archives/lock >/dev/null 2>&1 || \
-          fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
-        
-        attempt=$((attempt + 1))
-        if [ $attempt -ge $max_attempts ]; then
-            error_exit "Timeout: O APT continuou ocupado por outro processo. Tente novamente mais tarde."
-        fi
-        
-        log_warn "APT está em uso. A aguardar... (tentativa $attempt/$max_attempts)"
-        sleep 5
-    done
+    echo -e "\\n${Y}>>> Instalando dependências essenciais...${W}"
+    echo -e "    (python3, pip, git, build-essential, cmake, libssl-dev, gcc)"
     
-    log_info "APT está disponível para uso."
-}
+    # Lista de pacotes a serem instalados
+    local packages=(
+        python3 
+        python3-pip 
+        git 
+        build-essential 
+        cmake 
+        libssl-dev \
+        gcc \
+        libboost-all-dev \
+        libcurl4-openssl-dev    )
+    
+    if ! apt-get install -y "${packages[@]}"; then
+        echo -e "${R}Falha ao instalar pacotes do sistema. A instalação foi abortada.${W}"
+        exit 1
+    fi
 
-# --- Início da Execução ---
-
-# 1. Verificação de Privilégios e Variáveis
-if [ "$(id -u)" -ne 0 ]; then
-    SUDO="sudo"
-    log_warn "O script não está a ser executado como root. A usar 'sudo' quando necessário."
-else
-    SUDO=""
-fi
-
-REPO_URL="https://github.com/mycroft440/multiflow.git"
-INSTALL_DIR="/opt/multiflow"
-TMP_DIR="/tmp/multiflow-install-$$"
-
-# 2. Verificação do Sistema Operacional
-if [ ! -f /etc/os-release ]; then
-    error_exit "Não foi possível identificar o sistema operacional."
-fi
-source /etc/os-release
-if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
-    log_warn "Este script é otimizado para Debian/Ubuntu. Alguns pacotes podem variar."
-    if [ -t 0 ]; then
-        read -p "Deseja continuar mesmo assim? (s/n): " -n 1 -r; echo
-        if [[ ! $REPLY =~ ^[Ss]$ ]]; then
-            log_info "Instalação cancelada."
-            exit 0
-        fi
+    echo -e "\\n${Y}>>> Clonando o repositório multiflowpx...${W}"
+    if [ ! -d "/root/multiflowpx" ]; then
+        git clone https://github.com/mycroft440/multiflowpx.git /root/multiflowpx
     else
-        log_warn "A executar em modo não interativo. A continuar automaticamente."
+        echo -e "${Y}Repositório multiflowpx já existe em /root/multiflowpx. Pulando a clonagem.${W}"
     fi
-fi
+}
 
-# 3. Atualização e Instalação de Dependências
-log_info "A iniciar atualização e limpeza do sistema..."
-wait_for_apt
-$SUDO apt-get update -y
-$SUDO apt-get upgrade -y --with-new-pkgs
-$SUDO apt-get --fix-broken install -y
-$SUDO dpkg --configure -a
-
-log_info "A instalar dependências essenciais..."
-# REMOVIDO: build-essential, automake, autoconf, libtool, gcc, pois badvpn.c não é mais compilado.
-# REMOVIDO: python3-requests, pois não parece ser usado. Adicionado python3-psutil.
-$SUDO apt-get install -y python3 python3-pip git python3-psutil
-$SUDO apt-get autoremove -y
-$SUDO apt-get clean
-
-# 4. Clonar o Repositório
-log_info "A baixar o projeto Multiflow de $REPO_URL..."
-git clone --depth 1 "$REPO_URL" "$TMP_DIR"
-cd "$TMP_DIR"
-
-# 5. Instalação do Multiflow
-log_info "A iniciar a instalação do Multiflow..."
-if [ -d "$INSTALL_DIR" ]; then
-    log_warn "Instalação anterior detetada em $INSTALL_DIR. A remover..."
-    $SUDO rm -rf "$INSTALL_DIR"
-fi
-$SUDO mkdir -p "$INSTALL_DIR"
-$SUDO cp -a . "$INSTALL_DIR/"
-
-# 6. Compilação dos Binários
-# REMOVIDO: Bloco de compilação do badvpn.c foi completamente removido, pois o arquivo não existe mais.
-# O projeto agora usa badvpn.sh.
-log_info "Etapa de compilação C ignorada (não é mais necessária)."
-
-cd "$INSTALL_DIR"
-
-# 7. Configuração de Permissões e Shebangs
-log_info "A configurar permissões de execução para os scripts..."
-find "$INSTALL_DIR" -type f -name "*.py" -print0 | while IFS= read -r -d $'\0' script; do
-    # Garante que o shebang está correto
-    if ! grep -q "^#\!/usr/bin/env python3" "$script"; then
-        $SUDO sed -i '1i#!/usr/bin/env python3' "$script"
+# Instala as dependências de Python via pip
+install_python_deps() {
+    echo -e "\\n${Y}>>> Instalando pacotes Python com pip...${W}"
+    echo -e "    (psutil)"
+    
+    if ! pip3 install --break-system-packages psutil; then
+        echo -e "${R}Falha ao instalar pacotes Python. A instalação foi abortada.${W}"
+        exit 1
     fi
-    $SUDO chmod +x "$script"
-done
-find "$INSTALL_DIR" -type f -name "*.sh" -exec $SUDO chmod +x {} +
+}
 
-# 8. Instalação Automática de Ferramentas de Otimização (ZRAM e SWAP)
-log_info "A configurar automaticamente as ferramentas de otimização..."
+# Define as permissões de execução para os scripts
+set_permissions() {
+    echo -e "\\n${Y}>>> Configurando permissões de execução para scripts...${W}"
+    
+    # Encontra todos os scripts .sh e os torna executáveis
+    find . -type f -name "*.sh" -exec chmod +x {} \;
+    
+    echo -e "${G}Permissões configuradas.${W}"
+}
 
-# Instalação do ZRAM
-ZRAM_SCRIPT="$INSTALL_DIR/ferramentas/zram.py"
-if [ -f "$ZRAM_SCRIPT" ]; then
-    log_info "A instalar o gestor ZRAM..."
-    $SUDO python3 "$ZRAM_SCRIPT" install "$ZRAM_SCRIPT" || log_warn "Não foi possível instalar o serviço ZRAM."
-    $SUDO python3 "$ZRAM_SCRIPT" setup || log_warn "Não foi possível ativar o ZRAM."
-else
-    log_warn "Script do ZRAM não encontrado."
-fi
 
-# Instalação do SWAP
-SWAP_SCRIPT="$INSTALL_DIR/ferramentas/swap.py"
-if [ -f "$SWAP_SCRIPT" ]; then
-    log_info "A configurar ficheiro de SWAP..."
-    $SUDO python3 "$SWAP_SCRIPT" setup || log_warn "Não foi possível configurar o SWAP."
-else
-    log_warn "Script de SWAP não encontrado."
-fi
+# --- Função Principal ---
+main() {
+    print_header
+    check_root
 
-# 9. Criação de Links Simbólicos
-log_info "A criar links simbólicos para facilitar a execução..."
-$SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/multiflow
-$SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/h
-$SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/menu
+    echo -e "${G}Bem-vindo ao instalador do MultiFlow Manager!${W}"
+    echo -e "${Y}Este script irá preparar o ambiente, instalando todas as dependências.${W}"
+    echo -e "---------------------------------------------------------------------"
+    
+    install_system_deps
+    install_python_deps
+    set_permissions
 
-# 10. Limpeza
-log_info "A limpar ficheiros de instalação temporários..."
-rm -rf "$TMP_DIR"
+    echo
+    echo -e "${C}=====================================================================${W}"
+    echo -e "${G}      Ambiente preparado com sucesso!      ${W}"
+    echo -e "${C}=====================================================================${W}"
+    echo -e "\\n${Y}Todos os pré-requisitos foram instalados.${W}"
+    echo -e "${Y}Para compilar, configurar e gerenciar as conexões, execute o menu principal:${W}"
+    echo -e "\\n    ${C}sudo python3 multiflowpx/proxy_menu.py${W}\\n"
+}
 
-# --- Finalização ---
-echo
-log_info "${GREEN}=====================================================${NC}"
-log_info "${GREEN}  Instalação do Multiflow concluída com sucesso!   ${NC}"
-log_info "${GREEN}=====================================================${NC}"
-echo
-log_info "Pode iniciar a aplicação executando um dos seguintes comandos:"
-echo -e "  ${BLUE}multiflow${NC}"
-echo -e "  ${BLUE}h${NC}"
-echo -e "  ${BLUE}menu${NC}"
-echo
-log_info "A instalação do OpenVPN e do BadVPN pode ser feita através dos menus da aplicação."
-echo
+# Executa o script
+main
 
-# Pergunta se o utilizador deseja iniciar a aplicação
-if [ -t 0 ]; then
-    read -p "Deseja iniciar o Multiflow agora? (s/n): " -n 1 -r; echo
-    if [[ $REPLY =~ ^[Ss]$ ]]; then
-        log_info "A iniciar Multiflow..."
-        /usr/local/bin/multiflow
+# Compila o executável do proxy C++
+compile_proxy() {
+    echo -e "\n${Y}>>> Compilando o executável do proxy C++...${W}"
+    # Cria um diretório de build temporário
+    mkdir -p /root/multiflowpx/build
+    cd /root/multiflowpx/build
+    
+    # Executa o CMake para configurar o projeto
+    if ! cmake /root/multiflowpx/multiflowproxy; then
+        echo -e "${R}Falha ao configurar o CMake. A instalação foi abortada.${W}"
+        exit 1
     fi
-else
-    log_info "Instalação concluída. Para iniciar, execute 'multiflow'."
-fi
+    
+    # Compila o projeto
+    if ! make; then
+        echo -e "${R}Falha ao compilar o proxy C++. A instalação foi abortada.${W}"
+        exit 1
+    fi
+    
+    # Copia o executável compilado para /usr/local/bin
+    cp proxy /usr/local/bin/multiflowpx_proxy
+    echo -e "${G}Executável do proxy compilado e copiado para /usr/local/bin/multiflowpx_proxy.${W}"
+    cd /root/multiflowpx
+}
+
+# Instala o serviço systemd e copia o proxy_menu.py
+install_systemd_service() {
+    echo -e "\n${Y}>>> Instalando o serviço systemd para o MultiFlowPX e copiando o proxy_menu.py...${W}"
+    cp /root/multiflowpx/multiflowproxy/multiflowpx.service /etc/systemd/system/
+    cp /root/multiflowpx/proxy_menu.py /usr/local/bin/multiflowpx_menu
+    chmod +x /usr/local/bin/multiflowpx_menu
+    systemctl daemon-reload
+    systemctl enable multiflowpx.service
+    echo -e "${G}Serviço systemd instalado e habilitado. Script de menu copiado para /usr/local/bin/multiflowpx_menu.${W}"
+}
+
+# --- Função Principal (modificada) ---
+main() {
+    print_header
+    check_root
+
+    echo -e "${G}Bem-vindo ao instalador do MultiFlow Manager!${W}"
+    echo -e "${Y}Este script irá preparar o ambiente, instalando todas as dependências.${W}"
+    echo -e "---------------------------------------------------------------------"
+    
+    install_system_deps
+    install_python_deps
+    set_permissions
+    compile_proxy
+    install_systemd_service
+
+    echo
+    echo -e "${C}=====================================================================${W}"
+    echo -e "${G}      Ambiente preparado com sucesso!      ${W}"
+    echo -e "${C}=====================================================================${W}"
+    echo -e "\n${Y}Todos os pré-requisitos foram instalados e o serviço configurado.${W}"
+    echo -e "${Y}Para gerenciar o proxy, execute o menu principal:${W}"
+    echo -e "\n    ${C}sudo python3 multiflowpx/proxy_menu.py${W}\n"
+}
+
+# Executa o script
+main
