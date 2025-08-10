@@ -1,12 +1,5 @@
 #!/bin/bash
-
-# ==============================================================================
-# Script de Instalação Remota do Multiflow (v2.2 - Revisado)
-#
-# - Removida a compilação do wrapper C (badvpn.c) que não existe mais.
-# - Removidas as dependências de compilação C desnecessárias.
-# - Adicionada interatividade para a instalação das ferramentas de otimização.
-# ==============================================================================
+#script para a instalação do projeto multiflow, zram e swap automaticos.
 
 # --- Configuração do Script ---
 set -e
