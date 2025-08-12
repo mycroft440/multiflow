@@ -6,8 +6,12 @@ import sys
 import subprocess
 import time
 import re
+import threading
+import http.server
+import socketserver
 from pathlib import Path
 from shutil import copyfile
+from datetime import datetime, timedelta
 
 # Ajuste do path para importar utilitários visuais
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,6 +24,15 @@ try:
 except ImportError as e:
     print(f"Erro ao importar utilitários: {e}")
     sys.exit(1)
+
+# ---------------------- Variáveis Globais para Download ----------------------
+
+DOWNLOAD_SERVER = None
+DOWNLOAD_THREAD = None
+DOWNLOAD_FILE_PATH = None
+DOWNLOAD_START_TIME = None
+DOWNLOAD_PORT = 7777
+DOWNLOAD_DURATION = 600  # 10 minutos em segundos
 
 # ---------------------- Utilidades de execução ----------------------
 
@@ -38,6 +51,146 @@ def ensure_root():
         print(f"{MC.RED_GRADIENT}Este menu precisa ser executado como root.{MC.RESET}")
         input("Pressione Enter para sair...")
         sys.exit(1)
+
+def get_public_ip():
+    """Obtém o IP público da VPS"""
+    ip_result = run_cmd(['curl', '-4', '-s', 'https://api.ipify.org'], timeout=5)
+    if ip_result.returncode == 0 and ip_result.stdout.strip():
+        return ip_result.stdout.strip()
+    
+    # Fallback para outros serviços
+    for url in ['https://ifconfig.me', 'https://ipinfo.io/ip']:
+        ip_result = run_cmd(['curl', '-4', '-s', url], timeout=5)
+        if ip_result.returncode == 0 and ip_result.stdout.strip():
+            return ip_result.stdout.strip()
+    
+    # Último fallback - IP local
+    ip_result = run_cmd(['hostname', '-I'])
+    if ip_result.returncode == 0 and ip_result.stdout.strip():
+        return ip_result.stdout.split()[0]
+    
+    return "IP_NAO_DETECTADO"
+
+# ---------------------- Servidor HTTP Temporário ----------------------
+
+class SingleFileHTTPHandler(http.server.SimpleHTTPRequestHandler):
+    """Handler customizado para servir apenas um arquivo específico"""
+    
+    def __init__(self, *args, **kwargs):
+        self.file_to_serve = DOWNLOAD_FILE_PATH
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        """Serve apenas o arquivo OVPN"""
+        if self.path == '/' or self.path == f'/{os.path.basename(self.file_to_serve)}':
+            if os.path.exists(self.file_to_serve):
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-openvpn-profile')
+                self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(self.file_to_serve)}"')
+                self.send_header('Content-Length', str(os.path.getsize(self.file_to_serve)))
+                self.end_headers()
+                
+                with open(self.file_to_serve, 'rb') as f:
+                    self.wfile.write(f.read())
+            else:
+                self.send_error(404, "Arquivo não encontrado")
+        else:
+            self.send_error(404, "Arquivo não encontrado")
+    
+    def log_message(self, format, *args):
+        """Suprime logs do servidor HTTP"""
+        pass
+
+def start_download_server(file_path):
+    """Inicia o servidor HTTP temporário"""
+    global DOWNLOAD_SERVER, DOWNLOAD_THREAD, DOWNLOAD_FILE_PATH, DOWNLOAD_START_TIME
+    
+    # Para servidor anterior se existir
+    stop_download_server()
+    
+    DOWNLOAD_FILE_PATH = file_path
+    DOWNLOAD_START_TIME = datetime.now()
+    
+    def run_server():
+        global DOWNLOAD_SERVER
+        try:
+            # Configura o servidor
+            handler = SingleFileHTTPHandler
+            DOWNLOAD_SERVER = socketserver.TCPServer(("0.0.0.0", DOWNLOAD_PORT), handler)
+            DOWNLOAD_SERVER.allow_reuse_address = True
+            
+            # Timeout de 10 minutos
+            end_time = time.time() + DOWNLOAD_DURATION
+            DOWNLOAD_SERVER.timeout = 1  # Check every second
+            
+            while time.time() < end_time:
+                DOWNLOAD_SERVER.handle_request()
+            
+            # Limpa após timeout
+            stop_download_server()
+        except Exception:
+            pass
+    
+    # Inicia thread do servidor
+    DOWNLOAD_THREAD = threading.Thread(target=run_server, daemon=True)
+    DOWNLOAD_THREAD.start()
+    
+    # Aguarda servidor iniciar
+    time.sleep(0.5)
+    
+    # Verifica se porta está aberta
+    check_port = run_cmd(['lsof', '-i', f':{DOWNLOAD_PORT}'], timeout=2)
+    if check_port.returncode != 0:
+        # Tenta abrir porta no firewall
+        run_cmd(['iptables', '-A', 'INPUT', '-p', 'tcp', '--dport', str(DOWNLOAD_PORT), '-j', 'ACCEPT'])
+        if os.path.exists("/etc/iptables/rules.v4"):
+            save_result = run_cmd(['iptables-save'], timeout=5)
+            if save_result.returncode == 0:
+                try:
+                    with open("/etc/iptables/rules.v4", "w") as f:
+                        f.write(save_result.stdout)
+                except Exception:
+                    pass
+
+def stop_download_server():
+    """Para o servidor HTTP temporário"""
+    global DOWNLOAD_SERVER, DOWNLOAD_THREAD, DOWNLOAD_FILE_PATH, DOWNLOAD_START_TIME
+    
+    if DOWNLOAD_SERVER:
+        try:
+            DOWNLOAD_SERVER.shutdown()
+            DOWNLOAD_SERVER.server_close()
+        except Exception:
+            pass
+        DOWNLOAD_SERVER = None
+    
+    if DOWNLOAD_THREAD and DOWNLOAD_THREAD.is_alive():
+        DOWNLOAD_THREAD.join(timeout=2)
+    
+    DOWNLOAD_THREAD = None
+    DOWNLOAD_FILE_PATH = None
+    DOWNLOAD_START_TIME = None
+
+def is_download_server_active():
+    """Verifica se o servidor de download está ativo e dentro do tempo"""
+    global DOWNLOAD_START_TIME
+    
+    if not DOWNLOAD_START_TIME or not DOWNLOAD_FILE_PATH:
+        return False
+    
+    elapsed = (datetime.now() - DOWNLOAD_START_TIME).total_seconds()
+    return elapsed < DOWNLOAD_DURATION and os.path.exists(DOWNLOAD_FILE_PATH)
+
+def get_remaining_download_time():
+    """Retorna o tempo restante do link de download em minutos"""
+    global DOWNLOAD_START_TIME
+    
+    if not DOWNLOAD_START_TIME:
+        return 0
+    
+    elapsed = (datetime.now() - DOWNLOAD_START_TIME).total_seconds()
+    remaining = DOWNLOAD_DURATION - elapsed
+    return max(0, int(remaining / 60))
 
 # ---------------------- Detecção de layout e estado ----------------------
 
@@ -141,18 +294,114 @@ def parse_port_proto_dns(conf_path):
     
     return port, proto, dns_label, dns_list
 
-def ss_listens_on(port, proto):
-    """Verifica se há processo escutando na porta/protocolo"""
-    proto = proto.lower()
-    cmd = ["ss", "-ltnp"] if proto.startswith("tcp") else ["ss", "-lunp"]
-    res = run_cmd(cmd, timeout=5)
-    if res.returncode == 0 and str(port) in res.stdout and "openvpn" in res.stdout.lower():
-        return True
-    # fallback
-    res2 = run_cmd(["lsof", "-nP", "-i", f":{port}"], timeout=5)
-    if res2.returncode == 0 and "openvpn" in res2.stdout.lower():
-        return True
-    return False
+# ---------------------- Geração de arquivo OVPN ----------------------
+
+def criar_arquivo_ovpn(client_name):
+    """Cria um arquivo OVPN para o cliente especificado"""
+    
+    # Verifica se OpenVPN está instalado
+    if not verificar_openvpn_instalado():
+        return None, "OpenVPN não está instalado"
+    
+    # Encontra configuração do servidor
+    server_conf = find_server_conf()
+    if not server_conf:
+        return None, "Configuração do servidor não encontrada"
+    
+    # Extrai informações do servidor
+    port, proto, _, _ = parse_port_proto_dns(server_conf)
+    server_ip = get_public_ip()
+    
+    # Diretórios de certificados
+    conf_dir = os.path.dirname(server_conf)
+    easy_rsa_dir = "/etc/openvpn/easy-rsa"
+    
+    # Verifica se cliente já existe
+    client_cert = f"{easy_rsa_dir}/pki/issued/{client_name}.crt"
+    if os.path.exists(client_cert):
+        # Cliente já existe, apenas gera o arquivo OVPN
+        pass
+    else:
+        # Precisa criar o certificado do cliente
+        os.chdir(easy_rsa_dir)
+        create_result = run_cmd(['bash', '-c', f'echo "yes" | ./easyrsa build-client-full "{client_name}" nopass'], timeout=30)
+        if create_result.returncode != 0:
+            return None, f"Erro ao criar certificado do cliente: {create_result.stderr}"
+    
+    # Cria diretório para clientes
+    client_dir = os.path.expanduser("~/ovpn-clients")
+    os.makedirs(client_dir, exist_ok=True)
+    
+    # Caminho do arquivo OVPN
+    ovpn_file = os.path.join(client_dir, f"{client_name}.ovpn")
+    
+    # Lê certificados necessários
+    try:
+        with open(f"{conf_dir}/ca.crt", 'r') as f:
+            ca_cert = f.read()
+        
+        with open(f"{easy_rsa_dir}/pki/issued/{client_name}.crt", 'r') as f:
+            client_cert_content = f.read()
+        
+        with open(f"{easy_rsa_dir}/pki/private/{client_name}.key", 'r') as f:
+            client_key = f.read()
+        
+        # Verifica se existe tls-crypt ou tls-auth
+        tls_key = ""
+        tls_directive = ""
+        if os.path.exists(f"{conf_dir}/tc.key"):
+            with open(f"{conf_dir}/tc.key", 'r') as f:
+                tls_key = f.read()
+            tls_directive = "<tls-crypt>\n" + tls_key + "</tls-crypt>"
+        elif os.path.exists(f"{conf_dir}/ta.key"):
+            with open(f"{conf_dir}/ta.key", 'r') as f:
+                tls_key = f.read()
+            tls_directive = "<tls-auth>\n" + tls_key + "</tls-auth>\nkey-direction 1"
+        
+        # Gera arquivo OVPN
+        ovpn_content = f"""# OpenVPN Client Configuration
+client
+dev tun
+proto {proto}
+remote {server_ip} {port}
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+auth SHA512
+cipher AES-256-GCM
+verb 3
+mute 20
+tun-mtu 1500
+mssfix 1420
+sndbuf 0
+rcvbuf 0
+
+# Segurança adicional
+tls-version-min 1.2
+
+# Certificados embutidos
+<ca>
+{ca_cert}
+</ca>
+<cert>
+{client_cert_content}
+</cert>
+<key>
+{client_key}
+</key>
+{tls_directive}
+"""
+        
+        # Escreve arquivo
+        with open(ovpn_file, 'w') as f:
+            f.write(ovpn_content)
+        
+        return ovpn_file, None
+        
+    except Exception as e:
+        return None, f"Erro ao criar arquivo OVPN: {str(e)}"
 
 # ---------------------- Helpers de edição de config ----------------------
 
@@ -181,7 +430,6 @@ def set_conf_port(conf_path, new_port):
     if re.search(r'^\s*port\s+\d+', text, re.M):
         text = re.sub(r'^\s*port\s+\d+', f"port {new_port}", text, flags=re.M)
     else:
-        # adiciona próximo ao topo
         text = f"port {new_port}\n{text}"
     write_file(conf_path, text)
 
@@ -197,13 +445,10 @@ def set_conf_proto(conf_path, new_proto):
 def set_conf_dns(conf_path, dns_list):
     """Altera os servidores DNS na configuração"""
     text = read_file(conf_path)
-    # remove linhas push DNS existentes
     text = re.sub(r'^\s*push\s+"dhcp-option\s+DNS\s+[0-9\.]+"\s*\n', "", text, flags=re.M|re.I)
-    # insere novas linhas DNS
     insert = ""
     for ip in dns_list:
         insert += f'push "dhcp-option DNS {ip}"\n'
-    # inserir após redirect-gateway se existir, senão ao final
     if re.search(r'^\s*push\s+"redirect-gateway\b.*"\s*$', text, flags=re.M):
         text = re.sub(r'(^\s*push\s+"redirect-gateway\b.*"\s*$)', r'\1' + f"\n{insert}".rstrip("\n"), text, flags=re.M)
     else:
@@ -222,11 +467,9 @@ def update_clients_configs(new_port=None, new_proto=None):
             path = os.path.join(d, name)
             try:
                 content = read_file(path)
-                # Atualiza proto
                 if new_proto:
                     if re.search(r'^\s*proto\s+\S+', content, re.M):
                         content = re.sub(r'^\s*proto\s+\S+', f"proto {new_proto}", content, flags=re.M)
-                # Atualiza porta nas linhas remote
                 if new_port:
                     content = re.sub(r'^(remote\s+\S+\s+)\d+(\b.*)$', rf'\g<1>{new_port}\2', content, flags=re.M)
                 write_file(path, content)
@@ -235,84 +478,28 @@ def update_clients_configs(new_port=None, new_proto=None):
 
 # ---------------------- Firewall helpers ----------------------
 
-def nft_active():
-    """Verifica se nftables está ativo"""
-    if not os.path.exists("/etc/nftables.conf"):
-        return False
-    st = run_cmd(["systemctl", "is-active", "nftables"])
-    return st.stdout.strip() == "active"
-
-def firewalld_active():
-    """Verifica se firewalld está ativo"""
-    st = run_cmd(["systemctl", "is-active", "firewalld"])
-    return st.stdout.strip() == "active"
-
-def iptables_present():
-    """Verifica se iptables está presente"""
-    return run_cmd(["which", "iptables"]).returncode == 0
-
-def ip6tables_present():
-    """Verifica se ip6tables está presente"""
-    return run_cmd(["which", "ip6tables"]).returncode == 0
-
 def update_firewall_port(old_port, new_port):
     """Atualiza porta no firewall"""
-    # nftables: troca dport old -> new e aplica
-    if nft_active():
-        try:
-            txt = read_file("/etc/nftables.conf")
-            txt2 = re.sub(rf'\bdport\s+{re.escape(str(old_port))}\b', f"dport {new_port}", txt)
-            if txt2 != txt:
-                write_file("/etc/nftables.conf", txt2)
-                run_cmd(["nft", "-f", "/etc/nftables.conf"])
-        except Exception:
-            pass
-    
-    # firewalld
-    if firewalld_active():
-        run_cmd(["firewall-cmd", f"--remove-port={old_port}/udp", "--permanent"])
-        run_cmd(["firewall-cmd", f"--remove-port={old_port}/tcp", "--permanent"])
-        run_cmd(["firewall-cmd", f"--add-port={new_port}/udp", "--permanent"])
-        run_cmd(["firewall-cmd", f"--add-port={new_port}/tcp", "--permanent"])
-        run_cmd(["firewall-cmd", "--reload"])
-    
     # iptables
-    if iptables_present():
-        # remover regras antigas se existirem
-        run_cmd(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(old_port), "-j", "ACCEPT"])
-        run_cmd(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(old_port), "-j", "ACCEPT"])
-        
-        # adicionar novas (verifica se já existe antes)
-        check_udp = run_cmd(["iptables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if check_udp.returncode != 0:
-            run_cmd(["iptables", "-A", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        
-        check_tcp = run_cmd(["iptables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if check_tcp.returncode != 0:
-            run_cmd(["iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
-        
-        # salvar se netfilter-persistent existir
-        if os.path.exists("/etc/iptables/rules.v4"):
-            save_result = run_cmd(["iptables-save"], timeout=10)
-            if save_result.returncode == 0:
-                try:
-                    with open("/etc/iptables/rules.v4", "w") as f:
-                        f.write(save_result.stdout)
-                except Exception:
-                    pass
+    run_cmd(['iptables', '-D', 'INPUT', '-p', 'udp', '--dport', str(old_port), '-j', 'ACCEPT'])
+    run_cmd(['iptables', '-D', 'INPUT', '-p', 'tcp', '--dport', str(old_port), '-j', 'ACCEPT'])
     
-    # ip6tables (opcional)
-    if ip6tables_present():
-        run_cmd(["ip6tables", "-D", "INPUT", "-p", "udp", "--dport", str(old_port), "-j", "ACCEPT"])
-        run_cmd(["ip6tables", "-D", "INPUT", "-p", "tcp", "--dport", str(old_port), "-j", "ACCEPT"])
-        
-        check_udp6 = run_cmd(["ip6tables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if check_udp6.returncode != 0:
-            run_cmd(["ip6tables", "-A", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        
-        check_tcp6 = run_cmd(["ip6tables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if check_tcp6.returncode != 0:
-            run_cmd(["ip6tables", "-A", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
+    check_udp = run_cmd(['iptables', '-C', 'INPUT', '-p', 'udp', '--dport', str(new_port), '-j', 'ACCEPT'])
+    if check_udp.returncode != 0:
+        run_cmd(['iptables', '-A', 'INPUT', '-p', 'udp', '--dport', str(new_port), '-j', 'ACCEPT'])
+    
+    check_tcp = run_cmd(['iptables', '-C', 'INPUT', '-p', 'tcp', '--dport', str(new_port), '-j', 'ACCEPT'])
+    if check_tcp.returncode != 0:
+        run_cmd(['iptables', '-A', 'INPUT', '-p', 'tcp', '--dport', str(new_port), '-j', 'ACCEPT'])
+    
+    if os.path.exists("/etc/iptables/rules.v4"):
+        save_result = run_cmd(['iptables-save'], timeout=10)
+        if save_result.returncode == 0:
+            try:
+                with open("/etc/iptables/rules.v4", "w") as f:
+                    f.write(save_result.stdout)
+            except Exception:
+                pass
 
 # ---------------------- Controle do serviço ----------------------
 
@@ -322,18 +509,17 @@ def restart_openvpn():
     if not unit:
         return False, "Serviço OpenVPN não encontrado"
     
-    run_cmd(["systemctl", "daemon-reload"])
-    res = run_cmd(["systemctl", "restart", unit], timeout=20)
+    run_cmd(['systemctl', 'daemon-reload'])
+    res = run_cmd(['systemctl', 'restart', unit], timeout=20)
     if res.returncode != 0:
         return False, res.stderr.strip() or "Falha ao reiniciar serviço"
     
-    # checar estado
     time.sleep(1.5)
-    st = run_cmd(["systemctl", "is-active", unit])
+    st = run_cmd(['systemctl', 'is-active', unit])
     if st.stdout.strip() == "active":
         return True, "Serviço reiniciado"
     
-    log = run_cmd(["journalctl", "-xeu", unit, "--no-pager", "-n", "30"], timeout=10).stdout
+    log = run_cmd(['journalctl', '-xeu', unit, '--no-pager', '-n', '30'], timeout=10).stdout
     return False, f"Falha ao iniciar. Logs:\n{log}"
 
 # ---------------------- Integração com openvpn.sh ----------------------
@@ -361,14 +547,14 @@ def executar_script_openvpn():
     """Executa o script bash de instalação"""
     script_path = descobrir_script_openvpn()
     if not script_path:
-        return False, "Script openvpn.sh/openvpn-manager.sh não encontrado."
+        return False, "Script openvpn.sh não encontrado."
     try:
         TerminalManager.render(build_operation_frame("Executando openvpn.sh", "", MC.GREEN_GRADIENT, "Inicializando..."))
         TerminalManager.leave_alt_screen()
         subprocess.run(['chmod', '+x', script_path], check=False)
         result = subprocess.run(['bash', script_path], check=False)
         TerminalManager.enter_alt_screen()
-        return result.returncode == 0, ("Concluído" if result.returncode == 0 else "Falhou (verifique logs)")
+        return result.returncode == 0, ("Concluído" if result.returncode == 0 else "Falhou")
     except Exception as e:
         TerminalManager.enter_alt_screen()
         return False, str(e)
@@ -383,7 +569,6 @@ def is_valid_port(p):
     except Exception:
         return False
 
-# Regex para validar IPv4
 ipv4_re = re.compile(r'^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$')
 
 def alterar_porta():
@@ -404,12 +589,10 @@ def alterar_porta():
     try:
         backup_file(conf)
         set_conf_port(conf, new_port)
-        # Atualiza firewall
         try:
             update_firewall_port(port, new_port)
         except Exception:
             pass
-        # Atualiza clientes
         update_clients_configs(new_port=new_port, new_proto=None)
         ok, msg = restart_openvpn()
         return ok, f"Porta alterada para {new_port}. {msg}"
@@ -440,7 +623,6 @@ def alterar_protocolo():
     try:
         backup_file(conf)
         set_conf_proto(conf, new_proto)
-        # Atualiza clientes
         update_clients_configs(new_port=None, new_proto=new_proto)
         ok, msg = restart_openvpn()
         return ok, f"Protocolo alterado para {new_proto.upper()}. {msg}"
@@ -493,22 +675,86 @@ def alterar_dns():
     except Exception as e:
         return False, f"Erro ao alterar DNS: {e}"
 
+def gerar_download_ovpn():
+    """Gera arquivo OVPN e cria link de download temporário"""
+    global DOWNLOAD_FILE_PATH
+    
+    if not verificar_openvpn_instalado():
+        return False, "OpenVPN não está instalado"
+    
+    # Verifica se já existe um servidor ativo
+    if is_download_server_active():
+        ip = get_public_ip()
+        remaining = get_remaining_download_time()
+        file_name = os.path.basename(DOWNLOAD_FILE_PATH)
+        
+        print(f"\n{MC.YELLOW}Link de download ainda ativo!{MC.RESET}")
+        print(f"{MC.WHITE}Tempo restante: {MC.CYAN}{remaining} minutos{MC.RESET}")
+        print(f"\n{MC.WHITE}Baixe o {MC.GREEN}{file_name}{MC.WHITE} no link a seguir:{MC.RESET}")
+        print(f"\n{MC.WHITE}Copie o link e coloque no navegador:{MC.RESET}")
+        print(f"{MC.CYAN}http://{ip}:{DOWNLOAD_PORT}{MC.RESET}")
+        print()
+        
+        TerminalManager.before_input()
+        input(f"{MC.BOLD}Pressione Enter para voltar...{MC.RESET}")
+        TerminalManager.after_input()
+        return True, "Link exibido"
+    
+    # Solicita nome do cliente
+    print(f"\n{MC.WHITE}Qual nome deseja utilizar para o ovpn? [ex: mycroft]{MC.RESET}")
+    TerminalManager.before_input()
+    client_name = input(f"{MC.BOLD}Digite: {MC.RESET}").strip()
+    TerminalManager.after_input()
+    
+    if not client_name:
+        return False, "Nome inválido"
+    
+    # Sanitiza nome
+    client_name = re.sub(r'[^a-zA-Z0-9_-]', '', client_name)
+    if not client_name:
+        return False, "Nome inválido após sanitização"
+    
+    # Cria arquivo OVPN
+    print(f"\n{MC.YELLOW}Gerando arquivo {client_name}.ovpn...{MC.RESET}")
+    ovpn_file, error = criar_arquivo_ovpn(client_name)
+    
+    if error:
+        return False, error
+    
+    # Inicia servidor de download
+    print(f"{MC.YELLOW}Iniciando servidor de download...{MC.RESET}")
+    start_download_server(ovpn_file)
+    
+    # Aguarda servidor iniciar
+    time.sleep(1)
+    
+    # Exibe link
+    ip = get_public_ip()
+    print(f"\n{MC.GREEN}Arquivo gerado com sucesso!{MC.RESET}")
+    print(f"\n{MC.WHITE}Baixe o {MC.GREEN}{client_name}.ovpn{MC.WHITE} no link a seguir, esse link irá funcionar por apenas {MC.YELLOW}10 minutos{MC.WHITE}, após esse tempo será excluído e você terá que gerar um novo link:{MC.RESET}")
+    print(f"\n{MC.WHITE}Copie o link e coloque no navegador:{MC.RESET}")
+    print(f"{MC.CYAN}http://{ip}:{DOWNLOAD_PORT}{MC.RESET}")
+    print()
+    
+    TerminalManager.before_input()
+    input(f"{MC.BOLD}Pressione Enter para voltar...{MC.RESET}")
+    TerminalManager.after_input()
+    
+    return True, f"Link criado para {client_name}.ovpn"
+
 def desinstalar_openvpn():
     """Desinstala o OpenVPN"""
-    # Tenta usar o script bash, se existir
     script_path = descobrir_script_openvpn()
     if script_path:
         return executar_script_openvpn()
 
-    # Fallback simples (não remove tudo como o script, mas desinstala pacotes)
-    print(f"\n{MC.RED_GRADIENT}ATENÇÃO: Isso removerá OpenVPN e easy-rsa via gerenciador de pacotes.{MC.RESET}")
+    print(f"\n{MC.RED_GRADIENT}ATENÇÃO: Isso removerá OpenVPN e easy-rsa.{MC.RESET}")
     TerminalManager.before_input()
     c = input(f"{MC.BOLD}Confirmar? [s/N]: {MC.RESET}").strip().lower()
     TerminalManager.after_input()
     if c != "s":
         return False, "Operação cancelada."
     
-    # Detecta distro basica
     os_release = {}
     try:
         with open("/etc/os-release") as f:
@@ -521,13 +767,13 @@ def desinstalar_openvpn():
     
     id_like = (os_release.get("ID_LIKE", "") + " " + os_release.get("ID", "")).lower()
     if any(x in id_like for x in ["debian", "ubuntu"]):
-        run_cmd(["systemctl", "stop", pick_server_unit() or "openvpn@server"])
-        r = run_cmd(["apt-get", "remove", "--purge", "-y", "openvpn", "easy-rsa"], timeout=120)
-        run_cmd(["apt-get", "autoremove", "-y"], timeout=120)
+        run_cmd(['systemctl', 'stop', pick_server_unit() or 'openvpn@server'])
+        r = run_cmd(['apt-get', 'remove', '--purge', '-y', 'openvpn', 'easy-rsa'], timeout=120)
+        run_cmd(['apt-get', 'autoremove', '-y'], timeout=120)
         ok = r.returncode == 0
     else:
-        run_cmd(["systemctl", "stop", pick_server_unit() or "openvpn@server"])
-        r = run_cmd(["yum", "remove", "-y", "openvpn", "easy-rsa"], timeout=120)
+        run_cmd(['systemctl', 'stop', pick_server_unit() or 'openvpn@server'])
+        r = run_cmd(['yum', 'remove', '-y', 'openvpn', 'easy-rsa'], timeout=120)
         ok = r.returncode == 0
     
     return ok, ("Desinstalado" if ok else "Falha ao desinstalar")
@@ -549,7 +795,6 @@ def build_status_box():
             porta = port
             protocolo = proto.upper()
             dns_label = dns_lab
-            # normaliza label para exibição como no pedido
             dns_label = {"google": "google", "cloudflare": "cloudflare"}.get(dns_label, dns_label)
     
     lines = [
@@ -558,6 +803,12 @@ def build_status_box():
         f"{MC.CYAN_LIGHT}Protocolo:{MC.RESET} {MC.WHITE}{protocolo}{MC.RESET}",
         f"{MC.CYAN_LIGHT}Dns:{MC.RESET} {MC.WHITE}{dns_label}{MC.RESET}",
     ]
+    
+    # Adiciona status do servidor de download se ativo
+    if is_download_server_active():
+        remaining = get_remaining_download_time()
+        lines.append(f"{MC.CYAN_LIGHT}Download:{MC.RESET} {MC.GREEN}Ativo ({remaining} min restantes){MC.RESET}")
+    
     return modern_box("STATUS", lines, "", MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
 
 def build_menu_frame(status_msg=""):
@@ -570,7 +821,8 @@ def build_menu_frame(status_msg=""):
     s.append(menu_option("2", "Alterar porta", "", MC.CYAN_GRADIENT))
     s.append(menu_option("3", "Alterar protocolo", "", MC.BLUE_GRADIENT))
     s.append(menu_option("4", "Alterar Dns", "", MC.ORANGE_GRADIENT))
-    s.append(menu_option("5", "Desinstalar Openvpn", "", MC.RED_GRADIENT))
+    s.append(menu_option("5", "Gerar e baixar arquivo ovpn", "", MC.MAGENTA))
+    s.append(menu_option("6", "Desinstalar Openvpn", "", MC.RED_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar", "", MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -618,16 +870,24 @@ def main_menu():
                 ok, msg = alterar_dns()
                 status_msg = msg if ok else f"Erro: {msg}"
             elif choice == "5":
+                TerminalManager.render(build_operation_frame("Gerar arquivo OVPN", "", MC.MAGENTA, "Criando arquivo e link..."))
+                ok, msg = gerar_download_ovpn()
+                status_msg = msg if ok else f"Erro: {msg}"
+            elif choice == "6":
                 TerminalManager.render(build_operation_frame("Desinstalar OpenVPN", "", MC.RED_GRADIENT, "Removendo..."))
                 ok, msg = desinstalar_openvpn()
                 status_msg = msg if ok else f"Erro: {msg}"
             elif choice == "0":
+                # Para servidor de download ao sair
+                stop_download_server()
                 break
             else:
                 status_msg = "Opção inválida"
 
             time.sleep(0.7)
     finally:
+        # Garante que servidor de download seja parado
+        stop_download_server()
         TerminalManager.leave_alt_screen()
 
 if __name__ == "__main__":
