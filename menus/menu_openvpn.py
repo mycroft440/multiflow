@@ -76,24 +76,26 @@ def get_public_ip():
 class SingleFileHTTPHandler(http.server.SimpleHTTPRequestHandler):
     """Handler customizado para servir apenas um arquivo específico"""
     
-    def __init__(self, *args, **kwargs):
-        self.file_to_serve = DOWNLOAD_FILE_PATH
-        super().__init__(*args, **kwargs)
-    
     def do_GET(self):
         """Serve apenas o arquivo OVPN"""
-        if self.path == '/' or self.path == f'/{os.path.basename(self.file_to_serve)}':
-            if os.path.exists(self.file_to_serve):
+        global DOWNLOAD_FILE_PATH
+        
+        if not DOWNLOAD_FILE_PATH or not os.path.exists(DOWNLOAD_FILE_PATH):
+            self.send_error(404, "Arquivo não encontrado")
+            return
+            
+        if self.path == '/' or self.path == f'/{os.path.basename(DOWNLOAD_FILE_PATH)}':
+            try:
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/x-openvpn-profile')
-                self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(self.file_to_serve)}"')
-                self.send_header('Content-Length', str(os.path.getsize(self.file_to_serve)))
+                self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(DOWNLOAD_FILE_PATH)}"')
+                self.send_header('Content-Length', str(os.path.getsize(DOWNLOAD_FILE_PATH)))
                 self.end_headers()
                 
-                with open(self.file_to_serve, 'rb') as f:
+                with open(DOWNLOAD_FILE_PATH, 'rb') as f:
                     self.wfile.write(f.read())
-            else:
-                self.send_error(404, "Arquivo não encontrado")
+            except Exception:
+                self.send_error(500, "Erro interno do servidor")
         else:
             self.send_error(404, "Arquivo não encontrado")
     
@@ -138,7 +140,7 @@ def start_download_server(file_path):
     # Aguarda servidor iniciar
     time.sleep(0.5)
     
-    # Verifica se porta está aberta
+    # Verifica se porta está aberta e abre no firewall se necessário
     check_port = run_cmd(['lsof', '-i', f':{DOWNLOAD_PORT}'], timeout=2)
     if check_port.returncode != 0:
         # Tenta abrir porta no firewall
@@ -173,7 +175,7 @@ def stop_download_server():
 
 def is_download_server_active():
     """Verifica se o servidor de download está ativo e dentro do tempo"""
-    global DOWNLOAD_START_TIME
+    global DOWNLOAD_START_TIME, DOWNLOAD_FILE_PATH
     
     if not DOWNLOAD_START_TIME or not DOWNLOAD_FILE_PATH:
         return False
@@ -316,17 +318,21 @@ def criar_arquivo_ovpn(client_name):
     conf_dir = os.path.dirname(server_conf)
     easy_rsa_dir = "/etc/openvpn/easy-rsa"
     
+    # Verifica se easy-rsa existe
+    if not os.path.exists(easy_rsa_dir):
+        return None, "Easy-RSA não encontrado"
+    
     # Verifica se cliente já existe
     client_cert = f"{easy_rsa_dir}/pki/issued/{client_name}.crt"
-    if os.path.exists(client_cert):
-        # Cliente já existe, apenas gera o arquivo OVPN
-        pass
-    else:
+    if not os.path.exists(client_cert):
         # Precisa criar o certificado do cliente
-        os.chdir(easy_rsa_dir)
-        create_result = run_cmd(['bash', '-c', f'echo "yes" | ./easyrsa build-client-full "{client_name}" nopass'], timeout=30)
-        if create_result.returncode != 0:
-            return None, f"Erro ao criar certificado do cliente: {create_result.stderr}"
+        try:
+            os.chdir(easy_rsa_dir)
+            create_result = run_cmd(['bash', '-c', f'echo "yes" | ./easyrsa build-client-full "{client_name}" nopass'], timeout=30)
+            if create_result.returncode != 0:
+                return None, f"Erro ao criar certificado do cliente"
+        except Exception as e:
+            return None, f"Erro ao criar certificado: {str(e)}"
     
     # Cria diretório para clientes
     client_dir = os.path.expanduser("~/ovpn-clients")
