@@ -1,315 +1,342 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+MultiFlowPX – Proxy multiprotocolo
+"""
+
 import argparse
-import socket
-import threading
-import select
-import ssl
-import hashlib
 import base64
-import urllib.request
+import hashlib
+import select
+import socket
+import ssl
 import sys
+import threading
 import time
+import urllib.request
 from queue import Queue
 
-# Constants
+# --------------------------------------------------------------------------- #
+#  Constantes
+# --------------------------------------------------------------------------- #
 class Constants:
-    PROXY_SERVER_VERSION = "1.2.6"
-    PROXY_SERVER_AUTHOR = "@DuTra01"
-    DEFAULT_PORT = 8080
-    DEFAULT_WORKERS = 4
-    DEFAULT_BUFFER_SIZE = 16384  # Aumentado com melhorias
-    DEFAULT_SSH_PORT = 22
-    DEFAULT_OPENVPN_PORT = 1194
-    DEFAULT_V2RAY_PORT = 10086
-    DEFAULT_ULIMIT = 65536
+    PROXY_SERVER_VERSION = "1.0"           # bump
+    PROXY_SERVER_AUTHOR   = "mycroft"
+    DEFAULT_PORT          = 80
+    DEFAULT_WORKERS       = 4
+    DEFAULT_BUFFER_SIZE   = 16_384
+    DEFAULT_SSH_PORT      = 22
+    DEFAULT_OPENVPN_PORT  = 1194
+    DEFAULT_V2RAY_PORT    = 10086
+    DEFAULT_ULIMIT        = 65_536
     DEFAULT_HTTP_RESPONSE = "HTTP/1.1 200 OK\r\n\r\n"
-    WEBSOCKET_UPGRADE_RESPONSE = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
-    IP_CHECK_URL = "https://ipv4.icanhazip.com/"
+    IP_CHECK_URL          = "https://ipv4.icanhazip.com/"
 
-# Utils
+# --------------------------------------------------------------------------- #
+#  Utilidades
+# --------------------------------------------------------------------------- #
 class Utils:
     @staticmethod
-    def trim(s):
+    def trim(s: str) -> str:
         return s.strip()
 
     @staticmethod
-    def split(s, delimiter):
-        return s.split(delimiter)
+    def is_valid_port(port: int) -> bool:
+        return 0 < port <= 65_535
 
     @staticmethod
-    def is_valid_port(port):
-        return 0 < port <= 65535
-
-    @staticmethod
-    def get_current_ip():
+    def get_current_ip() -> str:
         try:
-            with urllib.request.urlopen(Constants.IP_CHECK_URL, timeout=10) as response:
-                return Utils.trim(response.read().decode('utf-8'))
-        except:
+            with urllib.request.urlopen(Constants.IP_CHECK_URL, timeout=10) as resp:
+                return Utils.trim(resp.read().decode())
+        except Exception:
             return "127.0.0.1"
 
-# ProxyConfig
+# --------------------------------------------------------------------------- #
+#  Configuração
+# --------------------------------------------------------------------------- #
 class ProxyConfig:
-    def __init__(self):
-        self.token = ""
-        self.validate_only = False
-        self.port = Constants.DEFAULT_PORT
-        self.use_http = False
-        self.use_https = False
+    def __init__(self) -> None:
+        self.token            = ""
+        self.validate_only    = False
+        self.port             = Constants.DEFAULT_PORT
+        self.use_http         = False
+        self.use_https        = False
         self.response_message = Constants.DEFAULT_HTTP_RESPONSE
-        self.cert_path = ""
-        self.workers = Constants.DEFAULT_WORKERS
-        self.ulimit = Constants.DEFAULT_ULIMIT
-        self.ssh_only = False
-        self.buffer_size = Constants.DEFAULT_BUFFER_SIZE
-        self.ssh_port = Constants.DEFAULT_SSH_PORT
-        self.openvpn_port = Constants.DEFAULT_OPENVPN_PORT
-        self.v2ray_port = Constants.DEFAULT_V2RAY_PORT
-        self.remote_host = "127.0.0.1"  # Flexível com melhorias
+        self.cert_path        = ""
+        self.workers          = Constants.DEFAULT_WORKERS
+        self.ulimit           = Constants.DEFAULT_ULIMIT
+        self.ssh_only         = False
+        self.buffer_size      = Constants.DEFAULT_BUFFER_SIZE
+        self.ssh_port         = Constants.DEFAULT_SSH_PORT
+        self.openvpn_port     = Constants.DEFAULT_OPENVPN_PORT
+        self.v2ray_port       = Constants.DEFAULT_V2RAY_PORT
+        self.remote_host      = "127.0.0.1"
 
-# ArgumentParser
+# --------------------------------------------------------------------------- #
+#  Parser de argumentos
+# --------------------------------------------------------------------------- #
 class ArgumentParser:
-    def parse(self, args):
-        parser = argparse.ArgumentParser(description="MultiFlowPX Proxy Server")
-        parser.add_argument("--token", help="Token for validation")
-        parser.add_argument("--validate", action="store_true", help="Validate only")
-        parser.add_argument("--port", type=int, default=Constants.DEFAULT_PORT, help="Port")
-        parser.add_argument("--http", action="store_true", help="Use HTTP")
-        parser.add_argument("--https", action="store_true", help="Use HTTPS")
-        parser.add_argument("--response", default=Constants.DEFAULT_HTTP_RESPONSE, help="Response message")
-        parser.add_argument("--cert", help="Certificate path for HTTPS")
-        parser.add_argument("--workers", type=int, default=Constants.DEFAULT_WORKERS, help="Number of workers")
-        parser.add_argument("--ulimit", type=int, default=Constants.DEFAULT_ULIMIT, help="Ulimit")
-        parser.add_argument("--ssh-only", action="store_true", help="SSH only mode")
-        parser.add_argument("--buffer-size", type=int, default=Constants.DEFAULT_BUFFER_SIZE, help="Buffer size")
-        parser.add_argument("--ssh-port", type=int, default=Constants.DEFAULT_SSH_PORT, help="SSH port")
-        parser.add_argument("--openvpn-port", type=int, default=Constants.DEFAULT_OPENVPN_PORT, help="OpenVPN port")
-        parser.add_argument("--v2ray-port", type=int, default=Constants.DEFAULT_V2RAY_PORT, help="V2Ray port")
-        parser.add_argument("--remote-host", default="127.0.0.1", help="Remote host for connections")
-        
-        config = ProxyConfig()
-        parsed = parser.parse_args(args)
-        for key, value in vars(parsed).items():
-            if value is not None:
-                setattr(config, key.replace('-', '_'), value)
-        self.validate_config(config)
-        return config
+    def parse(self, argv) -> ProxyConfig:
+        p = argparse.ArgumentParser(description="MultiFlowPX Proxy Server")
+        p.add_argument("--token")
+        p.add_argument("--validate", action="store_true")
+        p.add_argument("--port", type=int, default=Constants.DEFAULT_PORT)
+        p.add_argument("--http",  action="store_true")
+        p.add_argument("--https", action="store_true")
+        p.add_argument("--response", default=Constants.DEFAULT_HTTP_RESPONSE)
+        p.add_argument("--cert")
+        p.add_argument("--workers", type=int, default=Constants.DEFAULT_WORKERS)
+        p.add_argument("--ulimit",  type=int, default=Constants.DEFAULT_ULIMIT)
+        p.add_argument("--ssh-only", action="store_true")
+        p.add_argument("--buffer-size", type=int, default=Constants.DEFAULT_BUFFER_SIZE)
+        p.add_argument("--ssh-port", type=int, default=Constants.DEFAULT_SSH_PORT)
+        p.add_argument("--openvpn-port", type=int, default=Constants.DEFAULT_OPENVPN_PORT)
+        p.add_argument("--v2ray-port",  type=int, default=Constants.DEFAULT_V2RAY_PORT)
+        p.add_argument("--remote-host", default="127.0.0.1")
 
-    def validate_config(self, config):
-        if not Utils.is_valid_port(config.port):
-            raise ValueError(f"Invalid port: {config.port}")
-        if config.use_https and not config.cert_path:
-            print("Warning: Cert path required for HTTPS, using temp if possible")
+        args = p.parse_args(argv)
+        cfg  = ProxyConfig()
 
-# Logging simples com timestamps
-def log_info(msg):
-    print(f"[{time.time()}] INFO: {msg}")
+        # Mapeamento explícito – evita nomes divergentes
+        cfg.token            = args.token or ""
+        cfg.validate_only    = args.validate
+        cfg.port             = args.port
+        cfg.use_http         = args.http
+        cfg.use_https        = args.https
+        cfg.response_message = args.response
+        cfg.cert_path        = args.cert or ""
+        cfg.workers          = args.workers
+        cfg.ulimit           = args.ulimit
+        cfg.ssh_only         = args.ssh_only
+        cfg.buffer_size      = args.buffer_size
+        cfg.ssh_port         = args.ssh_port
+        cfg.openvpn_port     = args.openvpn_port
+        cfg.v2ray_port       = args.v2ray_port
+        cfg.remote_host      = args.remote_host
 
-def log_error(msg):
-    print(f"[{time.time()}] ERROR: {msg}", file=sys.stderr)
+        self._validate_config(cfg)
+        return cfg
 
-# Connection base
+    def _validate_config(self, cfg: ProxyConfig) -> None:
+        if not Utils.is_valid_port(cfg.port):
+            raise ValueError(f"Porta inválida: {cfg.port}")
+
+# --------------------------------------------------------------------------- #
+#  Logging simples
+# --------------------------------------------------------------------------- #
+def log_info(msg: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] INFO  {msg}", flush=True)
+
+def log_error(msg: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] ERROR {msg}", file=sys.stderr, flush=True)
+
+# --------------------------------------------------------------------------- #
+#  Conexões
+# --------------------------------------------------------------------------- #
 class Connection:
-    def __init__(self, client_socket, config):
-        self.client_socket = client_socket
-        self.config = config
-        self.active = False
+    def __init__(self, cli_sock: socket.socket, cfg: ProxyConfig):
+        self.client_socket = cli_sock
+        self.cfg           = cfg
 
-    def read(self, size):
-        return self.client_socket.recv(size)
-
-    def write(self, data):
-        return self.client_socket.send(data)
-
-    def close(self):
-        if self.client_socket:
-            self.client_socket.close()
-
-    def forward_data(self, from_sock, to_sock):
-        while True:
-            r, _, _ = select.select([from_sock], [], [], 1.0)  # Timeout 1s
-            if r:
-                data = from_sock.recv(self.config.buffer_size)
+    def forward_data(self, from_sock: socket.socket, to_sock: socket.socket) -> None:
+        try:
+            while True:
+                r, _, _ = select.select([from_sock], [], [], 1.0)
+                if not r:
+                    continue
+                data = from_sock.recv(self.cfg.buffer_size)
                 if not data:
                     break
                 sent = 0
-                while sent < len(data):  # Retry partial sends
-                    try:
-                        sent += to_sock.send(data[sent:])
-                    except:
-                        log_error("Write error in forward")
-                        return
+                while sent < len(data):
+                    n = to_sock.send(data[sent:])
+                    sent += n
+        except Exception as exc:
+            log_error(f"forward_data: {exc}")
 
-# ConnectionType
 class ConnectionType(Connection):
-    def __init__(self, client_socket, config, protocol):
-        super().__init__(client_socket, config)
-        self.protocol = protocol
-        self.server_socket = None
+    def __init__(self, cli_sock: socket.socket, cfg: ProxyConfig, proto: str):
+        super().__init__(cli_sock, cfg)
+        self.protocol      = proto
+        self.server_socket = None  # type: socket.socket | None
 
-    def establish(self):
-        for tries in range(3):  # Retries com delay
+    def _dst_port(self) -> int:
+        return {
+            "SSH":      self.cfg.ssh_port,
+            "OpenVPN":  self.cfg.openvpn_port,
+            "V2Ray":    self.cfg.v2ray_port,
+        }.get(self.protocol, self.cfg.ssh_port)
+
+    def establish(self) -> bool:
+        for attempt in range(1, 4):
             try:
-                self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.server_socket.connect((self.config.remote_host, self.get_port()))
-                log_info(f"Connected to {self.protocol} on {self.config.remote_host}:{self.get_port()} (try {tries+1})")
-                self.active = True
+                self.server_socket = socket.create_connection(
+                    (self.cfg.remote_host, self._dst_port()), timeout=5
+                )
+                log_info(f"Conectado a {self.protocol} em "
+                         f"{self.cfg.remote_host}:{self._dst_port()} (tentativa {attempt})")
                 return True
-            except Exception as e:
-                log_error(f"Failed to connect to {self.protocol} (try {tries+1}): {e}")
+            except Exception as exc:
+                log_error(f"Falha ao conectar ({attempt}/3): {exc}")
                 time.sleep(2)
         return False
 
-    def handle_data(self):
-        if not self.active:
+    def relay(self, first_data: bytes) -> None:
+        if not self.server_socket:
             return
-        t1 = threading.Thread(target=self.forward_data, args=(self.client_socket, self.server_socket))
-        t2 = threading.Thread(target=self.forward_data, args=(self.server_socket, self.client_socket))
+        # Envia o primeiro pacote capturado
+        if first_data:
+            self.server_socket.sendall(first_data)
+
+        t1 = threading.Thread(target=self.forward_data,
+                              args=(self.client_socket, self.server_socket),
+                              daemon=True)
+        t2 = threading.Thread(target=self.forward_data,
+                              args=(self.server_socket, self.client_socket),
+                              daemon=True)
         t1.start()
         t2.start()
         t1.join()
         t2.join()
-        self.active = False
 
-    def get_port(self):
-        if self.protocol == "SSH":
-            return self.config.ssh_port
-        elif self.protocol == "OpenVPN":
-            return self.config.openvpn_port
-        elif self.protocol == "V2Ray":
-            return self.config.v2ray_port
-        return self.config.ssh_port  # Default
-
-# Factory
+# --------------------------------------------------------------------------- #
+#  Fábrica / detecção de protocolo
+# --------------------------------------------------------------------------- #
 class ConnectionTypeFactory:
     @staticmethod
-    def create_connection(client_socket, initial_data, config):
-        protocol = ConnectionTypeFactory.detect_protocol(initial_data)
-        return ConnectionType(client_socket, config, protocol)
+    def detect_protocol(initial: bytes) -> str:
+        if initial.startswith(b"SSH-"):
+            return "SSH"
+        if len(initial) >= 2 and (initial[0] & 0xF0) == 0x20:
+            return "OpenVPN"
+        if len(initial) >= 16:
+            weird = sum(1 for b in initial[:16] if b > 0x7F)
+            if weird > 8 or (initial[0] == 1 and initial[1] == 0):
+                return "V2Ray"
+        return "SSH"
 
     @staticmethod
-    def detect_protocol(initial_data):
-        log_info(f"Detecting protocol from initial data: {initial_data[:32]}")
-        if initial_data.startswith(b'SSH-'):
-            return "SSH"
-        if len(initial_data) >= 2 and (initial_data[0] & 0xF0) == 0x20:
-            return "OpenVPN"
-        if len(initial_data) >= 16:
-            high_count = sum(1 for b in initial_data[:16] if b > 0x7F)
-            if high_count > 8 or (initial_data[0] == 0x01 and initial_data[1] == 0x00):
-                return "V2Ray"
-        return "SSH"  # Default
+    def create(cli_sock: socket.socket, initial: bytes, cfg: ProxyConfig) -> ConnectionType:
+        proto = ConnectionTypeFactory.detect_protocol(initial)
+        return ConnectionType(cli_sock, cfg, proto)
 
-# ResponseParser
+# --------------------------------------------------------------------------- #
+#  Parser de resposta HTTP / WebSocket
+# --------------------------------------------------------------------------- #
 class ResponseParser:
-    def __init__(self, default_response=Constants.DEFAULT_HTTP_RESPONSE):
-        self.default_response = default_response
+    def __init__(self, default_resp: str = Constants.DEFAULT_HTTP_RESPONSE):
+        self.default_response = default_resp
 
-    def parse_response(self, request):
-        if self.is_websocket_upgrade(request):
-            return self.generate_websocket_handshake(request)
+    def parse(self, request: str) -> str:
+        if self._is_ws_upgrade(request):
+            return self._ws_handshake(request)
         return self.default_response
 
-    def is_websocket_upgrade(self, request):
-        headers = self.extract_headers(request)
-        return "upgrade: websocket" in headers.lower() or "upgrade: ws" in headers.lower()
+    @staticmethod
+    def _is_ws_upgrade(req: str) -> bool:
+        headers = req.lower()
+        return "upgrade: websocket" in headers or "upgrade: ws" in headers
 
-    def generate_websocket_handshake(self, request):
-        key = self.extract_websocket_key(request)
-        if not key:
-            key = "dGhlIHNhbXBsZSBub25jZQ=="  # Dummy para leniência
-            log_info("Using dummy key for minimal WS payload")
-        accept = self.generate_websocket_accept(key)
-        return f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-
-    def extract_websocket_key(self, request):
-        lines = request.split("\r\n")
-        for line in lines:
+    def _ws_handshake(self, req: str) -> str:
+        key = ""
+        for line in req.split("\r\n"):
             if line.lower().startswith("sec-websocket-key:"):
-                return Utils.trim(line.split(":", 1)[1])
-        return ""
+                key = Utils.trim(line.split(":", 1)[1])
+                break
+        if not key:
+            key = "dGhlIHNhbXBsZSBub25jZQ=="  # fallback
+        accept = self._ws_accept(key)
+        return ( "HTTP/1.1 101 Switching Protocols\r\n"
+                 "Upgrade: websocket\r\n"
+                 "Connection: Upgrade\r\n"
+                 f"Sec-WebSocket-Accept: {accept}\r\n\r\n" )
 
-    def generate_websocket_accept(self, key):
+    @staticmethod
+    def _ws_accept(key: str) -> str:
         magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        combined = key + magic
-        sha1 = hashlib.sha1(combined.encode()).digest()
+        sha1  = hashlib.sha1((key + magic).encode()).digest()
         return base64.b64encode(sha1).decode()
 
-    def extract_headers(self, request):
-        return request.split("\r\n\r\n")[0]
-
-# ProxyServer
+# --------------------------------------------------------------------------- #
+#  Servidor principal
+# --------------------------------------------------------------------------- #
 class ProxyServer:
-    def __init__(self, config):
-        self.config = config
-        self.server_socket = None
-        self.running = False
-        self.worker_queues = [Queue() for _ in range(config.workers)]
-        self.response_parser = ResponseParser(config.response_message)
-
-    def initialize(self):
+    def __init__(self, cfg: ProxyConfig):
+        self.cfg           = cfg
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.bind(("0.0.0.0", self.config.port))
-        self.server_socket.listen(10)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind(("0.0.0.0", self.cfg.port))
+        self.server_socket.listen(128)
         self.server_socket.setblocking(False)
-        log_info(f"Server running on port {self.config.port}")
-        for i in range(self.config.workers):
-            threading.Thread(target=self.worker_loop, args=(self.worker_queues[i],)).start()
 
-    def run(self):
-        self.initialize()
-        self.running = True
-        while self.running:
-            r, _, _ = select.select([self.server_socket], [], [], 1.0)
-            if r:
-                client_socket, _ = self.server_socket.accept()
-                queue = self.worker_queues[hash(client_socket) % self.config.workers]
-                queue.put(client_socket)
+        self.queues   = [Queue() for _ in range(self.cfg.workers)]
+        self.parser   = ResponseParser(self.cfg.response_message)
+        self.running  = True
 
-    def worker_loop(self, queue):
-        while True:
-            client_socket = queue.get()
-            self.handle_connection(client_socket)
+        for i, q in enumerate(self.queues):
+            threading.Thread(target=self._worker, args=(q,),
+                             daemon=True, name=f"worker-{i}").start()
 
-    def handle_connection(self, client_socket):
+    # ---------------------------- loop aceitação --------------------------- #
+    def serve_forever(self):
+        log_info(f"Proxy {Constants.PROXY_SERVER_VERSION} pronto em :{self.cfg.port}")
         try:
-            initial_data = client_socket.recv(self.config.buffer_size)
-            if not initial_data:
-                client_socket.close()
+            while self.running:
+                r, _, _ = select.select([self.server_socket], [], [], 1.0)
+                if not r:
+                    continue
+                cli_sock, _ = self.server_socket.accept()
+                idx = hash(cli_sock) % self.cfg.workers
+                self.queues[idx].put(cli_sock)
+        except KeyboardInterrupt:
+            log_info("Encerrando…")
+        finally:
+            self.running = False
+            self.server_socket.close()
+
+    # ---------------------------- worker thread --------------------------- #
+    def _worker(self, q: Queue):
+        while True:
+            cli_sock: socket.socket = q.get()
+            try:
+                self._handle(cli_sock)
+            except Exception as exc:
+                log_error(f"_handle: {exc}")
+            finally:
+                try:
+                    cli_sock.close()
+                except Exception:
+                    pass
+
+    # ---------------------------- conexão única --------------------------- #
+    def _handle(self, cli_sock: socket.socket):
+        initial = cli_sock.recv(self.cfg.buffer_size, socket.MSG_PEEK)
+        if not initial:
+            return
+
+        # Se pedido HTTP
+        if initial.startswith(b"GET ") or initial.startswith(b"POST ") or initial.startswith(b"HEAD "):
+            data = cli_sock.recv(self.cfg.buffer_size)  # consome
+            resp = self.parser.parse(data.decode(errors="ignore"))
+            cli_sock.sendall(resp.encode())
+            # Se não for upgrade, encerra aqui
+            if "101 Switching Protocols" not in resp:
                 return
 
-            if self.config.use_https:
-                context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-                if not self.config.cert_path:
-                    log_info("Generating temp cert for HTTPS...")
-                    # Simule ou use subprocess: import subprocess; subprocess.run(['openssl', 'req', '-new', '-x509', '-days', '365', '-nodes', '-out', 'temp.crt', '-keyout', 'temp.key', '-subj', '/CN=localhost'])
-                    self.config.cert_path = "temp.crt"  # Ajuste path real
-                context.load_cert_chain(certfile=self.config.cert_path, keyfile="temp.key")
-                client_socket = context.wrap_socket(client_socket, server_side=True)
+        conn = ConnectionTypeFactory.create(cli_sock, initial, self.cfg)
+        if conn.establish():
+            # remove o flag PEEK e lê de fato
+            first_chunk = cli_sock.recv(self.cfg.buffer_size)
+            conn.relay(first_chunk)
 
-            if self.is_http_request(initial_data):
-                response = self.response_parser.parse_response(initial_data.decode(errors='ignore'))
-                client_socket.send(response.encode())
-                if "101 Switching Protocols" in response:
-                    pass  # Continue para protocolo
-                else:
-                    client_socket.close()
-                    return
+# --------------------------------------------------------------------------- #
+#  Entry-point
+# --------------------------------------------------------------------------- #
+def main() -> None:
+    cfg = ArgumentParser().parse(sys.argv[1:])
+    server = ProxyServer(cfg)
+    server.serve_forever()
 
-            conn = ConnectionTypeFactory.create_connection(client_socket, initial_data, self.config)
-            if conn.establish():
-                conn.handle_data()
-            conn.close()
-        except Exception as e:
-            log_error(f"Error handling connection: {e}")
-        finally:
-            client_socket.close()
-
-    def is_http_request(self, data):
-        return data.startswith(b"GET ") or data.startswith(b"POST ") or data.startswith(b"HEAD ")
-
-# Main
 if __name__ == "__main__":
-    parser = ArgumentParser()
-    config = parser.parse(sys.argv[1:])
-    server = ProxyServer(config)
-    server.run()
+    main()
