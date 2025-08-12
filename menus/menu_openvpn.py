@@ -24,6 +24,7 @@ except ImportError as e:
 # ---------------------- Utilidades de execução ----------------------
 
 def run_cmd(cmd, timeout=8):
+    """Executa comando com timeout e tratamento de erro"""
     try:
         return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -32,6 +33,7 @@ def run_cmd(cmd, timeout=8):
         return subprocess.CompletedProcess(cmd, 1, "", str(e))
 
 def ensure_root():
+    """Verifica se está rodando como root"""
     if os.geteuid() != 0:
         print(f"{MC.RED_GRADIENT}Este menu precisa ser executado como root.{MC.RESET}")
         input("Pressione Enter para sair...")
@@ -40,6 +42,7 @@ def ensure_root():
 # ---------------------- Detecção de layout e estado ----------------------
 
 def find_server_conf():
+    """Encontra o arquivo de configuração do servidor"""
     candidates = [
         "/etc/openvpn/server/server.conf",  # layout moderno
         "/etc/openvpn/server.conf",         # layout legado
@@ -50,6 +53,7 @@ def find_server_conf():
     return None
 
 def detect_service_candidates():
+    """Detecta possíveis nomes de serviço do OpenVPN"""
     base_candidates = [
         "openvpn-server@server",
         "openvpn@server",
@@ -75,10 +79,12 @@ def detect_service_candidates():
     return ordered
 
 def pick_server_unit():
+    """Escolhe a unidade de serviço apropriada"""
     units = detect_service_candidates()
     return units[0] if units else None
 
 def verificar_openvpn_instalado():
+    """Verifica se OpenVPN está instalado"""
     # binário
     r = run_cmd(['which', 'openvpn'])
     if not (r.returncode == 0 and r.stdout.strip()):
@@ -92,6 +98,7 @@ def verificar_openvpn_instalado():
     return False
 
 def parse_port_proto_dns(conf_path):
+    """Extrai porta, protocolo e DNS da configuração"""
     port = "1194"
     proto = "udp"
     dns_list = []
@@ -117,6 +124,7 @@ def parse_port_proto_dns(conf_path):
                         dns_list.append(m.group(1))
     except Exception:
         pass
+    
     # label do DNS
     dns_label = "custom"
     set_dns = set(dns_list)
@@ -130,9 +138,11 @@ def parse_port_proto_dns(conf_path):
         dns_label = "opendns"
     elif not dns_list:
         dns_label = "desconhecido"
+    
     return port, proto, dns_label, dns_list
 
 def ss_listens_on(port, proto):
+    """Verifica se há processo escutando na porta/protocolo"""
     proto = proto.lower()
     cmd = ["ss", "-ltnp"] if proto.startswith("tcp") else ["ss", "-lunp"]
     res = run_cmd(cmd, timeout=5)
@@ -147,6 +157,7 @@ def ss_listens_on(port, proto):
 # ---------------------- Helpers de edição de config ----------------------
 
 def backup_file(path):
+    """Cria backup do arquivo"""
     try:
         ts = time.strftime("%Y%m%d-%H%M%S")
         copyfile(path, f"{path}.bak-{ts}")
@@ -155,14 +166,17 @@ def backup_file(path):
         return False
 
 def write_file(path, content):
+    """Escreve conteúdo no arquivo"""
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
 def read_file(path):
+    """Lê conteúdo do arquivo"""
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
 def set_conf_port(conf_path, new_port):
+    """Altera a porta na configuração"""
     text = read_file(conf_path)
     if re.search(r'^\s*port\s+\d+', text, re.M):
         text = re.sub(r'^\s*port\s+\d+', f"port {new_port}", text, flags=re.M)
@@ -172,6 +186,7 @@ def set_conf_port(conf_path, new_port):
     write_file(conf_path, text)
 
 def set_conf_proto(conf_path, new_proto):
+    """Altera o protocolo na configuração"""
     text = read_file(conf_path)
     if re.search(r'^\s*proto\s+\S+', text, re.M):
         text = re.sub(r'^\s*proto\s+\S+', f"proto {new_proto}", text, flags=re.M)
@@ -180,10 +195,11 @@ def set_conf_proto(conf_path, new_proto):
     write_file(conf_path, text)
 
 def set_conf_dns(conf_path, dns_list):
+    """Altera os servidores DNS na configuração"""
     text = read_file(conf_path)
     # remove linhas push DNS existentes
     text = re.sub(r'^\s*push\s+"dhcp-option\s+DNS\s+[0-9\.]+"\s*\n', "", text, flags=re.M|re.I)
-    # insere duas linhas (ou quantas vierem)
+    # insere novas linhas DNS
     insert = ""
     for ip in dns_list:
         insert += f'push "dhcp-option DNS {ip}"\n'
@@ -195,6 +211,7 @@ def set_conf_dns(conf_path, dns_list):
     write_file(conf_path, text)
 
 def update_clients_configs(new_port=None, new_proto=None):
+    """Atualiza configurações dos clientes existentes"""
     dirs = [str(Path("/root/ovpn-clients")), "/root"]
     for d in dirs:
         if not os.path.isdir(d):
@@ -219,22 +236,27 @@ def update_clients_configs(new_port=None, new_proto=None):
 # ---------------------- Firewall helpers ----------------------
 
 def nft_active():
+    """Verifica se nftables está ativo"""
     if not os.path.exists("/etc/nftables.conf"):
         return False
     st = run_cmd(["systemctl", "is-active", "nftables"])
     return st.stdout.strip() == "active"
 
 def firewalld_active():
+    """Verifica se firewalld está ativo"""
     st = run_cmd(["systemctl", "is-active", "firewalld"])
     return st.stdout.strip() == "active"
 
 def iptables_present():
+    """Verifica se iptables está presente"""
     return run_cmd(["which", "iptables"]).returncode == 0
 
 def ip6tables_present():
+    """Verifica se ip6tables está presente"""
     return run_cmd(["which", "ip6tables"]).returncode == 0
 
 def update_firewall_port(old_port, new_port):
+    """Atualiza porta no firewall"""
     # nftables: troca dport old -> new e aplica
     if nft_active():
         try:
@@ -245,6 +267,7 @@ def update_firewall_port(old_port, new_port):
                 run_cmd(["nft", "-f", "/etc/nftables.conf"])
         except Exception:
             pass
+    
     # firewalld
     if firewalld_active():
         run_cmd(["firewall-cmd", f"--remove-port={old_port}/udp", "--permanent"])
@@ -252,61 +275,75 @@ def update_firewall_port(old_port, new_port):
         run_cmd(["firewall-cmd", f"--add-port={new_port}/udp", "--permanent"])
         run_cmd(["firewall-cmd", f"--add-port={new_port}/tcp", "--permanent"])
         run_cmd(["firewall-cmd", "--reload"])
+    
     # iptables
     if iptables_present():
         # remover regras antigas se existirem
-        run_cmd(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(old_port), "-j", " ACCEPT"])
-        run_cmd(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(old_port), "-j", " ACCEPT"])
-        # adicionar novas (tanto udp quanto tcp para suportar troca de protocolo sem refazer firewall)
-        run_cmd(["iptables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if _.last_returncode != 0 if (_:=run_cmd(["iptables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])) else False:
+        run_cmd(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(old_port), "-j", "ACCEPT"])
+        run_cmd(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(old_port), "-j", "ACCEPT"])
+        
+        # adicionar novas (verifica se já existe antes)
+        check_udp = run_cmd(["iptables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
+        if check_udp.returncode != 0:
             run_cmd(["iptables", "-A", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        run_cmd(["iptables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if _.last_returncode != 0 if (_:=run_cmd(["iptables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])) else False:
+        
+        check_tcp = run_cmd(["iptables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
+        if check_tcp.returncode != 0:
             run_cmd(["iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
+        
         # salvar se netfilter-persistent existir
         if os.path.exists("/etc/iptables/rules.v4"):
-            run_cmd(["iptables-save"], timeout=10)
-            try:
-                with open("/etc/iptables/rules.v4", "w") as f:
-                    f.write(run_cmd(["iptables-save"]).stdout)
-            except Exception:
-                pass
+            save_result = run_cmd(["iptables-save"], timeout=10)
+            if save_result.returncode == 0:
+                try:
+                    with open("/etc/iptables/rules.v4", "w") as f:
+                        f.write(save_result.stdout)
+                except Exception:
+                    pass
+    
     # ip6tables (opcional)
     if ip6tables_present():
-        run_cmd(["ip6tables", "-D", "INPUT", "-p", "udp", "--dport", str(old_port), "-j", " ACCEPT"])
-        run_cmd(["ip6tables", "-D", "INPUT", "-p", "tcp", "--dport", str(old_port), "-j", " ACCEPT"])
-        run_cmd(["ip6tables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if _.last_returncode != 0 if (_:=run_cmd(["ip6tables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])) else False:
+        run_cmd(["ip6tables", "-D", "INPUT", "-p", "udp", "--dport", str(old_port), "-j", "ACCEPT"])
+        run_cmd(["ip6tables", "-D", "INPUT", "-p", "tcp", "--dport", str(old_port), "-j", "ACCEPT"])
+        
+        check_udp6 = run_cmd(["ip6tables", "-C", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
+        if check_udp6.returncode != 0:
             run_cmd(["ip6tables", "-A", "INPUT", "-p", "udp", "--dport", str(new_port), "-j", "ACCEPT"])
-        run_cmd(["ip6tables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
-        if _.last_returncode != 0 if (_:=run_cmd(["ip6tables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])) else False:
+        
+        check_tcp6 = run_cmd(["ip6tables", "-C", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
+        if check_tcp6.returncode != 0:
             run_cmd(["ip6tables", "-A", "INPUT", "-p", "tcp", "--dport", str(new_port), "-j", "ACCEPT"])
 
 # ---------------------- Controle do serviço ----------------------
 
 def restart_openvpn():
+    """Reinicia o serviço OpenVPN"""
     unit = pick_server_unit()
     if not unit:
         return False, "Serviço OpenVPN não encontrado"
+    
     run_cmd(["systemctl", "daemon-reload"])
     res = run_cmd(["systemctl", "restart", unit], timeout=20)
     if res.returncode != 0:
         return False, res.stderr.strip() or "Falha ao reiniciar serviço"
+    
     # checar estado
     time.sleep(1.5)
     st = run_cmd(["systemctl", "is-active", unit])
     if st.stdout.strip() == "active":
         return True, "Serviço reiniciado"
+    
     log = run_cmd(["journalctl", "-xeu", unit, "--no-pager", "-n", "30"], timeout=10).stdout
     return False, f"Falha ao iniciar. Logs:\n{log}"
 
 # ---------------------- Integração com openvpn.sh ----------------------
 
 def descobrir_script_openvpn():
+    """Descobre o caminho do script bash de instalação"""
     env_path = os.environ.get("OVPN_SCRIPT_PATH")
     if env_path and os.path.exists(env_path):
         return env_path
+    
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     candidates = [
         os.path.join(root_dir, "conexoes", "openvpn.sh"),
@@ -321,6 +358,7 @@ def descobrir_script_openvpn():
     return None
 
 def executar_script_openvpn():
+    """Executa o script bash de instalação"""
     script_path = descobrir_script_openvpn()
     if not script_path:
         return False, "Script openvpn.sh/openvpn-manager.sh não encontrado."
@@ -338,23 +376,28 @@ def executar_script_openvpn():
 # ---------------------- Ações do menu ----------------------
 
 def is_valid_port(p):
+    """Valida se é uma porta válida"""
     try:
         n = int(p)
         return 1 <= n <= 65535
     except Exception:
         return False
 
+# Regex para validar IPv4
 ipv4_re = re.compile(r'^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$')
 
 def alterar_porta():
+    """Altera a porta do OpenVPN"""
     conf = find_server_conf()
     if not conf:
         return False, "OpenVPN não instalado/configurado."
+    
     port, proto, _, _ = parse_port_proto_dns(conf)
 
     TerminalManager.before_input()
     new_port = input(f"\n{MC.BOLD}Nova porta (atual {port}): {MC.RESET}").strip()
     TerminalManager.after_input()
+    
     if not is_valid_port(new_port):
         return False, "Porta inválida."
 
@@ -374,9 +417,11 @@ def alterar_porta():
         return False, f"Erro ao alterar porta: {e}"
 
 def alterar_protocolo():
+    """Altera o protocolo do OpenVPN"""
     conf = find_server_conf()
     if not conf:
         return False, "OpenVPN não instalado/configurado."
+    
     port, proto, _, _ = parse_port_proto_dns(conf)
     current = proto.upper()
 
@@ -403,9 +448,11 @@ def alterar_protocolo():
         return False, f"Erro ao alterar protocolo: {e}"
 
 def alterar_dns():
+    """Altera os servidores DNS do OpenVPN"""
     conf = find_server_conf()
     if not conf:
         return False, "OpenVPN não instalado/configurado."
+    
     _, _, dns_label, dns_list = parse_port_proto_dns(conf)
 
     print(f"\n{MC.WHITE}DNS atual: {MC.CYAN}{dns_label} {('(' + ', '.join(dns_list) + ')') if dns_list else ''}{MC.RESET}")
@@ -447,6 +494,7 @@ def alterar_dns():
         return False, f"Erro ao alterar DNS: {e}"
 
 def desinstalar_openvpn():
+    """Desinstala o OpenVPN"""
     # Tenta usar o script bash, se existir
     script_path = descobrir_script_openvpn()
     if script_path:
@@ -459,6 +507,7 @@ def desinstalar_openvpn():
     TerminalManager.after_input()
     if c != "s":
         return False, "Operação cancelada."
+    
     # Detecta distro basica
     os_release = {}
     try:
@@ -469,6 +518,7 @@ def desinstalar_openvpn():
                     os_release[k] = v.strip('"')
     except Exception:
         pass
+    
     id_like = (os_release.get("ID_LIKE", "") + " " + os_release.get("ID", "")).lower()
     if any(x in id_like for x in ["debian", "ubuntu"]):
         run_cmd(["systemctl", "stop", pick_server_unit() or "openvpn@server"])
@@ -479,16 +529,19 @@ def desinstalar_openvpn():
         run_cmd(["systemctl", "stop", pick_server_unit() or "openvpn@server"])
         r = run_cmd(["yum", "remove", "-y", "openvpn", "easy-rsa"], timeout=120)
         ok = r.returncode == 0
+    
     return ok, ("Desinstalado" if ok else "Falha ao desinstalar")
 
 # ---------------------- UI ----------------------
 
 def build_status_box():
+    """Constrói a caixa de status"""
     installed = verificar_openvpn_instalado()
     status_str = "Openvpn instalado" if installed else "Openvpn não instalado"
     porta = "—"
     protocolo = "—"
     dns_label = "—"
+    
     if installed:
         conf = find_server_conf()
         if conf:
@@ -498,6 +551,7 @@ def build_status_box():
             dns_label = dns_lab
             # normaliza label para exibição como no pedido
             dns_label = {"google": "google", "cloudflare": "cloudflare"}.get(dns_label, dns_label)
+    
     lines = [
         f"{MC.CYAN_LIGHT}Status:{MC.RESET} {MC.WHITE}{status_str}{MC.RESET}",
         f"{MC.CYAN_LIGHT}Porta:{MC.RESET} {MC.WHITE}{porta}{MC.RESET}",
@@ -507,7 +561,8 @@ def build_status_box():
     return modern_box("STATUS", lines, "", MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
 
 def build_menu_frame(status_msg=""):
-    s=[]
+    """Constrói o frame do menu principal"""
+    s = []
     s.append(simple_header("GERENCIADOR OPENVPN"))
     s.append(build_status_box())
     s.append("\n")
@@ -522,7 +577,8 @@ def build_menu_frame(status_msg=""):
     return "".join(s)
 
 def build_operation_frame(title, icon, color, msg="Aguarde..."):
-    s=[]
+    """Constrói frame de operação em andamento"""
+    s = []
     s.append(simple_header("OPERAÇÃO EM ANDAMENTO"))
     s.append(modern_box(title, [
         f"{MC.YELLOW_GRADIENT}Não interrompa o processo{MC.RESET}",
@@ -534,9 +590,11 @@ def build_operation_frame(title, icon, color, msg="Aguarde..."):
 # ---------------------- Loop principal ----------------------
 
 def main_menu():
+    """Menu principal do gerenciador OpenVPN"""
     ensure_root()
     TerminalManager.enter_alt_screen()
     status_msg = ""
+    
     try:
         while True:
             TerminalManager.render(build_menu_frame(status_msg))
