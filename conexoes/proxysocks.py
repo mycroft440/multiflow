@@ -12,9 +12,9 @@ from queue import Queue
 
 # Constants
 class Constants:
-    PROXY_SERVER_VERSION = "1.0"
-    PROXY_SERVER_AUTHOR = "mycroft"
-    DEFAULT_PORT = 80
+    PROXY_SERVER_VERSION = "1.2.6"
+    PROXY_SERVER_AUTHOR = "@DuTra01"
+    DEFAULT_PORT = 8080
     DEFAULT_WORKERS = 4
     DEFAULT_BUFFER_SIZE = 16384  # Aumentado com melhorias
     DEFAULT_SSH_PORT = 22
@@ -64,7 +64,6 @@ class ProxyConfig:
         self.ssh_port = Constants.DEFAULT_SSH_PORT
         self.openvpn_port = Constants.DEFAULT_OPENVPN_PORT
         self.v2ray_port = Constants.DEFAULT_V2RAY_PORT
-        self.show_help = False
         self.remote_host = "127.0.0.1"  # Flexível com melhorias
 
 # ArgumentParser
@@ -86,7 +85,6 @@ class ArgumentParser:
         parser.add_argument("--openvpn-port", type=int, default=Constants.DEFAULT_OPENVPN_PORT, help="OpenVPN port")
         parser.add_argument("--v2ray-port", type=int, default=Constants.DEFAULT_V2RAY_PORT, help="V2Ray port")
         parser.add_argument("--remote-host", default="127.0.0.1", help="Remote host for connections")
-        parser.add_argument("--help", action="store_true", help="Show help")
         
         config = ProxyConfig()
         parsed = parser.parse_args(args)
@@ -283,9 +281,9 @@ class ProxyServer:
                 context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
                 if not self.config.cert_path:
                     log_info("Generating temp cert for HTTPS...")
-                    # Simule geração (em real, use subprocess para openssl)
-                    self.config.cert_path = "/path/to/temp.crt"  # Ajuste manual
-                context.load_cert_chain(certfile=self.config.cert_path)
+                    # Simule ou use subprocess: import subprocess; subprocess.run(['openssl', 'req', '-new', '-x509', '-days', '365', '-nodes', '-out', 'temp.crt', '-keyout', 'temp.key', '-subj', '/CN=localhost'])
+                    self.config.cert_path = "temp.crt"  # Ajuste path real
+                context.load_cert_chain(certfile=self.config.cert_path, keyfile="temp.key")
                 client_socket = context.wrap_socket(client_socket, server_side=True)
 
             if self.is_http_request(initial_data):
