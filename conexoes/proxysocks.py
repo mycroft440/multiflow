@@ -14,7 +14,7 @@ from queue import Queue
 class Constants:
     PROXY_SERVER_VERSION = "1.0"
     PROXY_SERVER_AUTHOR = "mycroft"
-    DEFAULT_PORT = 8080
+    DEFAULT_PORT = 80
     DEFAULT_WORKERS = 4
     DEFAULT_BUFFER_SIZE = 16384  # Aumentado com melhorias
     DEFAULT_SSH_PORT = 22
