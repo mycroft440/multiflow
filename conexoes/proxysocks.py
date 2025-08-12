@@ -12,8 +12,8 @@ from queue import Queue
 
 # Constants
 class Constants:
-    PROXY_SERVER_VERSION = "1.2.6"
-    PROXY_SERVER_AUTHOR = "@DuTra01"
+    PROXY_SERVER_VERSION = "1.0"
+    PROXY_SERVER_AUTHOR = "mycroft"
     DEFAULT_PORT = 8080
     DEFAULT_WORKERS = 4
     DEFAULT_BUFFER_SIZE = 16384  # Aumentado com melhorias
