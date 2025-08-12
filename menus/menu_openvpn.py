@@ -827,7 +827,7 @@ def build_menu_frame(status_msg=""):
     s.append(menu_option("2", "Alterar porta", "", MC.CYAN_GRADIENT))
     s.append(menu_option("3", "Alterar protocolo", "", MC.BLUE_GRADIENT))
     s.append(menu_option("4", "Alterar Dns", "", MC.ORANGE_GRADIENT))
-    s.append(menu_option("5", "Gerar e baixar arquivo ovpn", "", MC.MAGENTA))
+    s.append(menu_option("5", "Gerar e baixar arquivo ovpn", "", MC.MAGENTA_GRADIENT))  # Corrigido aqui
     s.append(menu_option("6", "Desinstalar Openvpn", "", MC.RED_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar", "", MC.YELLOW_GRADIENT))
@@ -876,7 +876,7 @@ def main_menu():
                 ok, msg = alterar_dns()
                 status_msg = msg if ok else f"Erro: {msg}"
             elif choice == "5":
-                TerminalManager.render(build_operation_frame("Gerar arquivo OVPN", "", MC.MAGENTA, "Criando arquivo e link..."))
+                TerminalManager.render(build_operation_frame("Gerar arquivo OVPN", "", MC.MAGENTA_GRADIENT, "Criando arquivo e link..."))  # Corrigido aqui
                 ok, msg = gerar_download_ovpn()
                 status_msg = msg if ok else f"Erro: {msg}"
             elif choice == "6":
