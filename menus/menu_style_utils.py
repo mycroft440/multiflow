@@ -92,9 +92,10 @@ class MC:
     YELLOW_GRADIENT='\033[38;2;250;204;21m'; YELLOW_LIGHT='\033[38;2;254;240;138m'; YELLOW_DARK='\033[38;2;202;138;4m'
     BLUE_GRADIENT='\033[38;2;59;130;246m'; BLUE_LIGHT='\033[38;2;191;219;254m'; BLUE_DARK='\033[38;2;29;78;216m'
     PINK_GRADIENT='\033[38;2;236;72;153m'; PINK_LIGHT='\033[38;2;251;207;232m'
-    # Alias solicitado
-    HEADER='\033[95m'
-    MAGENTA_GRADIENT=HEADER
+    # Aliases solicitados
+    HEADER='\033[95m'           # para compatibilidade
+    MAGENTA_GRADIENT=HEADER     # alias para corrigir uso de MC.MAGENTA_GRADIENT
+    YELLOW='\033[93m'           # alias para corrigir uso de MC.YELLOW
     WHITE='\033[97m'; GRAY='\033[38;2;156;163;175m'; LIGHT_GRAY='\033[38;2;229;231;235m'; DARK_GRAY='\033[38;2;75;85;99m'
 
 class Icons:
