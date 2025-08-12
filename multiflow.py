@@ -1,692 +1,752 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+MultiFlowPX Proxy Server Manager
+Sistema de gerenciamento para servidor proxy MultiFlowPX com interface CLI interativa.
+"""
 
-import sys
 import os
-import time
-import re
+import sys
 import subprocess
-import psutil
+import json
+import time
 import shutil
-from datetime import datetime
-import random
-import importlib
-import importlib.util
+import re
+from functools import wraps
+from typing import Dict, List, Optional, Any
 
-# ==================== BOOTSTRAP DE IMPORTAÇÃO ====================
-# Tenta localizar a raiz do projeto (contendo 'menus' e 'ferramentas'),
-# ajusta sys.path e importa os módulos necessários.
-def _find_multiflow_root():
-    candidates = []
-    # 1) Variável de ambiente
-    env_home = os.environ.get("MULTIFLOW_HOME")
-    if env_home:
-        candidates.append(env_home)
+# --- Constantes de Configuração ---
+CONFIG_FILE = "/etc/multiflowpx/config.json"
+MIN_PORT = 1
+MAX_PORT = 65535
+DEFAULT_WORKERS = 4
+DEFAULT_BUFFER_SIZE = 8192
+MIN_LOG_LEVEL = 0
+MAX_LOG_LEVEL = 2
 
-    # 2) Caminho padrão
-    candidates.append("/opt/multiflow")
-
-    # 3) Diretório do script e ascendentes
-    try:
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        candidates.append(script_dir)
-        # Subir alguns níveis procurando 'menus' e 'ferramentas'
-        parent = script_dir
-        for _ in range(5):
-            parent = os.path.dirname(parent)
-            if parent and parent not in candidates:
-                candidates.append(parent)
-    except Exception:
-        pass
-
-    # 4) Alguns caminhos comuns alternativos
-    for extra in ("/root/multiflow", "/usr/local/multiflow", "/usr/share/multiflow"):
-        candidates.append(extra)
-
-    # Normaliza e remove duplicados preservando ordem
-    normalized = []
-    seen = set()
-    for c in candidates:
-        if not c:
-            continue
-        nc = os.path.abspath(c)
-        if nc not in seen:
-            normalized.append(nc)
-            seen.add(nc)
-
-    # Valida candidatos: precisam ter 'menus' e 'ferramentas'
-    for root in normalized:
-        if os.path.isdir(os.path.join(root, "menus")) and os.path.isdir(os.path.join(root, "ferramentas")):
-            return root
-    return None
-
-def _import_by_module_name(modname):
-    try:
-        return importlib.import_module(modname)
-    except Exception:
-        return None
-
-def _import_by_file_path(alias, filepath):
-    if not os.path.exists(filepath):
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location(alias, filepath)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
-    except Exception:
-        return None
-    return None
-
-def bootstrap_imports():
-    # Tenta adicionar a raiz ao sys.path e importar como pacote
-    root = _find_multiflow_root()
-    if root and root not in sys.path:
-        sys.path.insert(0, root)
-
-    targets = {
-        "manusear_usuarios": "ferramentas.manusear_usuarios",
-        "menu_badvpn": "menus.menu_badvpn",
-        "menu_proxysocks": "menus.menu_proxysocks",
-        "menu_bloqueador": "menus.menu_bloqueador",
-        "menu_servidor_download": "menus.menu_servidor_download",
-        "menu_openvpn": "menus.menu_openvpn",
-    }
-
-    imported = {}
-    # 1) Tenta importar por nome de módulo (requer __init__.py nas pastas)
-    for alias, modname in targets.items():
-        mod = _import_by_module_name(modname)
-        if mod:
-            imported[alias] = mod
-
-    # 2) Fallback: importar por caminho de arquivo
-    missing = [alias for alias in targets.keys() if alias not in imported]
-    if missing and root:
-        for alias in missing:
-            modname = targets[alias]
-            rel = modname.replace(".", "/") + ".py"
-            modpath = os.path.join(root, rel)
-            mod = _import_by_file_path(alias, modpath)
-            if mod:
-                imported[alias] = mod
-
-    # 3) Se ainda faltam, mostra diagnóstico útil
-    still_missing = [alias for alias in targets.keys() if alias not in imported]
-    if still_missing:
-        red = "\033[91m"
-        yel = "\033[93m"
-        rst = "\033[0m"
-        sys.stderr.write(f"{red}[ERRO] Não foi possível carregar os módulos: {', '.join(still_missing)}{rst}\n")
-        sys.stderr.write(f"{yel}Dicas:\n"
-                         f" - Verifique a estrutura: {root or '/opt/multiflow'}/menus e /ferramentas existem?\n"
-                         f" - Crie __init__.py dentro de 'menus' e 'ferramentas' para habilitar import como pacote.\n"
-                         f" - Confirme MULTIFLOW_HOME ou o caminho real do projeto.\n"
-                         f" - Você está rodando com o Python correto (sudo pode usar outro Python)?{rst}\n")
-        sys.stderr.write(f"\nCaminho detectado: {root or 'N/D'}\n")
-        sys.stderr.write("sys.path atual:\n - " + "\n - ".join(sys.path) + "\n")
-        sys.exit(1)
-
-    # Exporta para globals
-    globals().update(imported)
-
-# Inicializa importações do projeto
-bootstrap_imports()
-
-# Importando módulos do projeto (já resolvidos pelo bootstrap)
-from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
-from menus import menu_badvpn, menu_proxysocks, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
-
-# ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
-class TerminalManager:
-    _in_alt = False
-    USE_ALT = True  # Deixe False se perceber flicker ou comportamento estranho.
-
-    @staticmethod
-    def size():
-        ts = shutil.get_terminal_size(fallback=(80, 24))
-        return ts.columns, ts.lines
-
-    @staticmethod
-    def enter_alt_screen():
-        if TerminalManager.USE_ALT and not TerminalManager._in_alt:
-            sys.stdout.write("\033[?1049h")
-            sys.stdout.flush()
-            TerminalManager._in_alt = True
-
-    @staticmethod
-    def leave_alt_screen():
-        if TerminalManager._in_alt:
-            sys.stdout.write("\033[?1049l")
-            sys.stdout.flush()
-            TerminalManager._in_alt = False
-
-    @staticmethod
-    def _manual_clear_all_cells():
-        cols, lines = TerminalManager.size()
-        blank_line = " " * cols
-        sys.stdout.write("\033[0m\033[?7l")
-        for row in range(1, lines + 1):
-            sys.stdout.write(f"\033[{row};1H{blank_line}")
-        sys.stdout.write("\033[1;1H\033[?7h")
-        sys.stdout.flush()
-
-    @staticmethod
-    def render(frame_str):
-        sys.stdout.write("\033[?25l")
-        sys.stdout.flush()
-        TerminalManager._manual_clear_all_cells()
-        sys.stdout.write("\033[1;1H")
-        sys.stdout.write(frame_str)
-        sys.stdout.flush()
-
-    @staticmethod
-    def before_input():
-        sys.stdout.write("\033[?25h\033[2K\r")
-        sys.stdout.flush()
-
-    @staticmethod
-    def after_input():
-        sys.stdout.write("\033[?25l")
-        sys.stdout.flush()
-
-# ==================== CORES E ÍCONES ====================
-class MC:
-    RESET = '\033[0m'
+# --- Cores para o Terminal ---
+class Colors:
+    """Classe para gerenciar cores ANSI do terminal."""
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
     BOLD = '\033[1m'
-    DIM = '\033[2m'
-    ITALIC = '\033[3m'
     UNDERLINE = '\033[4m'
-    REVERSE = '\033[7m'
 
-    PURPLE_GRADIENT = '\033[38;2;147;51;234m'
-    PURPLE_LIGHT = '\033[38;2;196;181;253m'
-    PURPLE_DARK = '\033[38;2;107;33;168m'
-    CYAN_GRADIENT = '\033[38;2;6;182;212m'
-    CYAN_LIGHT = '\033[38;2;165;243;252m'
-    CYAN_DARK = '\033[38;2;14;116;144m'
-    GREEN_GRADIENT = '\033[38;2;34;197;94m'
-    GREEN_LIGHT = '\033[38;2;134;239;172m'
-    GREEN_DARK = '\033[38;2;22;163;74m'
-    ORANGE_GRADIENT = '\033[38;2;251;146;60m'
-    ORANGE_LIGHT = '\033[38;2;254;215;170m'
-    ORANGE_DARK = '\033[38;2;234;88;12m'
-    RED_GRADIENT = '\033[38;2;239;68;68m'
-    RED_LIGHT = '\033[38;2;254;202;202m'
-    RED_DARK = '\033[38;2;185;28;28m'
-    YELLOW_GRADIENT = '\033[38;2;250;204;21m'
-    YELLOW_LIGHT = '\033[38;2;254;240;138m'
-    YELLOW_DARK = '\033[38;2;202;138;4m'
-    BLUE_GRADIENT = '\033[38;2;59;130;246m'
-    BLUE_LIGHT = '\033[38;2;191;219;254m'
-    BLUE_DARK = '\033[38;2;29;78;216m'
-    PINK_GRADIENT = '\033[38;2;236;72;153m'
-    PINK_LIGHT = '\033[38;2;251;207;232m'
-    WHITE = '\033[97m'
-    GRAY = '\033[38;2;156;163;175m'
-    LIGHT_GRAY = '\033[38;2;229;231;235m'
-    DARK_GRAY = '\033[38;2;75;85;99m'
+# --- Decorators ---
+def requires_root(func):
+    """Decorator para métodos que requerem privilégios root."""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if not self.check_root():
+            return None
+        return func(self, *args, **kwargs)
+    return wrapper
 
-class Icons:
-    SERVER = "🖥️ "
-    USERS = "👥 "
-    NETWORK = "🌐 "
-    TOOLS = "🔧 "
-    SHIELD = "🛡️ "
-    CHART = "📊 "
-    CPU = "⚙️ "
-    RAM = "💾 "
-    ACTIVE = "🟢"
-    INACTIVE = "🔴"
-    BACK = "◀ "
-    EXIT = "🚪 "
-    CLOCK = "🕐 "
-    SYSTEM = "💻 "
-    UPDATE = "� "
-    DOWNLOAD = "📥 "
-    KEY = "🔑 "
-    LOCK = "🔒 "
-    UNLOCK = "🔓 "
-    CHECK = "✅ "
-    CROSS = "❌ "
-    WARNING = "⚠️ "
-    INFO = "ℹ️ "
-    ROCKET = "🚀 "
-    DIAMOND = "💎 "
+def requires_systemctl(func):
+    """Decorator para métodos que requerem systemctl."""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if not self.systemctl_path:
+            self._notify_systemctl_unavailable()
+            return None
+        return func(self, *args, **kwargs)
+    return wrapper
 
-    BOX_TOP_LEFT = "╭"
-    BOX_TOP_RIGHT = "╮"
-    BOX_BOTTOM_LEFT = "╰"
-    BOX_BOTTOM_RIGHT = "╯"
-    BOX_HORIZONTAL = "─"
-    BOX_VERTICAL = "│"
-
-# ==================== HELPERS DE UI (RETORNAM STRING) ====================
-def gradient_line(width=80, char='═', colors=(MC.PURPLE_GRADIENT, MC.CYAN_GRADIENT, MC.BLUE_GRADIENT)):
-    seg = max(1, width // len(colors))
-    out = []
-    used = 0
-    for i, c in enumerate(colors):
-        run = seg if i < len(colors) - 1 else (width - used)
-        out.append(f"{c}{char * run}")
-        used += run
-    return "".join(out) + MC.RESET + "\n"
-
-def modern_header():
-    cols, _ = TerminalManager.size()
-    width = max(60, min(cols - 2, 100))
-    s = []
-    s.append(gradient_line(width))
-    logo_lines = [
-        f"{MC.PURPLE_LIGHT}███╗   ███╗{MC.CYAN_LIGHT}██╗   ██╗{MC.BLUE_LIGHT}██╗  ████████╗{MC.GREEN_LIGHT}██╗███████╗{MC.ORANGE_LIGHT}██╗      {MC.PINK_LIGHT}██████╗ {MC.YELLOW_LIGHT}██╗    ██╗{MC.RESET}",
-        f"{MC.PURPLE_GRADIENT}████╗ ████║{MC.CYAN_GRADIENT}██║   ██║{MC.BLUE_GRADIENT}██║  ╚══██╔══╝{MC.GREEN_GRADIENT}██║██╔════╝{MC.ORANGE_GRADIENT}██║     {MC.PINK_GRADIENT}██╔═══██╗{MC.YELLOW_GRADIENT}██║    ██║{MC.RESET}",
-        f"{MC.PURPLE_GRADIENT}██╔████╔██║{MC.CYAN_GRADIENT}██║   ██║{MC.BLUE_GRADIENT}██║     ██║   {MC.GREEN_GRADIENT}██║█████╗  {MC.ORANGE_GRADIENT}██║     {MC.PINK_GRADIENT}██║   ██║{MC.YELLOW_GRADIENT}██║ █╗ ██║{MC.RESET}",
-        f"{MC.PURPLE_DARK}██║╚██╔╝██║{MC.CYAN_DARK}██║   ██║{MC.BLUE_DARK}██║     ██║   {MC.GREEN_DARK}██║██╔══╝  {MC.ORANGE_DARK}██║     {MC.RED_GRADIENT}██║   ██║{MC.YELLOW_DARK}██║███╗██║{MC.RESET}",
-        f"{MC.PURPLE_DARK}██║ ╚═╝ ██║{MC.CYAN_DARK}╚██████╔╝{MC.BLUE_DARK}███████╗██║   {MC.GREEN_DARK}██║██║     {MC.ORANGE_DARK}███████╗{MC.RED_DARK}╚██████╔╝{MC.YELLOW_DARK}╚███╔███╔╝{MC.RESET}",
-        f"{MC.DARK_GRAY}╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝{MC.RESET}"
-    ]
-    s.extend(["  " + l + "\n" for l in logo_lines])
-    s.append(f"\n{MC.GRAY}{'═' * width}{MC.RESET}\n")
-    s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}{'Sistema Avançado de Gerenciamento VPS'.center(width)}{MC.RESET}\n")
-    s.append(f"{MC.GRAY}{'═' * width}{MC.RESET}\n\n")
-    return "".join(s)
-
-def modern_box(title, content_lines, icon="", primary=MC.CYAN_GRADIENT, secondary=MC.CYAN_LIGHT):
-    cols, _ = TerminalManager.size()
-    width = max(54, min(cols - 6, 100))
-    title_text = f" {icon}{title} " if icon else f" {title} "
-    header = (f"{primary}{Icons.BOX_TOP_LEFT}{Icons.BOX_HORIZONTAL * 10}"
-              f"{secondary}┤{MC.BOLD}{MC.WHITE}{title_text}{MC.RESET}{secondary}├"
-              f"{primary}{Icons.BOX_HORIZONTAL * (width - len(title_text) - 12)}"
-              f"{Icons.BOX_TOP_RIGHT}{MC.RESET}\n")
-    body = ""
-    for line in content_lines:
-        clean = re.sub(r'\033\[[0-9;]*m', '', line)
-        pad = width - len(clean) - 2
-        if pad < 0:
-            vis = clean[:width - 5] + "..."
-            line = line.replace(clean, vis)
-            pad = width - len(vis) - 2
-        body += f"{primary}{Icons.BOX_VERTICAL}{MC.RESET} {line}{' ' * pad} {primary}{Icons.BOX_VERTICAL}{MC.RESET}\n"
-    footer = f"{primary}{Icons.BOX_BOTTOM_LEFT}{Icons.BOX_HORIZONTAL * width}{Icons.BOX_BOTTOM_RIGHT}{MC.RESET}\n"
-    return header + body + footer
-
-def menu_option(number, text, icon="", color=MC.CYAN_GRADIENT, badge=""):
-    num = f"{color}{MC.BOLD}[{number}]{MC.RESET}" if number != "0" else f"{MC.RED_GRADIENT}{MC.BOLD}[0]{MC.RESET}"
-    b = f" {MC.PURPLE_GRADIENT}{MC.WHITE}{MC.BOLD} {badge} {MC.RESET}" if badge else ""
-    return f"  {num} {icon}{MC.WHITE}{text}{b}{MC.RESET}\n"
-
-def progress_bar(percent, width=18):
-    filled = int(percent * width / 100)
-    empty = width - filled
-    if percent < 30: c = MC.GREEN_GRADIENT
-    elif percent < 60: c = MC.YELLOW_GRADIENT
-    elif percent < 80: c = MC.ORANGE_GRADIENT
-    else: c = MC.RED_GRADIENT
-    return f"[{c}{'█' * filled}{MC.DARK_GRAY}{'░' * empty}{MC.RESET}] {c}{percent:5.1f}%{MC.RESET}"
-
-def footer_line(status_msg=""):
-    cols, _ = TerminalManager.size()
-    width = max(60, min(cols - 2, 100))
-    bar = f"\n{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
-    status = f"{MC.GRAY}MultiFlow │ github.com/seu-repo{MC.RESET}"
-    if status_msg:
-        status += f"  {MC.YELLOW_GRADIENT}{status_msg}{MC.RESET}"
-    return bar + status + "\n" + f"{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
-
-# ==================== INFO DO SISTEMA ====================
-def monitorar_uso_recursos(intervalo_cpu=0.10):
-    try:
-        ram = psutil.virtual_memory()
-        cpu_percent = psutil.cpu_percent(interval=intervalo_cpu)
-        return {'ram_percent': ram.percent, 'cpu_percent': cpu_percent}
-    except Exception:
-        return {'ram_percent': 0, 'cpu_percent': 0}
-
-def get_system_info():
-    info = {"os_name": "Desconhecido", "ram_percent": 0, "cpu_percent": 0}
-    try:
-        if os.path.exists('/etc/os-release'):
-            with open('/etc/os-release', 'r') as f:
-                pairs = [line.strip().split('=', 1) for line in f if '=' in line]
-            os_info = dict(pairs)
-            info["os_name"] = os_info.get('PRETTY_NAME', 'Linux').strip('"')
-        info.update(monitorar_uso_recursos())
-    except Exception:
-        pass
-    return info
-
-def get_system_uptime():
-    try:
-        with open('/proc/uptime', 'r') as f:
-            up = float(f.readline().split()[0])
-        d = int(up // 86400)
-        h = int((up % 86400) // 3600)
-        m = int((up % 3600) // 60)
-        if d: return f"{d}d {h}h {m}m"
-        if h: return f"{h}h {m}m"
-        return f"{m}m"
-    except Exception:
-        return "N/A"
-
-def get_active_services():
-    services = []
-    def run_cmd(cmd):
+class ConfigManager:
+    """Gerencia as configurações do proxy."""
+    
+    def __init__(self):
+        self.default_config = {
+            "mode": [],
+            "port": [],
+            "host": "127.0.0.1:22",
+            "sni": "example.com",
+            "workers": DEFAULT_WORKERS,
+            "buffer_size": DEFAULT_BUFFER_SIZE,
+            "log_level": 1
+        }
+        self.config = self.load_config()
+    
+    def load_config(self) -> Dict[str, Any]:
+        """Carrega as configurações do arquivo JSON de forma robusta."""
+        config = self.default_config.copy()
+        
         try:
-            return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-        except Exception:
-            return ""
-    swapon = run_cmd(['swapon', '--show'])
-    if 'zram' in swapon:
-        services.append(f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} ZRAM{MC.RESET}")
-    if '/swapfile' in swapon or 'partition' in swapon:
-        services.append(f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} SWAP{MC.RESET}")
-    try:
-        if os.path.exists(menu_proxysocks.STATE_FILE):
-            with open(menu_proxysocks.STATE_FILE, 'r') as f:
-                pid, port = f.read().strip().split(':')
-            if psutil.pid_exists(int(pid)):
-                services.append(f"{MC.BLUE_GRADIENT}{Icons.ACTIVE} Proxy:{port}{MC.RESET}")
-    except Exception:
-        pass
-    if os.path.exists('/etc/openvpn/server.conf'):
-        services.append(f"{MC.CYAN_GRADIENT}{Icons.ACTIVE} OpenVPN{MC.RESET}")
-    try:
-        r = subprocess.run(["systemctl", "is-active", "badvpn-udpgw"], capture_output=True, text=True)
-        if r.returncode == 0 and r.stdout.strip() == "active":
-            services.append(f"{MC.PURPLE_GRADIENT}{Icons.ACTIVE} BadVPN{MC.RESET}")
-    except Exception:
-        pass
-    try:
-        r = subprocess.run(["systemctl", "is-active", "ssh"], capture_output=True, text=True)
-        if r.returncode == 0 and r.stdout.strip() == "active":
-            services.append(f"{MC.ORANGE_GRADIENT}{Icons.ACTIVE} SSH{MC.RESET}")
-    except Exception:
-        pass
-    return services
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    loaded_config = json.load(f)
+                    
+                for key, default_value in self.default_config.items():
+                    if key in loaded_config and isinstance(loaded_config[key], type(default_value)):
+                        config[key] = loaded_config[key]
+                    else:
+                        print(f"{Colors.WARNING}[!] Aviso: Chave '{key}' ausente ou com tipo inválido. Usando valor padrão.{Colors.ENDC}")
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"{Colors.WARNING}[!] Aviso: Não foi possível carregar configuração: {e}. Usando padrão.{Colors.ENDC}")
+        
+        # Validação adicional para listas
+        for key in ['port', 'mode']:
+            if not isinstance(config.get(key), list):
+                config[key] = self.default_config[key]
+        
+        return config
+    
+    def save_config(self) -> bool:
+        """Salva as configurações atuais no arquivo JSON."""
+        try:
+            os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(self.config, f, indent=4)
+            print(f"\n{Colors.GREEN}[✓] Configurações salvas com sucesso em {CONFIG_FILE}{Colors.ENDC}")
+            return True
+        except IOError as e:
+            print(f"\n{Colors.FAIL}[!] Erro ao salvar as configurações: {e}{Colors.ENDC}")
+            return False
 
-def system_panel_box():
-    info = get_system_info()
-    uptime = get_system_uptime()
-    now = datetime.now().strftime("%d/%m/%Y - %H:%M:%S")
-    os_name = (info['os_name'][:35] + '...') if len(info['os_name']) > 38 else info['os_name']
-    ram_bar = progress_bar(info["ram_percent"])
-    cpu_bar = progress_bar(info["cpu_percent"])
-    services = get_active_services()
+class UIHelper:
+    """Classe auxiliar para interface do usuário."""
+    
+    @staticmethod
+    def clear_screen():
+        """Limpa a tela do terminal."""
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    @staticmethod
+    def strip_ansi_codes(text: str) -> str:
+        """Remove códigos ANSI para cálculo correto de largura."""
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        return ansi_escape.sub('', text)
+    
+    @staticmethod
+    def pad_ansi_text(text: str, width: int) -> str:
+        """Preenche texto com códigos ANSI para largura específica."""
+        clean_text = UIHelper.strip_ansi_codes(text)
+        padding_needed = width - len(clean_text)
+        if padding_needed > 0:
+            return text + ' ' * padding_needed
+        return text
+    
+    @staticmethod
+    def print_header(title: str):
+        """Exibe um cabeçalho padronizado."""
+        UIHelper.clear_screen()
+        print(f"{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.ENDC}")
+        print(f"{Colors.CYAN}║{Colors.BOLD}           MULTIFLOWPX PROXY SERVER MANAGER                  {Colors.CYAN}║{Colors.ENDC}")
+        print(f"{Colors.CYAN}╠══════════════════════════════════════════════════════════════╣{Colors.ENDC}")
+        print(f"{Colors.CYAN}║  {Colors.HEADER}{title:^58}  {Colors.CYAN}║{Colors.ENDC}")
+        print(f"{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.ENDC}\n")
+    
+    @staticmethod
+    def print_divider():
+        """Imprime um divisor visual."""
+        print(f"{Colors.CYAN}{'─' * 64}{Colors.ENDC}")
+    
+    @staticmethod
+    def validate_port(port_str: str) -> Optional[int]:
+        """Valida e retorna uma porta ou None se inválida."""
+        try:
+            port = int(port_str)
+            if MIN_PORT <= port <= MAX_PORT:
+                return port
+            print(f"\n{Colors.FAIL}[!] Porta deve estar entre {MIN_PORT} e {MAX_PORT}.{Colors.ENDC}")
+        except ValueError:
+            print(f"\n{Colors.FAIL}[!] Entrada inválida. Digite um número.{Colors.ENDC}")
+        return None
 
-    content = [
-        f"{MC.CYAN_LIGHT}{Icons.SYSTEM} Sistema:{MC.RESET} {MC.WHITE}{os_name}{MC.RESET}",
-        f"{MC.CYAN_LIGHT}{Icons.CLOCK} Uptime:{MC.RESET} {MC.WHITE}{uptime}{MC.RESET}",
-        f"{MC.CYAN_LIGHT}{Icons.RAM} RAM:{MC.RESET} {ram_bar}",
-        f"{MC.CYAN_LIGHT}{Icons.CPU} CPU:{MC.RESET} {cpu_bar}",
-    ]
-    if services:
-        line1 = f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} " + " │ ".join(services[:4])
-        content.append(line1)
-        if len(services) > 4:
-            content.append(" " * 13 + " │ ".join(services[4:8]))
-    else:
-        content.append(f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} {MC.GRAY}Nenhum serviço ativo{MC.RESET}")
+class ServiceManager:
+    """Gerencia operações relacionadas ao serviço systemd."""
+    
+    def __init__(self):
+        self.systemctl_path = shutil.which("systemctl")
+    
+    def is_available(self) -> bool:
+        """Verifica se systemctl está disponível."""
+        return bool(self.systemctl_path)
+    
+    def is_running(self) -> bool:
+        """Verifica se o serviço está em execução."""
+        if not self.systemctl_path:
+            return False
+        result = subprocess.run(
+            [self.systemctl_path, "is-active", "--quiet", "multiflowpx.service"],
+            capture_output=True
+        )
+        return result.returncode == 0
+    
+    def start(self) -> bool:
+        """Inicia o serviço."""
+        try:
+            subprocess.run([self.systemctl_path, "start", "multiflowpx.service"], check=True)
+            print(f"\n{Colors.GREEN}[✓] Proxy iniciado com sucesso via systemd.{Colors.ENDC}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"\n{Colors.FAIL}[!] Erro ao iniciar o proxy: {e}{Colors.ENDC}")
+            return False
+    
+    def stop(self) -> bool:
+        """Para o serviço."""
+        try:
+            subprocess.run([self.systemctl_path, "stop", "multiflowpx.service"], check=True)
+            print(f"\n{Colors.GREEN}[✓] Proxy parado com sucesso via systemd.{Colors.ENDC}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"\n{Colors.FAIL}[!] Erro ao parar o proxy: {e}{Colors.ENDC}")
+            return False
+    
+    def restart(self) -> bool:
+        """Reinicia o serviço."""
+        print(f"{Colors.WARNING}Reiniciando o serviço...{Colors.ENDC}")
+        self.stop()
+        time.sleep(1)
+        return self.start()
 
-    content.append(f"{MC.CYAN_LIGHT}📅 Data/Hora:{MC.RESET} {MC.WHITE}{now}{MC.RESET}")
-    return modern_box("PAINEL DO SISTEMA", content, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
+class ProxyMenu:
+    """Classe principal que gerencia o menu interativo para o MultiFlowPX Proxy Server."""
 
-def welcome_line():
-    msgs = [
-        f"{Icons.ROCKET} Bem-vindo ao MultiFlow!",
-        f"{Icons.DIAMOND} Experiência premium no seu terminal.",
-        f"{Icons.CHECK} Sistema pronto para uso.",
-    ]
-    msg = random.choice(msgs)
-    cols, _ = TerminalManager.size()
-    width = max(60, min(cols - 2, 100))
-    return f"\n{MC.CYAN_GRADIENT}{MC.BOLD}{msg.center(width)}{MC.RESET}\n\n"
-
-# ==================== RENDER DE TELAS COMPLETAS ====================
-def build_main_frame(status_msg=""):
-    s = []
-    s.append(modern_header())
-    s.append(system_panel_box())
-    s.append(welcome_line())
-    s.append(modern_box("MENU PRINCIPAL", [], Icons.DIAMOND, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
-    s.append("\n")
-    s.append(menu_option("1", "Gerenciar Usuários SSH", Icons.USERS, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "Gerenciar Conexões", Icons.NETWORK, MC.CYAN_GRADIENT))
-    s.append(menu_option("3", "BadVPN", Icons.SERVER, MC.PURPLE_GRADIENT))
-    s.append(menu_option("4", "Ferramentas", Icons.TOOLS, MC.ORANGE_GRADIENT))
-    s.append(menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, badge="v2"))
-    s.append(menu_option("6", "Servidor de Download", Icons.DOWNLOAD, MC.PINK_GRADIENT))
-    s.append("\n")
-    s.append(menu_option("0", "Sair", Icons.EXIT, MC.RED_GRADIENT))
-    s.append(footer_line(status_msg))
-    return "".join(s)
-
-def build_connections_frame(status_msg=""):
-    s = []
-    s.append(modern_header())
-    s.append(system_panel_box())
-    s.append("\n")
-    s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
-    s.append("\n")
-    s.append(menu_option("1", "Gerenciar OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "ProxySocks (Simples)", Icons.UNLOCK, MC.BLUE_GRADIENT))
-    s.append("\n")
-    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
-    s.append(footer_line(status_msg))
-    return "".join(s)
-
-def build_tools_frame(status_msg=""):
-    s = []
-    s.append(modern_header())
-    s.append(system_panel_box())
-    s.append("\n")
-    s.append(modern_box("FERRAMENTAS DE OTIMIZAÇÃO", [], Icons.TOOLS, MC.ORANGE_GRADIENT, MC.ORANGE_LIGHT))
-    s.append("\n")
-    s.append(menu_option("1", "Otimizador de VPS", Icons.ROCKET, MC.GREEN_GRADIENT, badge="TURBO"))
-    s.append(menu_option("2", "Bloqueador de Sites", Icons.SHIELD, MC.RED_GRADIENT))
-    s.append("\n")
-    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
-    s.append(footer_line(status_msg))
-    return "".join(s)
-
-def build_updater_frame():
-    s = []
-    s.append(modern_header())
-    s.append("\n")
-    s.append(modern_box("ATUALIZADOR MULTIFLOW", [
-        f"{MC.YELLOW_GRADIENT}{Icons.INFO} Baixar a versão mais recente do GitHub.{MC.RESET}",
-        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Serviços como BadVPN e ProxySocks serão parados.{MC.RESET}",
-        f"{MC.RED_GRADIENT}{Icons.WARNING} O programa encerra após a atualização.{MC.RESET}",
-        f"{MC.WHITE}{Icons.INFO} Reinicie com 'multiflow' após concluir.{MC.RESET}"
-    ], Icons.UPDATE, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
-    s.append(footer_line())
-    return "".join(s)
-
-# ==================== CHECK ROOT ====================
-def check_root():
-    try:
+    def __init__(self):
+        self.config_manager = ConfigManager()
+        self.service_manager = ServiceManager()
+        self.ui = UIHelper()
+        self.config = self.config_manager.config
+        self.systemctl_path = self.service_manager.systemctl_path
+    
+    # --- Métodos de Verificação ---
+    
+    def check_root(self) -> bool:
+        """Verifica se o script está sendo executado como root."""
+        if not hasattr(os, 'geteuid'):
+            print(f"\n{Colors.WARNING}[!] Aviso: Não foi possível verificar privilégios de root.{Colors.ENDC}")
+            return True
+        
         if os.geteuid() != 0:
-            TerminalManager.enter_alt_screen()
-            TerminalManager.render(
-                modern_header() +
-                modern_box("AVISO DE SEGURANÇA", [
-                    f"{MC.RED_GRADIENT}{Icons.WARNING} Este script precisa ser executado como root!{MC.RESET}",
-                    f"{MC.YELLOW_GRADIENT}Algumas operações podem falhar sem privilégios adequados.{MC.RESET}"
-                ], Icons.SHIELD, MC.RED_GRADIENT, MC.RED_LIGHT) +
-                footer_line()
-            )
-            TerminalManager.before_input()
-            resp = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar mesmo assim? (s/n): {MC.RESET}").strip().lower()
-            TerminalManager.after_input()
-            if resp != 's':
-                TerminalManager.leave_alt_screen()
-                sys.exit(0)
+            print(f"\n{Colors.FAIL}[!] Erro: Esta operação requer privilégios de root. Execute com 'sudo'.{Colors.ENDC}")
+            input("\n    Pressione Enter para continuar...")
             return False
         return True
-    except AttributeError:
-        return True
-
-# ==================== MENUS (COM RENDER ÚNICO POR FRAME) ====================
-def ssh_users_main_menu():
-    TerminalManager.leave_alt_screen()
-    try:
-        manusear_usuarios.main()
-    finally:
-        TerminalManager.enter_alt_screen()
-
-def conexoes_menu():
-    status = ""
-    while True:
-        TerminalManager.enter_alt_screen()
-        TerminalManager.render(build_connections_frame(status))
-        TerminalManager.before_input()
-        choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
-        TerminalManager.after_input()
-
-        if choice == "1":
-            # NÃO sair do alt-screen aqui; o submenu gerencia isso quando necessário
-            menu_openvpn.main_menu()
-            status = "OpenVPN: operação concluída."
-        elif choice == "2":
-            # NÃO sair do alt-screen; o submenu mantém a UI
-            menu_proxysocks.main_menu()
-            status = "ProxySocks: operação concluída."
-        elif choice == "0":
+    
+    def _notify_systemctl_unavailable(self):
+        """Informa ao usuário que o systemctl não está disponível."""
+        print(f"\n{Colors.FAIL}[!] Erro: O comando 'systemctl' não foi encontrado.{Colors.ENDC}")
+        print(f"{Colors.WARNING}Este script requer um sistema baseado em systemd.")
+        print(f"As funções de gerenciamento de serviço estão desativadas.{Colors.ENDC}")
+    
+    def find_install_script(self) -> Optional[str]:
+        """Detecta dinamicamente o script de instalação 'install.sh'."""
+        potential_paths = [
+            '/root/multiflowpx/install.sh',
+            os.path.join(os.path.expanduser("~"), 'multiflowpx/install.sh'),
+            './install.sh'
+        ]
+        
+        for path in potential_paths:
+            if os.path.isfile(path):
+                print(f"{Colors.GREEN}[✓] Script de instalação encontrado em: {path}{Colors.ENDC}")
+                return path
+        return None
+    
+    # --- Métodos de Entrada do Usuário ---
+    
+    def _ask_ssl_domain(self) -> str:
+        """Pergunta o domínio para emissão de certificado quando SSL for selecionado."""
+        self.ui.print_divider()
+        print(f"{Colors.WARNING}CONFIGURAÇÃO DE CERTIFICADO SSL{Colors.ENDC}\n")
+        print("Digite o seu domínio que é apontado para o seu servidor para")
+        print("que se gere um certificado funcional para o mesmo.")
+        self.ui.print_divider()
+        return input(f"{Colors.BOLD}Digite [exemplo: mycroft.multflowmanager.xyz]:{Colors.ENDC} ").strip()
+    
+    def _ask_for_install_port(self) -> int:
+        """Pergunta e valida a porta principal durante a instalação."""
+        self.ui.print_divider()
+        print(f"{Colors.BOLD}CONFIGURAÇÃO DA PORTA PRINCIPAL{Colors.ENDC}")
+        
+        while True:
+            port_input = input(f"{Colors.BOLD}Digite a porta que deseja usar para o serviço: {Colors.ENDC}")
+            port = self.ui.validate_port(port_input)
+            if port:
+                return port
+    
+    def _ask_for_protocols(self) -> List[str]:
+        """Pergunta e valida a combinação de protocolos."""
+        self.ui.print_divider()
+        print(f"{Colors.BOLD}CONFIGURAÇÃO DOS PROTOCOLOS{Colors.ENDC}\n")
+        
+        protocol_map = {
+            '1': (['ssh', 'openvpn', 'v2ray'], "ssh, openvpn, v2ray"),
+            '2': (['ssh', 'openvpn', 'v2ray', 'ssl'], "ssh, openvpn, v2ray e ssl"),
+            '3': (['ssh', 'v2ray'], "ssh e v2ray"),
+            '4': (['ssh', 'openvpn'], "ssh e openvpn"),
+            '5': (['ssh', 'ssl'], "ssh e ssl"),
+            '6': (['ssh'], "Apenas SSH"),
+            '7': (['openvpn'], "Apenas OpenVPN")
+        }
+        
+        print("Em qual protocolo deseja utilizar o serviço?")
+        for key, (_, text) in protocol_map.items():
+            print(f"  [{Colors.BOLD}{key}{Colors.ENDC}] {text}")
+        
+        while True:
+            choice = input(f"\n{Colors.BOLD}Escolha uma opção (1-7): {Colors.ENDC}")
+            if choice in protocol_map:
+                protocols, _ = protocol_map[choice]
+                
+                if 'ssl' in protocols:
+                    domain = self._ask_ssl_domain()
+                    if not domain:
+                        print(f"\n{Colors.WARNING}[!] Domínio não informado. SSL não será ativado.{Colors.ENDC}")
+                        protocols.remove('ssl')
+                    else:
+                        self.config["sni"] = domain
+                
+                return protocols
+            else:
+                print(f"\n{Colors.FAIL}[!] Opção inválida. Tente novamente.{Colors.ENDC}")
+    
+    def save_config(self) -> bool:
+        """Salva as configurações com verificação de root."""
+        if not self.check_root():
+            return False
+        return self.config_manager.save_config()
+    
+    # --- Métodos de Gerenciamento do Proxy ---
+    
+    @requires_systemctl
+    @requires_root
+    def start_proxy(self):
+        """Inicia o processo do proxy."""
+        if self.service_manager.is_running():
+            print(f"\n{Colors.WARNING}[!] O proxy já está em execução.{Colors.ENDC}")
             return
-        else:
-            status = "Opção inválida. Tente novamente."
-
-def otimizadorvps_menu():
-    TerminalManager.leave_alt_screen()
-    try:
-        script_real_path = os.path.realpath(__file__)
-        script_dir = os.path.dirname(script_real_path)
-        otimizador_path = os.path.join(script_dir, 'ferramentas', 'otimizadorvps.py')
-        subprocess.run([sys.executable, otimizador_path], check=True)
-    except Exception as e:
-        print(f"\033[91mErro ao executar o otimizador: {e}\033[0m")
-    finally:
-        input("Pressione Enter para continuar...")
-        TerminalManager.enter_alt_screen()
-
-def ferramentas_menu():
-    status = ""
-    while True:
-        TerminalManager.enter_alt_screen()
-        TerminalManager.render(build_tools_frame(status))
-        TerminalManager.before_input()
-        choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
-        TerminalManager.after_input()
-
-        if choice == "1":
-            otimizadorvps_menu()
-            status = "Otimizador executado."
-        elif choice == "2":
-            TerminalManager.leave_alt_screen()
-            try:
-                menu_bloqueador.main_menu()
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Bloqueador executado."
-        elif choice == "0":
+        self.service_manager.start()
+    
+    @requires_systemctl
+    @requires_root
+    def stop_proxy(self):
+        """Para o processo do proxy."""
+        if not self.service_manager.is_running():
+            print(f"\n{Colors.WARNING}[!] O proxy não está em execução.{Colors.ENDC}")
             return
-        else:
-            status = "Opção inválida. Tente novamente."
-
-def atualizar_multiflow():
-    TerminalManager.enter_alt_screen()
-    TerminalManager.render(build_updater_frame())
-    TerminalManager.before_input()
-    confirm = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar com a atualização? (s/n): {MC.RESET}").strip().lower()
-    TerminalManager.after_input()
-
-    if confirm == 's':
+        self.service_manager.stop()
+    
+    @requires_systemctl
+    @requires_root
+    def restart_proxy(self):
+        """Reinicia o processo do proxy."""
+        self.ui.print_header("REINICIAR PROXY")
+        self.service_manager.restart()
+    
+    # --- Métodos de Configuração ---
+    
+    def add_port(self):
+        """Adiciona uma nova porta à configuração."""
+        self.ui.print_header("ADICIONAR PORTA")
+        self.ui.print_divider()
+        
+        current_ports = self.config.get('port', [])
+        print(f"{Colors.BOLD}Portas atuais:{Colors.ENDC} {Colors.BLUE}{', '.join(map(str, current_ports)) if current_ports else 'Nenhuma'}{Colors.ENDC}\n")
+        
+        port_input = input(f"{Colors.BOLD}Digite a nova porta para adicionar:{Colors.ENDC} ")
+        port = self.ui.validate_port(port_input)
+        
+        if port:
+            if port not in self.config["port"]:
+                self.config["port"].append(port)
+                self.save_config()
+                print(f"\n{Colors.GREEN}[✓] Porta {port} adicionada com sucesso!{Colors.ENDC}")
+            else:
+                print(f"\n{Colors.WARNING}[!] Porta {port} já existe.{Colors.ENDC}")
+    
+    def remove_port(self):
+        """Remove uma porta da configuração."""
+        self.ui.print_header("REMOVER PORTA")
+        self.ui.print_divider()
+        
+        current_ports = self.config.get('port', [])
+        if not current_ports:
+            print(f"{Colors.WARNING}[!] Não há portas para remover.{Colors.ENDC}")
+            return
+        
+        print(f"{Colors.BOLD}Portas atuais:{Colors.ENDC} {Colors.BLUE}{', '.join(map(str, current_ports))}{Colors.ENDC}\n")
+        port_input = input(f"{Colors.BOLD}Digite a porta para remover:{Colors.ENDC} ")
+        port = self.ui.validate_port(port_input)
+        
+        if port and port in self.config["port"]:
+            self.config["port"].remove(port)
+            self.save_config()
+            print(f"\n{Colors.GREEN}[✓] Porta {port} removida com sucesso!{Colors.ENDC}")
+        elif port:
+            print(f"\n{Colors.WARNING}[!] Porta {port} não encontrada.{Colors.ENDC}")
+    
+    def change_protocols(self):
+        """Altera a combinação de protocolos em uso."""
+        self.ui.print_header("ALTERAR PROTOCOLO")
+        
+        current_modes = self.config.get('mode', [])
+        print(f"{Colors.BOLD}Protocolos atuais:{Colors.ENDC} {Colors.BLUE}{', '.join(current_modes) if current_modes else 'Nenhum'}{Colors.ENDC}")
+        
+        new_protocols = self._ask_for_protocols()
+        self.config['mode'] = new_protocols
+        self.save_config()
+        print(f"\n{Colors.GREEN}[✓] Protocolos alterados com sucesso!{Colors.ENDC}")
+    
+    def configure_host(self):
+        """Configura o host de destino do tráfego."""
+        self.ui.print_header("ALTERAR DESTINO DO TRÁFEGO DO PROXY")
+        self.ui.print_divider()
+        
+        print(f"{Colors.BOLD}Host atual:{Colors.ENDC} {Colors.BLUE}{self.config['host']}{Colors.ENDC}\n")
+        new_host = input(f"{Colors.BOLD}Digite o novo host (formato: IP:PORTA):{Colors.ENDC} ").strip()
+        
+        if new_host:
+            self.config["host"] = new_host
+            self.save_config()
+            print(f"\n{Colors.GREEN}[✓] Host configurado para {new_host}!{Colors.ENDC}")
+    
+    def change_domain_and_reinstall_ssl(self):
+        """Altera o domínio (SNI) e re-executa a instalação para gerar novo certificado."""
+        self.ui.print_header("ALTERAR DOMÍNIO E GERAR CERTIFICADO")
+        
+        print(f"{Colors.BOLD}SNI (domínio) atual:{Colors.ENDC} {Colors.BLUE}{self.config['sni']}{Colors.ENDC}\n")
+        print(f"{Colors.WARNING}Esta operação irá alterar o domínio do seu servidor e tentará")
+        print(f"re-executar o script de instalação para gerar um novo certificado SSL.{Colors.ENDC}")
+        
+        confirm = input(f"{Colors.BOLD}Deseja continuar? (s/N):{Colors.ENDC} ").lower()
+        if confirm not in ['s', 'sim', 'y', 'yes']:
+            print(f"\n{Colors.WARNING}Operação cancelada.{Colors.ENDC}")
+            return
+        
+        new_domain = self._ask_ssl_domain()
+        if not new_domain:
+            print(f"\n{Colors.WARNING}Nenhum domínio inserido. Operação cancelada.{Colors.ENDC}")
+            return
+        
+        self.config["sni"] = new_domain
+        self.save_config()
+        print(f"\n{Colors.GREEN}[✓] Domínio (SNI) alterado para {new_domain}.{Colors.ENDC}")
+        print(f"{Colors.WARNING}Iniciando a reinstalação para gerar o novo certificado...{Colors.ENDC}")
+        
+        self._run_install_script_internal()
+    
+    def configure_workers(self):
+        """Configura o número de workers."""
+        self.ui.print_header("CONFIGURAR WORKERS")
+        self.ui.print_divider()
+        
+        print(f"{Colors.BOLD}Workers atuais:{Colors.ENDC} {Colors.BLUE}{self.config['workers']}{Colors.ENDC}\n")
+        workers_input = input(f"{Colors.BOLD}Digite o número de workers:{Colors.ENDC} ")
+        
         try:
-            script_dir = os.path.dirname(os.path.realpath(__file__))
-            # Alterado para o novo caminho do script de atualização
-            update_script_path = os.path.join(script_dir, 'ferramentas', 'update.py')
-            if not os.path.exists(update_script_path):
-                TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} 'update.py' não encontrado em 'ferramentas'!{MC.RESET}\n")
-                time.sleep(2.0)
-                return
-            TerminalManager.leave_alt_screen()
-            try:
-                subprocess.run(['sudo', sys.executable, update_script_path], check=True)
-                print("\nAtualizado com sucesso. Reinicie com: multiflow\n")
-                time.sleep(1.0)
-                sys.exit(0)
-            finally:
-                TerminalManager.enter_alt_screen()
-        except subprocess.CalledProcessError:
-            TerminalManager.enter_alt_screen()
-            TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro durante a atualização.{MC.RESET}\n")
-            time.sleep(2.0)
+            new_workers = int(workers_input)
+            if new_workers > 0:
+                self.config["workers"] = new_workers
+                self.save_config()
+                print(f"\n{Colors.GREEN}[✓] Workers configurados para {new_workers}!{Colors.ENDC}")
+            else:
+                print(f"\n{Colors.FAIL}[!] Número de workers deve ser maior que 0.{Colors.ENDC}")
+        except ValueError:
+            print(f"\n{Colors.FAIL}[!] Entrada inválida. Digite um número.{Colors.ENDC}")
+    
+    def configure_buffer_size(self):
+        """Configura o tamanho do buffer."""
+        self.ui.print_header("CONFIGURAR BUFFER SIZE")
+        self.ui.print_divider()
+        
+        print(f"{Colors.BOLD}Buffer size atual:{Colors.ENDC} {Colors.BLUE}{self.config['buffer_size']}{Colors.ENDC}\n")
+        buffer_input = input(f"{Colors.BOLD}Digite o tamanho do buffer:{Colors.ENDC} ")
+        
+        try:
+            new_buffer = int(buffer_input)
+            if new_buffer > 0:
+                self.config["buffer_size"] = new_buffer
+                self.save_config()
+                print(f"\n{Colors.GREEN}[✓] Buffer size configurado para {new_buffer}!{Colors.ENDC}")
+            else:
+                print(f"\n{Colors.FAIL}[!] Buffer size deve ser maior que 0.{Colors.ENDC}")
+        except ValueError:
+            print(f"\n{Colors.FAIL}[!] Entrada inválida. Digite um número.{Colors.ENDC}")
+    
+    def configure_log_level(self):
+        """Configura o nível de log."""
+        self.ui.print_header("CONFIGURAR LOG LEVEL")
+        self.ui.print_divider()
+        
+        print(f"{Colors.BOLD}Log level atual:{Colors.ENDC} {Colors.BLUE}{self.config['log_level']}{Colors.ENDC}\n")
+        print(f"{Colors.BOLD}Níveis disponíveis:{Colors.ENDC} 0 (Silencioso), 1 (Normal), 2 (Verboso)\n")
+        
+        log_input = input(f"{Colors.BOLD}Digite o nível de log (0-2):{Colors.ENDC} ")
+        
+        try:
+            new_log_level = int(log_input)
+            if MIN_LOG_LEVEL <= new_log_level <= MAX_LOG_LEVEL:
+                self.config["log_level"] = new_log_level
+                self.save_config()
+                print(f"\n{Colors.GREEN}[✓] Log level configurado para {new_log_level}!{Colors.ENDC}")
+            else:
+                print(f"\n{Colors.FAIL}[!] Log level deve estar entre {MIN_LOG_LEVEL} e {MAX_LOG_LEVEL}.{Colors.ENDC}")
+        except ValueError:
+            print(f"\n{Colors.FAIL}[!] Entrada inválida. Digite um número.{Colors.ENDC}")
+    
+    # --- Métodos de Instalação/Desinstalação ---
+    
+    def _run_install_script_internal(self) -> bool:
+        """Executa o script de instalação (método interno)."""
+        install_script_path = self.find_install_script()
+        
+        if not install_script_path:
+            print(f"{Colors.FAIL}[!] Erro: Script 'install.sh' não encontrado.{Colors.ENDC}")
+            return False
+        
+        try:
+            subprocess.run(["chmod", "+x", install_script_path], check=True)
+            subprocess.run(["/bin/bash", install_script_path], check=True)
+            print(f"\n{Colors.GREEN}[✓] Script de instalação executado com sucesso!{Colors.ENDC}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"\n{Colors.FAIL}[!] Erro ao executar o script de instalação: {e}{Colors.ENDC}")
+            return False
         except Exception as e:
-            TerminalManager.enter_alt_screen()
-            TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro inesperado: {e}{MC.RESET}\n")
-            time.sleep(2.0)
-    else:
-        TerminalManager.render(build_updater_frame() + f"\n{MC.YELLOW_GRADIENT}{Icons.INFO} Atualização cancelada.{MC.RESET}\n")
-        time.sleep(1.2)
-
-# ==================== MENU PRINCIPAL ====================
-def main_menu():
-    check_root()
-    TerminalManager.enter_alt_screen()
-    status = ""
-
-    while True:
+            print(f"\n{Colors.FAIL}[!] Um erro inesperado ocorreu: {e}{Colors.ENDC}")
+            return False
+    
+    def run_install_script(self):
+        """Encontra e executa o script de instalação com configuração inicial."""
+        self.ui.print_header("INSTALAR/REINSTALAR MULTIFLOW PROXY")
+        
+        install_script_path = self.find_install_script()
+        
+        if not install_script_path:
+            print(f"{Colors.FAIL}[!] Erro: Script 'install.sh' não encontrado.{Colors.ENDC}")
+            print(f"{Colors.WARNING}Certifique-se de que o repositório foi clonado corretamente.{Colors.ENDC}")
+            return
+        
+        install_port = self._ask_for_install_port()
+        install_protocols = self._ask_for_protocols()
+        
+        print(f"\n{Colors.WARNING}Esta opção executará a instalação na porta {install_port} com os protocolos selecionados.")
+        print(f"Isso pode sobrescrever configurações existentes.{Colors.ENDC}\n")
+        
+        confirm = input(f"{Colors.BOLD}Deseja continuar? (s/N):{Colors.ENDC} ").lower()
+        if confirm in ['s', 'sim', 'y', 'yes']:
+            if not self.check_root():
+                return
+            
+            self.config['port'] = [install_port]
+            self.config['mode'] = install_protocols
+            self.save_config()
+            
+            self._run_install_script_internal()
+        else:
+            print(f"\n{Colors.WARNING}Instalação cancelada.{Colors.ENDC}")
+    
+    @requires_systemctl
+    @requires_root
+    def uninstall(self):
+        """Desinstala completamente o MultiFlowPX."""
         try:
-            TerminalManager.render(build_main_frame(status))
-            TerminalManager.before_input()
-            choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
-            TerminalManager.after_input()
-
-            if choice == "1":
-                ssh_users_main_menu()
-                status = "Gerenciamento de usuários concluído."
-            elif choice == "2":
-                conexoes_menu()
-                status = "Conexões: operação concluída."
-            elif choice == "3":
-                TerminalManager.leave_alt_screen()
+            print("Parando e desabilitando o serviço systemd...")
+            subprocess.run([self.systemctl_path, "stop", "multiflowpx.service"], check=False, capture_output=True)
+            subprocess.run([self.systemctl_path, "disable", "multiflowpx.service"], check=False, capture_output=True)
+            
+            files_to_remove = [
+                "/etc/systemd/system/multiflowpx.service",
+                "/usr/local/bin/multiflowpx_proxy",
+                "/usr/local/bin/multiflowpx_menu",
+                CONFIG_FILE
+            ]
+            
+            print("Removendo arquivos...")
+            for file_path in files_to_remove:
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        print(f"  {Colors.GREEN}Removido:{Colors.ENDC} {file_path}")
+                    except OSError as e:
+                        print(f"  {Colors.FAIL}Erro ao remover {file_path}: {e}{Colors.ENDC}")
+            
+            config_dir = os.path.dirname(CONFIG_FILE)
+            if os.path.exists(config_dir) and not os.listdir(config_dir):
                 try:
-                    menu_badvpn.main_menu()
-                finally:
-                    TerminalManager.enter_alt_screen()
-                status = "BadVPN: operação concluída."
-            elif choice == "4":
-                ferramentas_menu()
-                status = "Ferramentas: operação concluída."
-            elif choice == "5":
-                atualizar_multiflow()
-                status = "Atualizador executado."
-            elif choice == "6":
-                TerminalManager.leave_alt_screen()
-                try:
-                    menu_servidor_download.main()
-                finally:
-                    TerminalManager.enter_alt_screen()
-                status = "Servidor de download: operação concluída."
-            elif choice == "0":
-                TerminalManager.render(build_main_frame("Saindo..."))
-                time.sleep(0.4)
+                    os.rmdir(config_dir)
+                    print(f"  {Colors.GREEN}Removido diretório vazio:{Colors.ENDC} {config_dir}")
+                except OSError as e:
+                    print(f"  {Colors.FAIL}Erro ao remover diretório {config_dir}: {e}{Colors.ENDC}")
+            
+            print("Recarregando o daemon do systemd...")
+            subprocess.run([self.systemctl_path, "daemon-reload"], check=True)
+            
+            print(f"\n{Colors.GREEN}[✓] MultiFlowPX desinstalado com sucesso!{Colors.ENDC}")
+            
+        except Exception as e:
+            print(f"\n{Colors.FAIL}[!] Erro durante a desinstalação: {e}{Colors.ENDC}")
+    
+    # --- Menus ---
+    
+    def main_menu(self):
+        """Exibe o menu principal."""
+        while True:
+            # Preparar informações de status
+            if self.service_manager.is_available():
+                status_text = f"{Colors.GREEN}● ATIVO{Colors.ENDC}" if self.service_manager.is_running() else f"{Colors.FAIL}○ INATIVO{Colors.ENDC}"
+            else:
+                status_text = f"{Colors.WARNING}N/A (systemd não encontrado){Colors.ENDC}"
+            
+            current_port = self.config.get("port", [])
+            port_display = ", ".join(map(str, current_port)) if current_port else "Nenhuma"
+            current_mode = self.config.get("mode", [])
+            protocol_display = ", ".join([m.upper() for m in current_mode]) if current_mode else "Nenhum"
+            
+            # Usar o método pad_ansi_text para alinhamento correto
+            status_padded = self.ui.pad_ansi_text(status_text, 40)
+            
+            self.ui.clear_screen()
+            print(f"{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.ENDC}")
+            print(f"{Colors.CYAN}║{Colors.BOLD}           MULTIFLOWPX PROXY SERVER MANAGER                  {Colors.CYAN}║{Colors.ENDC}")
+            print(f"{Colors.CYAN}╠══════════════════════════════════════════════════════════════╣{Colors.ENDC}")
+            print(f"{Colors.CYAN}║                                                              ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  {Colors.BOLD}Status do Serviço:{Colors.ENDC}  {status_padded}{Colors.CYAN}║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  {Colors.BOLD}Porta(s) Ativa(s):{Colors.ENDC}  {Colors.BLUE}{port_display:<39}{Colors.CYAN}║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  {Colors.BOLD}Protocolo(s):{Colors.ENDC}       {Colors.BLUE}{protocol_display:<39}{Colors.CYAN}║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║                                                              ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}╠══════════════════════════════════════════════════════════════╣{Colors.ENDC}")
+            print(f"{Colors.CYAN}║                      MENU PRINCIPAL                         ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}╠══════════════════════════════════════════════════════════════╣{Colors.ENDC}")
+            print(f"{Colors.CYAN}║                                                              ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  [{Colors.BOLD}1{Colors.ENDC}{Colors.CYAN}] Instalar/Reinstalar MultiFlow Proxy                   ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  [{Colors.BOLD}2{Colors.ENDC}{Colors.CYAN}] Configurar Proxy                                       ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  [{Colors.BOLD}3{Colors.ENDC}{Colors.CYAN}] Reiniciar Proxy                                        ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  [{Colors.BOLD}4{Colors.ENDC}{Colors.CYAN}] Desinstalar Completamente                             ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║                                                              ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║  [{Colors.BOLD}0{Colors.ENDC}{Colors.CYAN}] Sair                                                   ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}║                                                              ║{Colors.ENDC}")
+            print(f"{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.ENDC}")
+            
+            choice = input(f"\n  {Colors.BOLD}Escolha uma opção:{Colors.ENDC} ")
+            
+            if choice == '1':
+                self.run_install_script()
+            elif choice == '2':
+                self.submenu_configure_proxy()
+            elif choice == '3':
+                self.restart_proxy()
+            elif choice == '4':
+                self.menu_uninstall()
+            elif choice == '0':
+                print(f"\n{Colors.GREEN}  Encerrando o sistema...{Colors.ENDC}\n")
+                sys.exit(0)
+            else:
+                print(f"\n{Colors.FAIL}  [!] Opção inválida. Tente novamente.{Colors.ENDC}")
+            
+            if choice in ["1", "2", "3", "4"]:
+                input(f"\n  {Colors.BOLD}Pressione Enter para voltar ao menu...{Colors.ENDC}")
+    
+    def submenu_configure_proxy(self):
+        """Submenu para configurar o proxy."""
+        while True:
+            self.ui.print_header("CONFIGURAR PROXY")
+            
+            print(f"{Colors.CYAN}┌──────────────────────────────────────────────────────────────┐{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                    OPÇÕES DE CONFIGURAÇÃO                   │{Colors.ENDC}")
+            print(f"{Colors.CYAN}├──────────────────────────────────────────────────────────────┤{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                                                              │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}1{Colors.ENDC}{Colors.CYAN}] Adicionar porta                                        │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}2{Colors.ENDC}{Colors.CYAN}] Alterar protocolo                                      │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}3{Colors.ENDC}{Colors.CYAN}] Remover porta                                          │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}4{Colors.ENDC}{Colors.CYAN}] Configuração avançada                                  │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                                                              │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}0{Colors.ENDC}{Colors.CYAN}] Voltar ao menu principal                              │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                                                              │{Colors.ENDC}")
+            print(f"{Colors.CYAN}└──────────────────────────────────────────────────────────────┘{Colors.ENDC}")
+            
+            choice = input(f"\n  {Colors.BOLD}Escolha uma opção:{Colors.ENDC} ")
+            
+            if choice == '1':
+                self.add_port()
+            elif choice == '2':
+                self.change_protocols()
+            elif choice == '3':
+                self.remove_port()
+            elif choice == '4':
+                self.submenu_advanced_config()
+            elif choice == '0':
                 break
             else:
-                status = "Opção inválida. Pressione 1-6 ou 0 para sair."
+                print(f"\n{Colors.FAIL}  [!] Opção inválida. Tente novamente.{Colors.ENDC}")
+            
+            input(f"\n  {Colors.BOLD}Pressione Enter para continuar...{Colors.ENDC}")
+    
+    def submenu_advanced_config(self):
+        """Submenu para configurações avançadas."""
+        while True:
+            self.ui.print_header("CONFIGURAÇÃO AVANÇADA")
+            
+            print(f"{Colors.CYAN}┌──────────────────────────────────────────────────────────────┐{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                   PARÂMETROS AVANÇADOS                      │{Colors.ENDC}")
+            print(f"{Colors.CYAN}├──────────────────────────────────────────────────────────────┤{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                                                              │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}1{Colors.ENDC}{Colors.CYAN}] Alterar destino do tráfego do proxy                   │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}2{Colors.ENDC}{Colors.CYAN}] Alterar domínio do servidor e gerar novo certificado  │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}3{Colors.ENDC}{Colors.CYAN}] Configurar número de workers                           │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}4{Colors.ENDC}{Colors.CYAN}] Configurar tamanho do buffer                           │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}5{Colors.ENDC}{Colors.CYAN}] Configurar nível de log                                │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                                                              │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│  [{Colors.BOLD}0{Colors.ENDC}{Colors.CYAN}] Voltar ao menu anterior                                │{Colors.ENDC}")
+            print(f"{Colors.CYAN}│                                                              │{Colors.ENDC}")
+            print(f"{Colors.CYAN}└──────────────────────────────────────────────────────────────┘{Colors.ENDC}")
+            
+            choice = input(f"\n  {Colors.BOLD}Escolha uma opção:{Colors.ENDC} ")
+            
+            if choice == '1':
+                self.configure_host()
+            elif choice == '2':
+                self.change_domain_and_reinstall_ssl()
+            elif choice == '3':
+                self.configure_workers()
+            elif choice == '4':
+                self.configure_buffer_size()
+            elif choice == '5':
+                self.configure_log_level()
+            elif choice == '0':
+                break
+            else:
+                print(f"\n{Colors.FAIL}  [!] Opção inválida. Tente novamente.{Colors.ENDC}")
+            
+            input(f"\n  {Colors.BOLD}Pressione Enter para continuar...{Colors.ENDC}")
+    
+    def menu_uninstall(self):
+        """Menu para desinstalar o MultiFlowPX."""
+        self.ui.print_header("DESINSTALAR MULTIFLOWPX")
+        
+        print(f"{Colors.FAIL}ATENÇÃO: Esta operação removerá completamente o MultiFlowPX!{Colors.ENDC}")
+        print(f"{Colors.WARNING}Isso incluirá:{Colors.ENDC}")
+        print(f"  • Parar o serviço")
+        print(f"  • Remover arquivos de configuração")
+        print(f"  • Remover executáveis")
+        print(f"  • Remover serviço systemd\n")
+        
+        confirm = input(f"{Colors.BOLD}Tem certeza que deseja desinstalar? (s/N):{Colors.ENDC} ").lower()
+        if confirm in ['s', 'sim', 'y', 'yes']:
+            self.uninstall()
+        else:
+            print(f"\n{Colors.WARNING}Desinstalação cancelada.{Colors.ENDC}")
 
-        except KeyboardInterrupt:
-            TerminalManager.render(build_main_frame("Interrompido pelo usuário."))
-            time.sleep(0.5)
-            break
-        except Exception as e:
-            TerminalManager.render(build_main_frame(f"Erro: {e}"))
-            time.sleep(1.0)
-            break
 
-    TerminalManager.leave_alt_screen()
+def main():
+    """Função principal para iniciar o menu."""
+    try:
+        menu = ProxyMenu()
+        menu.main_menu()
+    except KeyboardInterrupt:
+        print(f"\n\n{Colors.WARNING}Programa interrompido pelo usuário.{Colors.ENDC}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n{Colors.FAIL}Erro crítico: {e}{Colors.ENDC}")
+        sys.exit(1)
 
-# ==================== EXECUÇÃO ====================
+
 if __name__ == "__main__":
-    main_menu()
+    main()
