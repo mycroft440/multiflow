@@ -1,8 +1,9 @@
 #!/bin/bash
 # =================================================================
-# OpenVPN Installer & Manager - Versão Moderna v3.0
+# OpenVPN Installer & Manager - Versão Moderna v3.1 (2025-08)
 # Otimizado para sistemas Linux modernos (2024+)
 # Baseado no script original do SSH-PRO @TMYCOMNECTVPN
+# Ajustes: correções de proto, unidade systemd, firewall, compat 2.6
 # =================================================================
 
 # --- Variáveis de Cor ---
@@ -18,8 +19,8 @@ readonly SCOLOR=$'\e[0m'
 # --- Configurações Automáticas Modernas ---
 readonly AUTO_PORT="1194"
 readonly AUTO_PROTOCOL="udp"  # UDP é mais eficiente para VPN
-readonly AUTO_DNS1="1.1.1.1"   # Cloudflare DNS (mais rápido)
-readonly AUTO_DNS2="1.0.0.1"   # Cloudflare DNS secundário
+readonly AUTO_DNS1="1.1.1.1"   # Cloudflare DNS
+readonly AUTO_DNS2="1.0.0.1"
 readonly AUTO_DNS_IPV6_1="2606:4700:4700::1111"
 readonly AUTO_DNS_IPV6_2="2606:4700:4700::1001"
 
@@ -28,6 +29,13 @@ readonly SUPPORTS_IPV6=$(test -f /proc/net/if_inet6 && echo "yes" || echo "no")
 readonly SUPPORTS_NFTABLES=$(command -v nft >/dev/null 2>&1 && echo "yes" || echo "no")
 readonly SUPPORTS_SYSTEMD_RESOLVED=$(systemctl is-active systemd-resolved >/dev/null 2>&1 && echo "yes" || echo "no")
 readonly CPU_CORES=$(nproc 2>/dev/null || echo "1")
+
+# Variáveis globais de layout/paths do OpenVPN (definidas em detect_openvpn_layout)
+OVPN_DIR=""
+OVPN_CONF_DIR=""
+OVPN_LOG_DIR="/var/log/openvpn"
+SERVER_CONF=""
+SERVER_UNIT=""
 
 # --- Funções de Utilidade ---
 die() {
@@ -51,7 +59,7 @@ debug() {
     [[ "${DEBUG:-0}" == "1" ]] && echo -e "${MAGENTA}[DEBUG] $1${SCOLOR}"
 }
 
-# Função de barra de progresso melhorada
+# Função de barra de progresso
 fun_bar() {
     local cmd="$1"
     local desc="${2:-Processando}"
@@ -65,12 +73,14 @@ fun_bar() {
     tput civis
     echo -ne "${YELLOW}${desc}... [${SCOLOR}"
     
-    local start_time=$(date +%s)
+    local start_time
+    start_time=$(date +%s)
     while ps -p "$pid" > /dev/null; do
         current_time=$(date +%s)
         elapsed=$((current_time - start_time))
         if [[ $elapsed -gt $timeout ]]; then
             kill $pid 2>/dev/null
+            tput cnorm
             die "Timeout: operação demorou mais de ${timeout}s"
         fi
         i=$(( (i + 1) % ${#spinner} ))
@@ -86,6 +96,7 @@ fun_bar() {
         echo -e "${YELLOW}]${SCOLOR} ${GREEN}✓${SCOLOR}"
     else
         echo -e "${YELLOW}]${SCOLOR} ${RED}✗${SCOLOR}"
+        tput cnorm
         die "Comando falhou: $cmd"
     fi
     
@@ -93,7 +104,7 @@ fun_bar() {
     return $exit_code
 }
 
-# --- Verificações Iniciais Aprimoradas ---
+# --- Verificações Iniciais ---
 check_root() {
     [[ "$EUID" -ne 0 ]] && die "Este script precisa ser executado como ROOT."
 }
@@ -119,17 +130,19 @@ check_virtualization() {
 }
 
 check_kernel_version() {
-    local kernel_version=$(uname -r | cut -d. -f1,2)
-    local min_version="4.9"
+    local kernel_version min_version
+    kernel_version=$(uname -r | cut -d. -f1,2)
+    min_version="4.9"
     
     if [[ "$(printf '%s\n' "$min_version" "$kernel_version" | sort -V | head -n1)" != "$min_version" ]]; then
         warn "Kernel $kernel_version detectado. Recomendado 4.9+"
     fi
 }
 
-# --- Detecção de Sistema Operacional Expandida ---
+# --- Detecção de Sistema Operacional ---
 detect_os() {
     [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
+    # shellcheck source=/dev/null
     source /etc/os-release
     
     OS_ID="$ID"
@@ -151,7 +164,7 @@ detect_os() {
                 warn "Debian $OS_VERSION detectado. Recomendado 11+"
             fi
             ;;
-        centos|rhel|rocky|almalinux)
+        centos|rhel|rocky|almalinux|alpine)
             OS="centos"
             GROUPNAME="nobody"
             if [[ "${OS_VERSION%%.*}" -lt 8 ]]; then
@@ -170,42 +183,57 @@ detect_os() {
     info "Sistema detectado: $OS_NAME"
 }
 
-# --- Instalação de Dependências Moderna ---
+# --- Detectar layout do OpenVPN (systemd e caminhos) ---
+detect_openvpn_layout() {
+    OVPN_DIR="/etc/openvpn"
+    mkdir -p "$OVPN_LOG_DIR"
+    
+    # Detecta qual unidade systemd existe
+    if systemctl list-unit-files | grep -q '^openvpn-server@\.service'; then
+        SERVER_UNIT="openvpn-server@server"
+        OVPN_CONF_DIR="$OVPN_DIR/server"
+        SERVER_CONF="$OVPN_CONF_DIR/server.conf"
+    elif systemctl list-unit-files | grep -q '^openvpn@\.service'; then
+        SERVER_UNIT="openvpn@server"
+        OVPN_CONF_DIR="$OVPN_DIR"
+        SERVER_CONF="$OVPN_CONF_DIR/server.conf"
+    else
+        # Fallback: assume layout legacy
+        SERVER_UNIT="openvpn@server"
+        OVPN_CONF_DIR="$OVPN_DIR"
+        SERVER_CONF="$OVPN_CONF_DIR/server.conf"
+    fi
+    
+    mkdir -p "$OVPN_CONF_DIR"
+    info "Layout OpenVPN: unidade=${SERVER_UNIT} | conf=${SERVER_CONF}"
+}
+
+# --- Instalação de Dependências ---
 check_dependencies() {
     local missing=()
     local packages=("openvpn" "easy-rsa" "iptables" "lsof" "curl" "qrencode")
     
-    # Adicionar pacotes específicos do OS
     if [[ "$OS" == "debian" ]]; then
         packages+=("iptables-persistent" "netfilter-persistent")
-        if [[ "$SUPPORTS_NFTABLES" == "yes" ]]; then
-            packages+=("nftables")
-        fi
+        [[ "$SUPPORTS_NFTABLES" == "yes" ]] && packages+=("nftables")
     elif [[ "$OS" == "centos" ]]; then
         packages+=("firewalld")
     fi
     
-    # Verificar pacotes instalados
     for pkg in "${packages[@]}"; do
         if [[ "$OS" == "debian" ]]; then
-            if ! dpkg -l | grep -q "^ii.*$pkg"; then
-                missing+=("$pkg")
-            fi
+            dpkg -l | grep -q "^ii\s\+$pkg\b" || missing+=("$pkg")
         elif [[ "$OS" == "centos" ]]; then
-            if ! rpm -qa | grep -q "^$pkg"; then
-                missing+=("$pkg")
-            fi
+            rpm -qa | grep -q "^$pkg" || missing+=("$pkg")
         fi
     done
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         info "Instalando dependências: ${missing[*]}"
-        
         if [[ "$OS" == "debian" ]]; then
             export DEBIAN_FRONTEND=noninteractive
             echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
             echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
-            
             fun_bar "apt-get update -qq" "Atualizando repositórios"
             fun_bar "apt-get install -y -qq ${missing[*]}" "Instalando pacotes"
         elif [[ "$OS" == "centos" ]]; then
@@ -216,32 +244,17 @@ check_dependencies() {
         fi
     fi
     
-    # Verificar versão do OpenVPN
-    local ovpn_version=$(openvpn --version 2>/dev/null | head -1 | awk '{print $2}')
-    if [[ -z "$ovpn_version" ]]; then
-        die "OpenVPN não foi instalado corretamente"
-    fi
+    local ovpn_version
+    ovpn_version=$(openvpn --version 2>/dev/null | head -1 | awk '{print $2}')
+    [[ -z "$ovpn_version" ]] && die "OpenVPN não foi instalado corretamente"
     
-    local major_version="${ovpn_version%%.*}"
-    if [[ "$major_version" -lt 2 ]]; then
-        die "OpenVPN $ovpn_version muito antigo. Necessário 2.5+"
-    elif [[ "$major_version" -eq 2 ]]; then
-        local minor_version="${ovpn_version#*.}"
-        minor_version="${minor_version%%.*}"
-        if [[ "$minor_version" -lt 5 ]]; then
-            warn "OpenVPN $ovpn_version detectado. Recomendado 2.5+ para recursos modernos"
-        fi
-    fi
-    
-    success "Todas as dependências verificadas!"
+    success "Dependências OK (OpenVPN ${ovpn_version})"
 }
 
 # --- Otimização de Performance do Sistema ---
 optimize_system() {
     info "Aplicando otimizações de sistema..."
-    
-    # Otimizações de rede
-    cat >> /etc/sysctl.d/99-openvpn.conf << EOF
+    cat > /etc/sysctl.d/99-openvpn.conf << 'EOF'
 # OpenVPN Optimizations
 net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
@@ -254,12 +267,9 @@ net.ipv4.tcp_congestion_control = bbr
 net.core.default_qdisc = fq
 net.ipv4.tcp_notsent_lowat = 16384
 EOF
-    
-    # Aplicar configurações
     sysctl -p /etc/sysctl.d/99-openvpn.conf >/dev/null 2>&1
     
-    # Aumentar limites de arquivo
-    if ! grep -q "openvpn" /etc/security/limits.conf 2>/dev/null; then
+    if ! grep -q "^\* soft nofile 65536" /etc/security/limits.conf 2>/dev/null; then
         echo "* soft nofile 65536" >> /etc/security/limits.conf
         echo "* hard nofile 65536" >> /etc/security/limits.conf
     fi
@@ -271,11 +281,10 @@ EOF
 install_openvpn() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════╗${SCOLOR}"
-    echo -e "${BLUE}║   OpenVPN Modern Installer v3.0        ║${SCOLOR}"
+    echo -e "${BLUE}║   OpenVPN Modern Installer v3.1        ║${SCOLOR}"
     echo -e "${BLUE}╚════════════════════════════════════════╝${SCOLOR}"
     echo
     
-    # Mostrar capacidades do sistema
     echo -e "${CYAN}Capacidades do Sistema:${SCOLOR}"
     echo -e "  ${WHITE}• CPU Cores:${SCOLOR} ${GREEN}$CPU_CORES${SCOLOR}"
     echo -e "  ${WHITE}• IPv6:${SCOLOR} ${GREEN}$SUPPORTS_IPV6${SCOLOR}"
@@ -285,36 +294,31 @@ install_openvpn() {
     
     info "Configurações automáticas:"
     echo -e "  ${WHITE}• Porta:${SCOLOR} ${GREEN}$AUTO_PORT${SCOLOR}"
-    echo -e "  ${WHITE}• Protocolo:${SCOLOR} ${GREEN}$AUTO_PROTOCOL${SCOLOR}"
+    echo -e "  ${WHITE}• Protocolo:${SCOLOR} ${GREEN}$AUTO_PROTOCOL (IPv4)${SCOLOR}"
     echo -e "  ${WHITE}• DNS:${SCOLOR} ${GREEN}Cloudflare ($AUTO_DNS1, $AUTO_DNS2)${SCOLOR}"
     echo -e "  ${WHITE}• Criptografia:${SCOLOR} ${GREEN}AES-256-GCM + ChaCha20-Poly1305${SCOLOR}"
     echo
     
-    sleep 2
+    sleep 1
     
-    # Aplicar otimizações
     optimize_system
     
-    # Configurar Easy-RSA com curvas elípticas
-    local EASY_RSA_DIR="/etc/openvpn/easy-rsa"
-    
+    local EASY_RSA_DIR="$OVPN_DIR/easy-rsa"
     info "Criando estrutura de diretórios..."
-    mkdir -p "$EASY_RSA_DIR" /etc/openvpn/client /var/log/openvpn
+    mkdir -p "$EASY_RSA_DIR" "$OVPN_CONF_DIR" /etc/openvpn/client "$OVPN_LOG_DIR"
     
     # Copiar Easy-RSA
+    local ersa_src=""
     for dir in /usr/share/easy-rsa /usr/lib/easy-rsa /usr/lib64/easy-rsa; do
-        if [[ -d "$dir" ]]; then
-            cp -r "$dir"/* "$EASY_RSA_DIR/"
-            break
-        fi
+        [[ -d "$dir" ]] && ersa_src="$dir" && break
     done
-    
-    [[ ! -f "$EASY_RSA_DIR/easyrsa" ]] && die "Easy-RSA não encontrado"
+    [[ -z "$ersa_src" ]] && die "Easy-RSA não encontrado"
+    cp -r "$ersa_src"/* "$EASY_RSA_DIR/"
     chmod +x "$EASY_RSA_DIR/easyrsa"
     
     cd "$EASY_RSA_DIR" || die "Falha ao acessar $EASY_RSA_DIR"
     
-    # Configurar vars para usar curvas elípticas (mais rápido e seguro)
+    # Vars utilizando EC (ECDSA)
     cat > vars << EOF
 set_var EASYRSA_ALGO ec
 set_var EASYRSA_CURVE secp384r1
@@ -325,16 +329,11 @@ set_var EASYRSA_CERT_EXPIRE 1825
 set_var EASYRSA_CRL_DAYS 180
 EOF
     
-    # Inicializar PKI
     fun_bar "./easyrsa init-pki" "Inicializando PKI"
-    
-    # Criar CA
     fun_bar "echo 'OpenVPN-CA' | ./easyrsa build-ca nopass" "Criando Autoridade Certificadora"
-    
-    # Gerar certificado do servidor
     fun_bar "echo 'yes' | ./easyrsa build-server-full server nopass" "Gerando certificado do servidor"
     
-    # Gerar DH (ou usar parâmetros pré-computados para acelerar)
+    # DH (não necessário para ECDSA, mas mantemos compatibilidade; usar 'dh none' seria suficiente)
     if [[ -f /usr/share/easy-rsa/dh2048.pem ]]; then
         cp /usr/share/easy-rsa/dh2048.pem pki/dh.pem
         info "Usando parâmetros DH pré-computados"
@@ -342,58 +341,43 @@ EOF
         fun_bar "./easyrsa gen-dh" "Gerando parâmetros Diffie-Hellman"
     fi
     
-    # Gerar chave tls-crypt (mais seguro que tls-auth)
+    # tls-crypt
     info "Gerando chave tls-crypt..."
     openvpn --genkey secret pki/tc.key || die "Falha ao gerar tls-crypt"
     
-    # Copiar arquivos
-    cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem pki/tc.key /etc/openvpn/
-    chmod 600 /etc/openvpn/*.{key,crt,pem}
+    # Copiar para o diretório da config do servidor
+    cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem pki/tc.key "$OVPN_CONF_DIR/"
+    chmod 600 "$OVPN_CONF_DIR/"*.{key,crt,pem}
     
-    # Configurar servidor com recursos modernos
     configure_modern_server
-    
-    # Configurar firewall
     configure_modern_firewall
     
-    # Iniciar serviço
     info "Iniciando OpenVPN..."
-    systemctl enable --now openvpn@server || die "Falha ao iniciar OpenVPN"
+    systemctl enable --now "$SERVER_UNIT" || die "Falha ao iniciar OpenVPN"
     
-    # Verificar se está rodando
     sleep 2
-    if ! systemctl is-active --quiet openvpn@server; then
-        journalctl -xeu openvpn@server.service --no-pager | tail -20
+    if ! systemctl is-active --quiet "$SERVER_UNIT"; then
+        journalctl -xeu "$SERVER_UNIT" --no-pager | tail -30
         die "OpenVPN falhou ao iniciar. Verifique os logs acima."
     fi
     
     success "OpenVPN instalado com sucesso!"
-    
-    # Criar primeiro cliente
     info "Criando cliente inicial..."
     create_modern_client "cliente1"
-    
-    # Mostrar resumo
     show_installation_summary
 }
 
 # --- Configuração Moderna do Servidor ---
 configure_modern_server() {
-    info "Configurando servidor com recursos modernos..."
+    info "Configurando servidor..."
     
-    local IP=$(get_public_ip)
-    local IPV6=""
+    local use_ipv6="$SUPPORTS_IPV6"
     
-    if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
-        IPV6=$(get_public_ipv6)
-    fi
-    
-    # Configuração moderna do servidor
-    cat > /etc/openvpn/server.conf << EOF
+    # Configuração do servidor (IPv4 listener; IPv6 dentro do túnel se disponível)
+    cat > "$SERVER_CONF" << EOF
 # OpenVPN Modern Configuration
 port $AUTO_PORT
 proto ${AUTO_PROTOCOL}
-proto ${AUTO_PROTOCOL}6
 dev tun
 
 # Certificados
@@ -405,19 +389,25 @@ dh dh.pem
 # Segurança moderna
 tls-crypt tc.key
 auth SHA512
-cipher AES-256-GCM
-ncp-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+
+# Criptografia de dados (OpenVPN 2.5/2.6)
+data-ciphers AES-256-GCM:CHACHA20-POLY1305:AES-128-GCM
+data-ciphers-fallback AES-256-GCM
+# Para compat com 2.4/2.5 (aviso em 2.6, mas inofensivo)
+ncp-ciphers AES-256-GCM:CHACHA20-POLY1305:AES-128-GCM
+
+# TLS
 tls-version-min 1.2
 tls-cipher TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384:TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384
+tls-ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256
 
 # Rede
 topology subnet
 server 10.8.0.0 255.255.255.0
 EOF
 
-    # Adicionar suporte IPv6 se disponível
-    if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
-        cat >> /etc/openvpn/server.conf << EOF
+    if [[ "$use_ipv6" == "yes" ]]; then
+        cat >> "$SERVER_CONF" << EOF
 server-ipv6 fd42:42:42::/64
 push "route-ipv6 ::/0"
 push "dhcp-option DNS6 $AUTO_DNS_IPV6_1"
@@ -425,8 +415,7 @@ push "dhcp-option DNS6 $AUTO_DNS_IPV6_2"
 EOF
     fi
 
-    # Configurações de push e performance
-    cat >> /etc/openvpn/server.conf << EOF
+    cat >> "$SERVER_CONF" << EOF
 
 # Push para clientes
 push "redirect-gateway def1 bypass-dhcp"
@@ -443,36 +432,20 @@ txqueuelen 1000
 mssfix 1420
 tun-mtu 1500
 
-# Compressão moderna
-compress lz4-v2
-push "compress lz4-v2"
-
-# Multi-threading (se suportado)
-EOF
-
-    # Adicionar multi-threading se tiver múltiplos cores
-    if [[ "$CPU_CORES" -gt 1 ]]; then
-        echo "# Multi-threading para $CPU_CORES cores" >> /etc/openvpn/server.conf
-        echo "threads $CPU_CORES" >> /etc/openvpn/server.conf
-    fi
-
-    # Configurações finais
-    cat >> /etc/openvpn/server.conf << EOF
-
 # Persistência e logging
 keepalive 10 120
 persist-key
 persist-tun
 user nobody
 group $GROUPNAME
-status /var/log/openvpn/status.log
-log-append /var/log/openvpn/openvpn.log
+status $OVPN_LOG_DIR/status.log
+log-append $OVPN_LOG_DIR/openvpn.log
 verb 3
 mute 20
 
 # Controle de clientes
 max-clients 100
-ifconfig-pool-persist /etc/openvpn/ipp.txt
+ifconfig-pool-persist $OVPN_CONF_DIR/ipp.txt
 client-to-client
 duplicate-cn
 
@@ -481,28 +454,24 @@ crl-verify crl.pem
 EOF
 
     # Gerar CRL
-    cd /etc/openvpn/easy-rsa/
+    cd "$OVPN_DIR/easy-rsa/" || die "Diretório easy-rsa não encontrado"
     ./easyrsa gen-crl
-    cp pki/crl.pem /etc/openvpn/
-    chmod 644 /etc/openvpn/crl.pem
+    cp pki/crl.pem "$OVPN_CONF_DIR/"
+    chmod 644 "$OVPN_CONF_DIR/crl.pem"
     
-    success "Servidor configurado com recursos modernos!"
+    success "Servidor configurado!"
 }
 
-# --- Configuração Moderna do Firewall ---
+# --- Configuração do Firewall ---
 configure_modern_firewall() {
-    info "Configurando firewall moderno..."
-    
-    local IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+    info "Configurando firewall..."
+    local IFACE
+    IFACE=$(ip -4 route ls | awk '/default/ {print $5; exit}')
     [[ -z "$IFACE" ]] && die "Interface de rede não detectada"
-    
     info "Interface principal: $IFACE"
     
-    # Usar nftables se disponível (mais moderno)
-    if [[ "$SUPPORTS_NFTABLES" == "yes" ]] && [[ "$OS" == "debian" ]]; then
+    if [[ "$SUPPORTS_NFTABLES" == "yes" && "$OS" == "debian" ]]; then
         info "Configurando nftables..."
-        
-        # Criar configuração nftables
         cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 
@@ -515,11 +484,11 @@ table inet filter {
         udp dport $AUTO_PORT accept
         tcp dport $AUTO_PORT accept
     }
-    
     chain forward {
         type filter hook forward priority 0; policy accept;
         iif "tun0" accept
         oif "tun0" accept
+        ct state related,established accept
     }
 }
 
@@ -544,21 +513,24 @@ EOF
         fi
         
         systemctl enable --now nftables
-        nft -f /etc/nftables.conf
-        
+        nft -f /etc/nftables.conf || die "Falha ao aplicar regras nftables"
     else
-        # Fallback para iptables
         info "Configurando iptables..."
+        # Abrir porta de entrada (FALTAVA NO SCRIPT ORIGINAL)
+        iptables -A INPUT -p "$AUTO_PROTOCOL" --dport "$AUTO_PORT" -j ACCEPT
+        # Se desejar, abrir TCP também (mesmo que não seja usado)
+        iptables -A INPUT -p tcp --dport "$AUTO_PORT" -j ACCEPT
         
-        # IPv4
+        # NAT e forward
         iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE
         iptables -A INPUT -i tun+ -j ACCEPT
         iptables -A FORWARD -i tun+ -j ACCEPT
         iptables -A FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT
         iptables -A FORWARD -i tun+ -o "$IFACE" -j ACCEPT
         
-        # IPv6 se disponível
         if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
+            # Abrir porta UDP/IPv6 somente se você futuramente migrar para proto udp6.
+            ip6tables -A INPUT -p "$AUTO_PROTOCOL" --dport "$AUTO_PORT" -j ACCEPT
             ip6tables -t nat -A POSTROUTING -s fd42:42:42::/64 -o "$IFACE" -j MASQUERADE
             ip6tables -A INPUT -i tun+ -j ACCEPT
             ip6tables -A FORWARD -i tun+ -j ACCEPT
@@ -566,24 +538,24 @@ EOF
             ip6tables -A FORWARD -i tun+ -o "$IFACE" -j ACCEPT
         fi
         
-        # Salvar regras
         if [[ "$OS" == "debian" ]]; then
+            mkdir -p /etc/iptables
             iptables-save > /etc/iptables/rules.v4
             [[ "$SUPPORTS_IPV6" == "yes" ]] && ip6tables-save > /etc/iptables/rules.v6
             systemctl enable --now netfilter-persistent
         elif [[ "$OS" == "centos" ]]; then
-            firewall-cmd --add-service=openvpn --permanent
-            firewall-cmd --add-port=$AUTO_PORT/udp --permanent
-            firewall-cmd --add-port=$AUTO_PORT/tcp --permanent
-            firewall-cmd --add-masquerade --permanent
-            firewall-cmd --reload
+            firewall-cmd --add-service=openvpn --permanent || true
+            firewall-cmd --add-port=$AUTO_PORT/udp --permanent || true
+            firewall-cmd --add-port=$AUTO_PORT/tcp --permanent || true
+            firewall-cmd --add-masquerade --permanent || true
+            firewall-cmd --reload || true
         fi
     fi
     
     success "Firewall configurado!"
 }
 
-# --- Criação de Cliente Moderno ---
+# --- Criação de Cliente ---
 create_modern_client() {
     local CLIENT_NAME="$1"
     
@@ -593,10 +565,8 @@ create_modern_client() {
         [[ -z "$CLIENT_NAME" ]] && warn "Nome inválido" && return
     fi
     
-    # Sanitizar nome
     CLIENT_NAME=$(echo "$CLIENT_NAME" | sed 's/[^a-zA-Z0-9_-]//g')
-    
-    cd /etc/openvpn/easy-rsa/
+    cd "$OVPN_DIR/easy-rsa/" || die "Diretório easy-rsa não encontrado"
     
     if [[ -f "pki/issued/${CLIENT_NAME}.crt" ]]; then
         warn "Cliente '$CLIENT_NAME' já existe"
@@ -605,39 +575,31 @@ create_modern_client() {
     
     fun_bar "echo 'yes' | ./easyrsa build-client-full '$CLIENT_NAME' nopass" "Gerando certificado"
     
-    # Obter informações do servidor
-    local IP=$(get_public_ip)
-    local IPV6=$(get_public_ipv6)
-    local PORT=$(grep '^port' /etc/openvpn/server.conf | awk '{print $2}')
-    local PROTO=$(grep '^proto' /etc/openvpn/server.conf | head -1 | awk '{print $2}')
+    local IP IPV6 PORT PROTO
+    IP=$(get_public_ip)
+    IPV6=$(get_public_ipv6)
+    PORT=$(grep -E '^\s*port\s+' "$SERVER_CONF" | awk '{print $2}')
+    PROTO=$(grep -E '^\s*proto\s+' "$SERVER_CONF" | awk '{print $2}')
     
-    # Criar diretório de clientes
     local CLIENT_DIR=~/ovpn-clients
     mkdir -p "$CLIENT_DIR"
     
-    # Gerar configuração moderna do cliente
     cat > "$CLIENT_DIR/${CLIENT_NAME}.ovpn" << EOF
 # OpenVPN Modern Client Configuration
 client
 dev tun
 proto ${PROTO}
 remote ${IP} ${PORT}
-EOF
-
-    # Adicionar IPv6 se disponível
-    if [[ -n "$IPV6" ]] && [[ "$SUPPORTS_IPV6" == "yes" ]]; then
-        echo "remote ${IPV6} ${PORT}" >> "$CLIENT_DIR/${CLIENT_NAME}.ovpn"
-    fi
-
-    cat >> "$CLIENT_DIR/${CLIENT_NAME}.ovpn" << EOF
 resolv-retry infinite
 nobind
 persist-key
 persist-tun
 remote-cert-tls server
+
+# Criptografia alinhada ao servidor
+data-ciphers AES-256-GCM:CHACHA20-POLY1305:AES-128-GCM
 auth SHA512
-cipher AES-256-GCM
-compress lz4-v2
+
 verb 3
 mute 20
 tun-mtu 1500
@@ -645,33 +607,36 @@ mssfix 1420
 sndbuf 0
 rcvbuf 0
 
-# Segurança adicional
+# TLS
 tls-version-min 1.2
 tls-cipher TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384:TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384
+tls-ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256
 
-# Certificados embutidos
 <ca>
-$(cat /etc/openvpn/ca.crt)
+$(cat "$OVPN_CONF_DIR/ca.crt")
 </ca>
 <cert>
-$(cat "/etc/openvpn/easy-rsa/pki/issued/${CLIENT_NAME}.crt")
+$(cat "$OVPN_DIR/easy-rsa/pki/issued/${CLIENT_NAME}.crt")
 </cert>
 <key>
-$(cat "/etc/openvpn/easy-rsa/pki/private/${CLIENT_NAME}.key")
+$(cat "$OVPN_DIR/easy-rsa/pki/private/${CLIENT_NAME}.key")
 </key>
 <tls-crypt>
-$(cat /etc/openvpn/tc.key)
+$(cat "$OVPN_CONF_DIR/tc.key")
 </tls-crypt>
 EOF
 
-    # Gerar QR Code para mobile
+    # Se e quando mudar o servidor para proto udp6, adicione esta linha remota IPv6:
+    # if [[ "$PROTO" == "udp6" || "$PROTO" == "tcp6" ]]; then
+    #     echo "remote ${IPV6} ${PORT}" >> "$CLIENT_DIR/${CLIENT_NAME}.ovpn"
+    # fi
+    
     if command -v qrencode >/dev/null 2>&1; then
         info "Gerando QR Code..."
-        cat "$CLIENT_DIR/${CLIENT_NAME}.ovpn" | qrencode -o "$CLIENT_DIR/${CLIENT_NAME}-qr.png"
+        qrencode -o "$CLIENT_DIR/${CLIENT_NAME}-qr.png" < "$CLIENT_DIR/${CLIENT_NAME}.ovpn"
         success "QR Code salvo em: $CLIENT_DIR/${CLIENT_NAME}-qr.png"
     fi
     
-    # Criar arquivo de informações
     cat > "$CLIENT_DIR/${CLIENT_NAME}-info.txt" << EOF
 ═══════════════════════════════════════════════════
 Cliente VPN: ${CLIENT_NAME}
@@ -682,7 +647,7 @@ INFORMAÇÕES DE CONEXÃO:
 • Servidor: ${IP}
 • Porta: ${PORT}
 • Protocolo: ${PROTO}
-• Criptografia: AES-256-GCM
+• Criptografia: AES-256-GCM/ChaCha20
 
 ARQUIVOS:
 • Configuração: ${CLIENT_NAME}.ovpn
@@ -691,7 +656,7 @@ ARQUIVOS:
 INSTRUÇÕES DE USO:
 
 1. WINDOWS:
-   - Baixe o OpenVPN GUI
+   - Instale OpenVPN GUI
    - Importe o arquivo .ovpn
 
 2. MACOS:
@@ -713,7 +678,7 @@ EOF
     echo -e "${WHITE}Arquivos salvos em: ${GREEN}$CLIENT_DIR/${SCOLOR}"
 }
 
-# --- Funções Auxiliares Adicionais ---
+# --- Funções Auxiliares ---
 get_public_ip() {
     local IP
     IP=$(curl -4 -s https://api.ipify.org 2>/dev/null) || \
@@ -728,32 +693,24 @@ get_public_ipv6() {
         local IPV6
         IPV6=$(curl -6 -s https://api6.ipify.org 2>/dev/null) || \
         IPV6=$(curl -6 -s https://ifconfig.co 2>/dev/null) || \
-        IPV6=$(ip -6 addr show scope global | grep -oP '(?<=inet6\s)[\da-f:]+' | head -1)
+        IPV6=$(ip -6 addr show scope global | awk '/inet6/ {print $2}' | cut -d/ -f1 | head -1)
         echo "$IPV6"
     fi
 }
 
-# --- Função de Backup ---
+# --- Backup ---
 backup_openvpn() {
     local BACKUP_DIR="/root/openvpn-backup-$(date +%Y%m%d-%H%M%S)"
-    
     info "Criando backup em $BACKUP_DIR..."
     mkdir -p "$BACKUP_DIR"
-    
-    # Backup de configurações
-    cp -r /etc/openvpn "$BACKUP_DIR/"
-    
-    # Backup de clientes
+    cp -r "$OVPN_DIR" "$BACKUP_DIR/"
     [[ -d ~/ovpn-clients ]] && cp -r ~/ovpn-clients "$BACKUP_DIR/"
-    
-    # Criar arquivo tar.gz
     tar -czf "${BACKUP_DIR}.tar.gz" -C "$(dirname "$BACKUP_DIR")" "$(basename "$BACKUP_DIR")"
     rm -rf "$BACKUP_DIR"
-    
     success "Backup salvo em: ${BACKUP_DIR}.tar.gz"
 }
 
-# --- Monitoramento Básico ---
+# --- Status ---
 show_status() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════╗${SCOLOR}"
@@ -761,42 +718,40 @@ show_status() {
     echo -e "${BLUE}╚════════════════════════════════════════╝${SCOLOR}"
     echo
     
-    # Status do serviço
-    if systemctl is-active --quiet openvpn@server; then
+    if systemctl is-active --quiet "$SERVER_UNIT"; then
         echo -e "${GREEN}● Serviço: ATIVO${SCOLOR}"
-        
-        # Uptime
-        local uptime=$(systemctl show openvpn@server --property=ActiveEnterTimestamp | cut -d= -f2)
+        local uptime
+        uptime=$(systemctl show "$SERVER_UNIT" --property=ActiveEnterTimestamp | cut -d= -f2)
         echo -e "${WHITE}  Uptime: ${CYAN}$uptime${SCOLOR}"
         
-        # Clientes conectados
-        if [[ -f /var/log/openvpn/status.log ]]; then
-            local clients=$(grep -c "^CLIENT_LIST" /var/log/openvpn/status.log 2>/dev/null || echo "0")
+        if [[ -f "$OVPN_LOG_DIR/status.log" ]]; then
+            local clients
+            clients=$(grep -c "^CLIENT_LIST" "$OVPN_LOG_DIR/status.log" 2>/dev/null || echo "0")
             echo -e "${WHITE}  Clientes conectados: ${GREEN}$clients${SCOLOR}"
-            
             if [[ "$clients" -gt 0 ]]; then
                 echo -e "\n${YELLOW}Clientes ativos:${SCOLOR}"
-                grep "^CLIENT_LIST" /var/log/openvpn/status.log | awk -F',' '{print "  • " $2 " - IP: " $3}'
+                grep "^CLIENT_LIST" "$OVPN_LOG_DIR/status.log" | awk -F',' '{print "  • " $2 " - IP: " $3}'
             fi
         fi
         
-        # Uso de recursos
         echo -e "\n${CYAN}Uso de recursos:${SCOLOR}"
-        local pid=$(pgrep -f "openvpn.*server.conf")
+        local pid
+        pid=$(pgrep -f "openvpn.*server.conf")
         if [[ -n "$pid" ]]; then
-            ps -p "$pid" -o %cpu,%mem,rss --no-headers | while read cpu mem rss; do
+            ps -p "$pid" -o %cpu,%mem,rss --no-headers | while read -r cpu mem rss; do
                 echo -e "  CPU: ${WHITE}${cpu}%${SCOLOR} | RAM: ${WHITE}${mem}%${SCOLOR} (${rss} KB)"
             done
         fi
         
-        # Tráfego de rede
         if [[ -f /proc/net/dev ]]; then
             echo -e "\n${CYAN}Tráfego (tun0):${SCOLOR}"
-            local stats=$(grep "tun0" /proc/net/dev | awk '{print "  RX: " $2/1048576 " MB | TX: " $10/1048576 " MB"}')
-            echo -e "${WHITE}$stats${SCOLOR}"
+            local stats
+            stats=$(grep "tun0" /proc/net/dev | awk '{printf "  RX: %.2f MB | TX: %.2f MB", $2/1048576, $10/1048576}')
+            [[ -n "$stats" ]] && echo -e "${WHITE}$stats${SCOLOR}" || echo -e "${WHITE}  Sem dados.${SCOLOR}"
         fi
     else
         echo -e "${RED}● Serviço: INATIVO${SCOLOR}"
+        journalctl -xeu "$SERVER_UNIT" --no-pager | tail -20
     fi
     
     echo
@@ -804,7 +759,7 @@ show_status() {
     read -r
 }
 
-# --- Resumo da Instalação ---
+# --- Resumo ---
 show_installation_summary() {
     echo
     echo -e "${GREEN}╔════════════════════════════════════════╗${SCOLOR}"
@@ -813,41 +768,37 @@ show_installation_summary() {
     echo
     echo -e "${WHITE}Resumo da Configuração:${SCOLOR}"
     echo -e "  ${WHITE}• IP Público:${SCOLOR} ${GREEN}$(get_public_ip)${SCOLOR}"
-    
     if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
-        local ipv6=$(get_public_ipv6)
+        local ipv6
+        ipv6=$(get_public_ipv6)
         [[ -n "$ipv6" ]] && echo -e "  ${WHITE}• IPv6:${SCOLOR} ${GREEN}$ipv6${SCOLOR}"
     fi
-    
     echo -e "  ${WHITE}• Porta:${SCOLOR} ${GREEN}$AUTO_PORT ($AUTO_PROTOCOL)${SCOLOR}"
     echo -e "  ${WHITE}• Subnet VPN:${SCOLOR} ${GREEN}10.8.0.0/24${SCOLOR}"
     [[ "$SUPPORTS_IPV6" == "yes" ]] && echo -e "  ${WHITE}• Subnet IPv6:${SCOLOR} ${GREEN}fd42:42:42::/64${SCOLOR}"
     echo -e "  ${WHITE}• DNS:${SCOLOR} ${GREEN}Cloudflare${SCOLOR}"
     echo -e "  ${WHITE}• Criptografia:${SCOLOR} ${GREEN}AES-256-GCM / ChaCha20${SCOLOR}"
-    echo -e "  ${WHITE}• Compressão:${SCOLOR} ${GREEN}LZ4${SCOLOR}"
     echo
     echo -e "${CYAN}Recursos Modernos Ativados:${SCOLOR}"
     echo -e "  ✓ TLS-Crypt (proteção DDoS)"
     echo -e "  ✓ Curvas Elípticas (ECDSA)"
     echo -e "  ✓ Perfect Forward Secrecy"
-    echo -e "  ✓ Compressão LZ4"
-    [[ "$CPU_CORES" -gt 1 ]] && echo -e "  ✓ Multi-threading ($CPU_CORES cores)"
-    [[ "$SUPPORTS_IPV6" == "yes" ]] && echo -e "  ✓ Suporte IPv6"
-    [[ "$SUPPORTS_NFTABLES" == "yes" ]] && echo -e "  ✓ NFTables"
+    [[ "$CPU_CORES" -gt 1 ]] && echo -e "  ✓ Otimizações de kernel (BBR, fq)"
+    [[ "$SUPPORTS_IPV6" == "yes" ]] && echo -e "  ✓ Suporte IPv6 dentro do túnel"
+    [[ "$SUPPORTS_NFTABLES" == "yes" ]] && echo -e "  ✓ NFTables (se disponível)"
     echo
     echo -e "${YELLOW}Arquivo do cliente:${SCOLOR}"
     echo -e "  ${GREEN}~/ovpn-clients/cliente1.ovpn${SCOLOR}"
     echo
 }
 
-# --- Função de Revogação Melhorada ---
+# --- Revogação ---
 revoke_client() {
-    cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado"
-    
-    # Listar clientes
+    cd "$OVPN_DIR/easy-rsa/" || die "Diretório easy-rsa não encontrado"
     local clients=()
     while IFS= read -r file; do
-        local client=$(basename "$file" .crt)
+        local client
+        client=$(basename "$file" .crt)
         [[ "$client" != "server" ]] && clients+=("$client")
     done < <(find pki/issued -name "*.crt" 2>/dev/null)
     
@@ -860,7 +811,6 @@ revoke_client() {
     for i in "${!clients[@]}"; do
         echo " $((i + 1))) ${clients[$i]}"
     done
-    
     echo -ne "${WHITE}Número: ${SCOLOR}"
     read -r choice
     
@@ -870,41 +820,32 @@ revoke_client() {
     fi
     
     local CLIENT="${clients[$((choice - 1))]}"
-    
     echo -ne "${RED}Revogar '$CLIENT'? [s/N]: ${SCOLOR}"
     read -r confirm
     
     if [[ "$confirm" =~ ^[sS]$ ]]; then
-        # Criar backup antes de revogar
         backup_openvpn
-        
         fun_bar "echo 'yes' | ./easyrsa revoke '$CLIENT'" "Revogando certificado"
         fun_bar "./easyrsa gen-crl" "Atualizando CRL"
-        
-        cp pki/crl.pem /etc/openvpn/
-        systemctl restart openvpn@server
-        
-        # Remover arquivos do cliente
+        cp pki/crl.pem "$OVPN_CONF_DIR/"
+        systemctl restart "$SERVER_UNIT"
         rm -f ~/ovpn-clients/"${CLIENT}"*
-        
         success "Cliente '$CLIENT' revogado!"
     else
         warn "Operação cancelada"
     fi
 }
 
-# --- Desinstalação Completa ---
+# --- Desinstalação ---
 uninstall_openvpn() {
     echo -ne "${RED}ATENÇÃO: Isso removerá TUDO! Continuar? [s/N]: ${SCOLOR}"
     read -r confirm
     
     if [[ "$confirm" =~ ^[sS]$ ]]; then
-        # Criar backup final
         backup_openvpn
-        
         info "Parando serviços..."
-        systemctl stop openvpn@server 2>/dev/null
-        systemctl disable openvpn@server 2>/dev/null
+        systemctl stop "$SERVER_UNIT" 2>/dev/null
+        systemctl disable "$SERVER_UNIT" 2>/dev/null
         
         info "Removendo pacotes..."
         if [[ "$OS" == "debian" ]]; then
@@ -919,20 +860,19 @@ uninstall_openvpn() {
             rm -f /etc/nftables.conf
             systemctl stop nftables
         else
-            # Limpar iptables
-            iptables -t nat -F
-            iptables -F
+            iptables -t nat -F || true
+            iptables -F || true
             if [[ "$OS" == "debian" ]]; then
+                mkdir -p /etc/iptables
                 > /etc/iptables/rules.v4
                 > /etc/iptables/rules.v6
             fi
         fi
         
         info "Removendo arquivos..."
-        rm -rf /etc/openvpn
+        rm -rf "$OVPN_DIR"
         rm -rf ~/ovpn-clients
         rm -f /etc/sysctl.d/99-openvpn.conf
-        
         sysctl -p >/dev/null 2>&1
         
         success "OpenVPN removido completamente!"
@@ -942,27 +882,27 @@ uninstall_openvpn() {
     fi
 }
 
-# --- Menu Principal Aprimorado ---
+# --- Menu Principal ---
 main_menu() {
     while true; do
         clear
         echo -e "${BLUE}╔════════════════════════════════════════╗${SCOLOR}"
-        echo -e "${BLUE}║   OpenVPN Modern Manager v3.0          ║${SCOLOR}"
+        echo -e "${BLUE}║   OpenVPN Modern Manager v3.1          ║${SCOLOR}"
         echo -e "${BLUE}╚════════════════════════════════════════╝${SCOLOR}"
         echo -e "${CYAN}Sistema: $OS_NAME${SCOLOR}"
         echo
         
-        if systemctl is-active --quiet openvpn@server 2>/dev/null; then
-            local ip=$(get_public_ip)
-            local port=$(grep '^port' /etc/openvpn/server.conf 2>/dev/null | awk '{print $2}')
-            local proto=$(grep '^proto' /etc/openvpn/server.conf 2>/dev/null | head -1 | awk '{print $2}')
-            local clients_count=$(find /etc/openvpn/easy-rsa/pki/issued -name "*.crt" 2>/dev/null | grep -cv server)
+        if systemctl is-active --quiet "$SERVER_UNIT" 2>/dev/null; then
+            local ip port proto clients_count
+            ip=$(get_public_ip)
+            port=$(grep -E '^\s*port\s+' "$SERVER_CONF" 2>/dev/null | awk '{print $2}')
+            proto=$(grep -E '^\s*proto\s+' "$SERVER_CONF" 2>/dev/null | awk '{print $2}')
+            clients_count=$(find "$OVPN_DIR/easy-rsa/pki/issued" -name "*.crt" 2>/dev/null | grep -cv server)
             
             echo -e "${GREEN}● OpenVPN: ATIVO${SCOLOR}"
             echo -e "${WHITE}  Servidor: $ip:$port ($proto)${SCOLOR}"
             echo -e "${WHITE}  Clientes criados: $clients_count${SCOLOR}"
             echo
-            
             echo -e "${YELLOW}1)${SCOLOR} Criar novo cliente"
             echo -e "${YELLOW}2)${SCOLOR} Revogar cliente"
             echo -e "${YELLOW}3)${SCOLOR} Mostrar status detalhado"
@@ -970,7 +910,7 @@ main_menu() {
             echo -e "${YELLOW}5)${SCOLOR} Desinstalar OpenVPN"
             echo -e "${YELLOW}0)${SCOLOR} Sair"
         else
-            echo -e "${RED}● OpenVPN: NÃO INSTALADO${SCOLOR}"
+            echo -e "${RED}● OpenVPN: NÃO ATIVO/INSTALADO${SCOLOR}"
             echo
             echo -e "${YELLOW}1)${SCOLOR} Instalar OpenVPN (Automático)"
             echo -e "${YELLOW}0)${SCOLOR} Sair"
@@ -980,7 +920,7 @@ main_menu() {
         echo -ne "${WHITE}Opção: ${SCOLOR}"
         read -r choice
         
-        if systemctl is-active --quiet openvpn@server 2>/dev/null; then
+        if systemctl is-active --quiet "$SERVER_UNIT" 2>/dev/null; then
             case "$choice" in
                 1) create_modern_client ;;
                 2) revoke_client ;;
@@ -1012,26 +952,17 @@ main_menu() {
     done
 }
 
-# --- Ponto de Entrada Principal ---
+# --- Ponto de Entrada ---
 main() {
-    # Verificações iniciais
     check_root
     check_bash
     check_virtualization
     check_kernel_version
-    
-    # Detectar sistema
     detect_os
-    
-    # Verificar dependências
     check_dependencies
-    
-    # Iniciar menu
+    detect_openvpn_layout
     main_menu
 }
 
-# Tratamento de sinais
 trap 'echo -e "\n${RED}Script interrompido!${SCOLOR}"; tput cnorm; exit 130' INT TERM
-
-# Executar
 main "$@"
