@@ -1,3 +1,4 @@
+install.sh
 #!/bin/bash
 #script para a instalação do projeto multiflow, zram e swap automaticos.
 
