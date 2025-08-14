@@ -93,11 +93,6 @@ def bootstrap_imports():
         "menu_servidor_download": "menus.menu_servidor_download",
         "menu_openvpn": "menus.menu_openvpn",
         "multiprotocolo": "conexoes.multiprotocolo",
-        "dtunnel_proxy": "DtunnelProxy.dtmenu",
-        "rusty_proxy_install": "RustyProxy.install_rustyproxy",
-        "rusty_proxy_menu": "RustyProxy.menu",
-        "slowdns_installer": "Slowdns.dnstt-installer",
-        "slowdns_manager": "Slowdns.dnstt-manager",
     }
 
     imported = {}
@@ -143,7 +138,7 @@ bootstrap_imports()
 # Importando módulos do projeto (já resolvidos pelo bootstrap)
 from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
 from menus import menu_badvpn, menu_proxysocks, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
-from conexoes import multiprotocolo, dtunnel_proxy, rusty_proxy_install, rusty_proxy_menu, slowdns_installer, slowdns_manager  # noqa: F401
+from conexoes import multiprotocolo  # noqa: F401
 
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
@@ -735,18 +730,22 @@ def conexoes_menu():
         elif choice == "2":
             TerminalManager.leave_alt_screen()
             try:
-                dtunnel_proxy.main()
+                subprocess.run([os.path.join(_find_multiflow_root(), 'DtunnelProxy', 'dtmenu')], check=True)
+            except Exception as e:
+                status = f"Erro ao iniciar Dtunnel Proxy: {e}"
             finally:
                 TerminalManager.enter_alt_screen()
             status = "Dtunnel Proxy: operação concluída."
         elif choice == "3":
             TerminalManager.leave_alt_screen()
             try:
-                # Verifica se o RustyProxy está instalado
-                if os.path.exists('/usr/local/bin/rustyproxy'):
-                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'RustyProxy', 'menu.sh')], check=True)
+                # Verifica se o RustyProxy está instalado (pode ser um binário ou um indicador de instalação)
+                # Assumindo que a presença de menu.sh indica instalação ou que install_rustyproxy.sh pode ser chamado repetidamente
+                rusty_proxy_path = os.path.join(_find_multiflow_root(), 'RustyProxy')
+                if os.path.exists(os.path.join(rusty_proxy_path, 'menu.sh')):
+                    subprocess.run(['bash', os.path.join(rusty_proxy_path, 'menu.sh')], check=True)
                 else:
-                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'RustyProxy', 'install_rustyproxy.sh')], check=True)
+                    subprocess.run(['bash', os.path.join(rusty_proxy_path, 'install_rustyproxy.sh')], check=True)
             except Exception as e:
                 status = f"Erro ao gerenciar RustyProxy: {e}"
             finally:
@@ -755,17 +754,18 @@ def conexoes_menu():
         elif choice == "4":
             TerminalManager.leave_alt_screen()
             try:
-                # Verifica se o Slow DNS está instalado
-                if os.path.exists('/usr/local/bin/dnstt-server') or os.path.exists('/usr/local/bin/dnstt-client'):
-                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'Slowdns', 'dnstt-manager')], check=True)
+                # Verifica se o Slow DNS está instalado (pode ser um binário ou um indicador de instalação)
+                # Assumindo que a presença de dnstt-manager indica instalação ou que dnstt-installer.sh pode ser chamado repetidamente
+                slowdns_path = os.path.join(_find_multiflow_root(), 'Slowdns')
+                if os.path.exists(os.path.join(slowdns_path, 'dnstt-manager')):
+                    subprocess.run(['bash', os.path.join(slowdns_path, 'dnstt-manager')], check=True)
                 else:
-                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'Slowdns', 'dnstt-installer.sh')], check=True)
+                    subprocess.run(['bash', os.path.join(slowdns_path, 'dnstt-installer.sh')], check=True)
             except Exception as e:
                 status = f"Erro ao gerenciar Slow DNS: {e}"
             finally:
                 TerminalManager.enter_alt_screen()
-            status = "Slow DNS: operação concluída."
-        elif choice == "5":
+            status = "Slow DNS: operação concluída."        elif choice == "5":
             TerminalManager.leave_alt_screen()
             try:
                 menu_proxysocks.main_menu()
