@@ -13,6 +13,16 @@ import random
 import importlib
 import importlib.util
 
+INSTALL_SCRIPT = "/opt/multiflow/install.sh"
+
+def execute_install_function(func_name):
+    try:
+        subprocess.run(["sudo", "bash", "-c", f"source {INSTALL_SCRIPT} && {func_name}"], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Erro ao executar a função de instalação {func_name}: {e}")
+        return False
+
 # ==================== BOOTSTRAP DE IMPORTAÇÃO ====================
 # Tenta localizar a raiz do projeto (contendo 'menus' e 'ferramentas'),
 # ajusta sys.path e importa os módulos necessários.
@@ -575,19 +585,69 @@ def conexoes_menu():
                     # This part needs to be implemented as a function
                     # For now, we'll simulate the installation
                     subprocess.run(["bash", "/opt/multiflow/install_slowdns.sh"], check=True)
+                    elif choice == "2":
+            # RustyProxy
+            if not os.path.exists("/opt/rustyproxy/menu"):
+                print(f"{MC.YELLOW_GRADIENT}Instalando RustyProxy...{MC.RESET}")
+                if execute_install_function("install_rustyproxy"):
+                    print(f"{MC.GREEN_GRADIENT}RustyProxy instalado com sucesso!{MC.RESET}")
+                else:
+                    print(f"{MC.RED_GRADIENT}Falha na instalação do RustyProxy.{MC.RESET}")
+                    input("Pressione Enter para continuar...")
+              elif choice == "2":
+            # RustyProxy
+            if not os.path.exists("/opt/rustyproxy/menu"):
+                print(f"{MC.YELLOW_GRADIENT}Instalando RustyProxy...{MC.RESET}")
+                if execute_install_function("install_rustyproxy"):
+                    print(f"{MC.GREEN_GRADIENT}RustyProxy instalado com sucesso!{MC.RESET}")
+                else:
+                    print(f"{MC.RED_GRADIENT}Falha na instalação do RustyProxy.{MC.RESET}")
+                    input("Pressione Enter para continuar...")
+                    continue
+            subprocess.run(["sudo", "bash", "/opt/rustyproxy/menu"])    elif choice == "3":
+            # Dtunnel Proxy
+            if not os.path.exists("/opt/multiflow/DtunnelProxy/dtmenu"):
+                print(f"{MC.YELLOW_GRADIENT}Instalando Dtunnel Proxy...{MC.RESET}")
+                if execute_install_function("install_dtunnelproxy"):
+                    print(f"{MC.GREEN_GRADIENT}Dtunnel Proxy instalado com sucesso!{MC.RESET}")
+                else:
+                    print(f"{MC.RED_GRADIENT}Falha na instalação do Dtunnel Proxy.{MC.RESET}")
+                    input("Pressione Enter para continuar...")
+                 elif choice == "3":
+            # Dtunnel Proxy
+            if not os.path.exists("/opt/multiflow/DtunnelProxy/dtmenu"):
+                print(f"{MC.YELLOW_GRADIENT}Instalando Dtunnel Proxy...{MC.RESET}")
+                if execute_install_function("install_dtunnelproxy"):
+                    print(f"{MC.GREEN_GRADIENT}Dtunnel Proxy instalado com sucesso!{MC.RESET}")
+                else:
+                    print(f"{MC.RED_GRADIENT}Falha na instalação do Dtunnel Proxy.{MC.RESET}")
+                    input("Pressione Enter para continuar...")
+                    continue
+            subprocess.run(["sudo", "bash", "/opt/multiflow/DtunnelProxy/dtmenu"]) elif choice == "4":
+            # SlowDNS
+            if not os.path.exists("/opt/multiflow/Slowdns/dnstt-installer.sh"):
+                print(f"{MC.YELLOW_GRADIENT}Instalando SlowDNS...{MC.RESET}")
+                if execute_install_function("install_slowdns"):
                     print(f"{MC.GREEN_GRADIENT}SlowDNS instalado com sucesso!{MC.RESET}")
-                    time.sleep(2)
-                subprocess.run(["bash", "/opt/multiflow/Slowdns/slowdns"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "SlowDNS: operação concluída."
-        elif choice == "5":
+                else:
+                    print(f"{MC.RED_GRADIENT}Falha na instalação do SlowDNS.{MC.RESET}")
+                    input("Pressione Enter para continuar...")
+             elif choice == "4":
+            # SlowDNS
+            if not os.path.exists("/opt/multiflow/Slowdns/dnstt-installer.sh"):
+                print(f"{MC.YELLOW_GRADIENT}Instalando SlowDNS...{MC.RESET}")
+                if execute_install_function("install_slowdns"):
+                    print(f"{MC.GREEN_GRADIENT}SlowDNS instalado com sucesso!{MC.RESET}")
+                else:
+                    print(f"{MC.RED_GRADIENT}Falha na instalação do SlowDNS.{MC.RESET}")
+                    input("Pressione Enter para continuar...")
+                    continue
+            subprocess.run(["sudo", "bash", "/opt/multiflow/Slowdns/dnstt-installer.sh"])     elif choice == "5":
             menu_proxysocks.proxysocks_menu()
             status = "ProxySocks: operação concluída."
         elif choice == "6":
             multiprotocolo.multiprotocolo_menu()
-            status = "Multiprotocolo: operação concluída."
-        elif choice == "0":
+            status = "Multiprotocolo: operação concluída."      elif choice == "0":
             return
         else:
             status = f"{MC.RED_GRADIENT}Opção inválida: {choice}. Tente novamente.{MC.RESET}"
