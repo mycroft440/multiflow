@@ -471,9 +471,10 @@ def build_connections_frame(status_msg=""):
     s.append("\n")
     s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
     s.append("\n")
-    s.append(menu_option("1", "Gerenciar OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "ProxySocks (Simples)", Icons.UNLOCK, MC.BLUE_GRADIENT))
-    s.append(menu_option("3", "Multiprotocolo", Icons.NETWORK, MC.ORANGE_GRADIENT))
+    s.append(menu_option("1", "OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "RustyProxy", Icons.SHIELD, MC.RED_GRADIENT))
+    s.append(menu_option("3", "ProxySocks", Icons.UNLOCK, MC.BLUE_GRADIENT))
+    s.append(menu_option("4", "Multiprotocolo", Icons.NETWORK, MC.ORANGE_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -552,10 +553,17 @@ def conexoes_menu():
             menu_openvpn.main_menu()
             status = "OpenVPN: operação concluída."
         elif choice == "2":
+            TerminalManager.leave_alt_screen()
+            try:
+                subprocess.run(["bash", "/home/ubuntu/multiflow-main/RustyProxy/menu.sh"], check=True)
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "RustyProxy: operação concluída."
+        elif choice == "3":
             # NÃO sair do alt-screen; o submenu mantém a UI
             menu_proxysocks.main_menu()
             status = "ProxySocks: operação concluída."
-        elif choice == "3":
+        elif choice == "4":
             # NÃO sair do alt-screen; o submenu mantém a UI
             multiprotocolo.main()
             status = "Multiprotocolo: operação concluída."
