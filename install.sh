@@ -6,11 +6,11 @@ set -e
 set -o pipefail
 
 # --- Configuração de Cores e Funções de Log ---
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-BLUE="\033[0;34m"
-NC="\033[0m" # No Color
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -97,8 +97,10 @@ $SUDO apt-get upgrade -y --with-new-pkgs
 $SUDO apt-get --fix-broken install -y
 $SUDO dpkg --configure -a
 
-log_info "A instalar dependências essenciais para todo o projeto..."
-$SUDO apt-get install -y python3 python3-pip git python3-psutil curl build-essential rustc cargo lsb-release
+log_info "A instalar dependências essenciais..."
+# REMOVIDO: build-essential, automake, autoconf, libtool, gcc, pois badvpn.c não é mais compilado.
+# REMOVIDO: python3-requests, pois não parece ser usado. Adicionado python3-psutil.
+$SUDO apt-get install -y python3 python3-pip git python3-psutil
 $SUDO apt-get autoremove -y
 $SUDO apt-get clean
 
@@ -116,14 +118,16 @@ fi
 $SUDO mkdir -p "$INSTALL_DIR"
 $SUDO cp -a . "$INSTALL_DIR/"
 
-# 6. Compilação dos Binários (se houver)
+# 6. Compilação dos Binários
+# REMOVIDO: Bloco de compilação do badvpn.c foi completamente removido, pois o arquivo não existe mais.
+# O projeto agora usa badvpn.sh.
 log_info "Etapa de compilação C ignorada (não é mais necessária)."
 
 cd "$INSTALL_DIR"
 
 # 7. Configuração de Permissões e Shebangs
 log_info "A configurar permissões de execução para os scripts..."
-find "$INSTALL_DIR" -type f -name "*.py" -print0 | while IFS= read -r -d $\'\0\' script; do
+find "$INSTALL_DIR" -type f -name "*.py" -print0 | while IFS= read -r -d $'\0' script; do
     # Garante que o shebang está correto
     if ! grep -q "^#\!/usr/bin/env python3" "$script"; then
         $SUDO sed -i '1i#!/usr/bin/env python3' "$script"
@@ -188,172 +192,3 @@ if [ -t 0 ]; then
 else
     log_info "Instalação concluída. Para iniciar, execute 'multiflow'."
 fi
-
-
-
-
-# --- Funções de Instalação de Proxies (Chamada Sob Demanda) ---
-
-install_rustyproxy() {
-    log_info "A iniciar instalação do RustyProxy..."
-    RUSTY_DIR="/opt/rustyproxy"
-
-    # Criando o diretório do script
-    log_info "Criando diretorio $RUSTY_DIR..."
-    $SUDO mkdir -p "$RUSTY_DIR" || error_exit "Falha ao criar diretorio $RUSTY_DIR"
-
-    # Instalar o RustyProxy
-    log_info "Compilando RustyProxy, isso pode levar algum tempo dependendo da maquina..."
-
-    if [ -d "/root/RustyProxyOnly" ]; then
-        $SUDO rm -rf /root/RustyProxyOnly
-    fi
-
-    $SUDO git clone --branch "main" https://github.com/UlekBR/RustyProxyOnly.git /root/RustyProxyOnly || error_exit "Falha ao clonar rustyproxy"
-    $SUDO mv /root/RustyProxyOnly/menu.sh "$RUSTY_DIR/menu"
-    cd /root/RustyProxyOnly/RustyProxy
-    $SUDO cargo build --release --jobs $(nproc) || error_exit "Falha ao compilar rustyproxy"
-    $SUDO mv ./target/release/RustyProxy "$RUSTY_DIR/proxy"
-
-    # Configuração de permissões
-    log_info "Configurando permissões..."
-    $SUDO chmod +x "$RUSTY_DIR/proxy"
-    $SUDO chmod +x "$RUSTY_DIR/menu"
-    $SUDO ln -sf "$RUSTY_DIR/menu" /usr/local/bin/rustyproxy
-
-    # Criação do arquivo de portas para RustyProxy
-    log_info "Criando arquivo de portas para RustyProxy..."
-    $SUDO touch "$RUSTY_DIR/ports"
-    $SUDO chmod 666 "$RUSTY_DIR/ports"
-
-    # Limpeza
-    log_info "Limpando diretórios temporários..."
-    $SUDO rm -rf /root/RustyProxyOnly/
-
-    log_info "RustyProxy instalado com sucesso. Digite \'rustyproxy\' para acessar o menu ou use o menu principal do Multiflow."
-}
-
-install_dtunnelproxy() {
-    log_info "A iniciar instalação do Dtunnel Proxy..."
-    DTUNNEL_DIR="/opt/multiflow/DtunnelProxy"
-
-    # Criando o diretório do script
-    log_info "Criando diretorio $DTUNNEL_DIR..."
-    $SUDO mkdir -p "$DTUNNEL_DIR" || error_exit "Falha ao criar diretorio $DTUNNEL_DIR"
-
-    # Copiando os binários
-    log_info "Copiando binários do Dtunnel Proxy..."
-    $SUDO cp -a "$INSTALL_DIR/DtunnelProxy/." "$DTUNNEL_DIR/" || error_exit "Falha ao copiar arquivos do DtunnelProxy"
-
-    # Configurando permissões
-    log_info "Configurando permissões..."
-    $SUDO chmod +x "$DTUNNEL_DIR/dtmenu"
-    $SUDO chmod +x "$DTUNNEL_DIR/proxydt"
-
-    log_info "Dtunnel Proxy instalado com sucesso."
-}
-
-install_slowdns() {
-    log_info "A iniciar instalação do SlowDNS..."
-    SLOWDNS_DIR="/opt/multiflow/Slowdns"
-
-    # Criando o diretório do script
-    log_info "Criando diretorio $SLOWDNS_DIR..."
-    $SUDO mkdir -p "$SLOWDNS_DIR" || error_exit "Falha ao criar diretorio $SLOWDNS_DIR"
-
-    # Copiando os binários
-    log_info "Copiando binários do SlowDNS..."
-    $SUDO cp -a "$INSTALL_DIR/Slowdns/." "$SLOWDNS_DIR/" || error_exit "Falha ao copiar arquivos do SlowDNS"
-
-    # Configurando permissões
-    log_info "Configurando permissões..."
-    $SUDO chmod +x "$SLOWDNS_DIR/slowdns"
-    $SUDO chmod +x "$SLOWDNS_DIR/dnstt-installer.sh"
-    $SUDO chmod +x "$SLOWDNS_DIR/dnstt-manager"
-
-    log_info "SlowDNS instalado com sucesso."
-}
-
-
-
-# --- Funções de Instalação de Proxies (Chamada Sob Demanda) ---
-
-install_rustyproxy() {
-    log_info "A iniciar instalação do RustyProxy..."
-    RUSTY_DIR="/opt/rustyproxy"
-
-    # Criando o diretório do script
-    log_info "Criando diretorio $RUSTY_DIR..."
-    $SUDO mkdir -p "$RUSTY_DIR" || error_exit "Falha ao criar diretorio $RUSTY_DIR"
-
-    # Instalar o RustyProxy
-    log_info "Compilando RustyProxy, isso pode levar algum tempo dependendo da maquina..."
-
-    if [ -d "/root/RustyProxyOnly" ]; then
-        $SUDO rm -rf /root/RustyProxyOnly
-    fi
-
-    $SUDO git clone --branch "main" https://github.com/UlekBR/RustyProxyOnly.git /root/RustyProxyOnly || error_exit "Falha ao clonar rustyproxy"
-    $SUDO mv /root/RustyProxyOnly/menu.sh "$RUSTY_DIR/menu"
-    cd /root/RustyProxyOnly/RustyProxy
-    $SUDO cargo build --release --jobs $(nproc) || error_exit "Falha ao compilar rustyproxy"
-    $SUDO mv ./target/release/RustyProxy "$RUSTY_DIR/proxy"
-
-    # Configuração de permissões
-    log_info "Configurando permissões..."
-    $SUDO chmod +x "$RUSTY_DIR/proxy"
-    $SUDO chmod +x "$RUSTY_DIR/menu"
-    $SUDO ln -sf "$RUSTY_DIR/menu" /usr/local/bin/rustyproxy
-
-    # Criação do arquivo de portas para RustyProxy
-    log_info "Criando arquivo de portas para RustyProxy..."
-    $SUDO touch "$RUSTY_DIR/ports"
-    $SUDO chmod 666 "$RUSTY_DIR/ports"
-
-    # Limpeza
-    log_info "Limpando diretórios temporários..."
-    $SUDO rm -rf /root/RustyProxyOnly/
-
-    log_info "RustyProxy instalado com sucesso. Digite \'rustyproxy\' para acessar o menu ou use o menu principal do Multiflow."
-}
-
-install_dtunnelproxy() {
-    log_info "A iniciar instalação do Dtunnel Proxy..."
-    DTUNNEL_DIR="/opt/multiflow/DtunnelProxy"
-
-    # Criando o diretório do script
-    log_info "Criando diretorio $DTUNNEL_DIR..."
-    $SUDO mkdir -p "$DTUNNEL_DIR" || error_exit "Falha ao criar diretorio $DTUNNEL_DIR"
-
-    # Copiando os binários
-    log_info "Copiando binários do Dtunnel Proxy..."
-    $SUDO cp -a "$INSTALL_DIR/DtunnelProxy/." "$DTUNNEL_DIR/" || error_exit "Falha ao copiar arquivos do DtunnelProxy"
-
-    # Configurando permissões
-    log_info "Configurando permissões..."
-    $SUDO chmod +x "$DTUNNEL_DIR/dtmenu"
-    $SUDO chmod +x "$DTUNNEL_DIR/proxydt"
-
-    log_info "Dtunnel Proxy instalado com sucesso."
-}
-
-install_slowdns() {
-    log_info "A iniciar instalação do SlowDNS..."
-    SLOWDNS_DIR="/opt/multiflow/Slowdns"
-
-    # Criando o diretório do script
-    log_info "Criando diretorio $SLOWDNS_DIR..."
-    $SUDO mkdir -p "$SLOWDNS_DIR" || error_exit "Falha ao criar diretorio $SLOWDNS_DIR"
-
-    # Copiando os binários
-    log_info "Copiando binários do SlowDNS..."
-    $SUDO cp -a "$INSTALL_DIR/Slowdns/." "$SLOWDNS_DIR/" || error_exit "Falha ao copiar arquivos do SlowDNS"
-
-    # Configurando permissões
-    log_info "Configurando permissões..."
-    $SUDO chmod +x "$SLOWDNS_DIR/slowdns"
-    $SUDO chmod +x "$SLOWDNS_DIR/dnstt-installer.sh"
-    $SUDO chmod +x "$SLOWDNS_DIR/dnstt-manager"
-
-    log_info "SlowDNS instalado com sucesso."
-}
