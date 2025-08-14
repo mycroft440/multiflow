@@ -555,7 +555,7 @@ def conexoes_menu():
         elif choice == "2":
             TerminalManager.leave_alt_screen()
             try:
-                subprocess.run(["bash", "/opt/rustyproxy/menu"], check=True)
+                subprocess.run(["bash", "/home/ubuntu/multiflow-main/RustyProxy/menu.sh"], check=True)
             finally:
                 TerminalManager.enter_alt_screen()
             status = "RustyProxy: operação concluída."
