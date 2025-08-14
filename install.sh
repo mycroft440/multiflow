@@ -127,10 +127,8 @@ cd "$INSTALL_DIR"
 
 # 7. Configuração de Permissões e Shebangs
 log_info "A configurar permissões de execução para os scripts..."
-find "$INSTALL_DIR" -type f -name "*.py" -exec bash -c 'if ! grep -q "^#!/usr/bin/env python3" "{}"; then sudo sed -i "1i#!/usr/bin/env python3" "{}"; fi; sudo chmod +x "{}"' \;\nfind "$INSTALL_DIR" -type f -name "*.sh" -exec $SUDO chmod +x {} +
-
-# 8. Instalação Automática de Ferramentas de Otimização (ZRAM e SWAP)
-log_info "A configurar automaticamente as ferramentas de otimização..."
+find "$INSTALL_DIR" -type f -name "*.py" -exec bash -c 'if ! grep -q "^#!/usr/bin/env python3" "$0"; then sudo sed -i "1i#!/usr/bin/env python3" "$0"; fi; sudo chmod +x "$0"' {} \;
+find "$INSTALL_DIR" -type f -name "*.sh" -exec $SUDO chmod +x {} \;
 
 # Instalação do ZRAM
 ZRAM_SCRIPT="$INSTALL_DIR/ferramentas/zram.py"
