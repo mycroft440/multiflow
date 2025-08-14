@@ -6,11 +6,11 @@ set -e
 set -o pipefail
 
 # --- Configuração de Cores e Funções de Log ---
-RED=\'\\033[0;31m\'
-GREEN=\'\\033[0;32m\'
-YELLOW=\'\\033[1;33m\'
-BLUE=\'\\033[0;34m\'
-NC=\'\\033[0m\' # No Color
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+BLUE="\033[0;34m"
+NC="\033[0m" # No Color
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -127,14 +127,7 @@ cd "$INSTALL_DIR"
 
 # 7. Configuração de Permissões e Shebangs
 log_info "A configurar permissões de execução para os scripts..."
-find "$INSTALL_DIR" -type f -name "*.py" -print0 | while IFS= read -r -d $\'\\0\\' script; do
-    # Garante que o shebang está correto
-    if ! grep -q "^#\\!/usr/bin/env python3" "$script"; then
-        $SUDO sed -i \'1i#!/usr/bin/env python3\' "$script"
-    fi
-    $SUDO chmod +x "$script"
-done
-find "$INSTALL_DIR" -type f -name "*.sh" -exec $SUDO chmod +x {} +
+find "$INSTALL_DIR" -type f -name "*.py" -exec bash -c 'if ! grep -q "^#!/usr/bin/env python3" "{}"; then sudo sed -i "1i#!/usr/bin/env python3" "{}"; fi; sudo chmod +x "{}"' \;\nfind "$INSTALL_DIR" -type f -name "*.sh" -exec $SUDO chmod +x {} +
 
 # 8. Instalação Automática de Ferramentas de Otimização (ZRAM e SWAP)
 log_info "A configurar automaticamente as ferramentas de otimização..."
