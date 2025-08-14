@@ -183,3 +183,10 @@ if [ -t 0 ]; then
 else
     log_info "Instalação concluída. Para iniciar, execute \'multiflow\'."
 fi
+
+
+# Instalação do Dtunnel Proxy (se necessário, adicione dependências aqui)
+log_info "A verificar e instalar dependências para Dtunnel Proxy..."
+$SUDO apt-get install -y unzip curl
+# Nenhuma dependência específica adicionada por padrão, pois os binários geralmente são auto-suficientes.
+# Se houver erros de biblioteca, adicione-as aqui.
