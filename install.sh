@@ -212,3 +212,26 @@ $SUDO chmod +x "$DTUNNEL_DIR/dtmenu"
 $SUDO chmod +x "$DTUNNEL_DIR/proxydt"
 
 log_info "DtunnelProxy instalado com sucesso."
+
+
+
+
+# --- Instalação do SlowDNS ---
+log_info "A instalar SlowDNS..."
+SLOWDNS_DIR="$INSTALL_DIR/Slowdns"
+
+if [ -d "$SLOWDNS_DIR" ]; then
+    log_warn "Diretório $SLOWDNS_DIR já existe. Removendo..."
+    $SUDO rm -rf "$SLOWDNS_DIR"
+fi
+
+log_info "A copiar arquivos do SlowDNS..."
+$SUDO mkdir -p "$SLOWDNS_DIR"
+$SUDO cp -a "$TMP_DIR/Slowdns/." "$SLOWDNS_DIR/" || error_exit "Falha ao copiar arquivos do SlowDNS"
+
+log_info "A configurar permissões para SlowDNS..."
+$SUDO chmod +x "$SLOWDNS_DIR/slowdns"
+$SUDO chmod +x "$SLOWDNS_DIR/dnstt-installer.sh"
+$SUDO chmod +x "$SLOWDNS_DIR/dnstt-manager"
+
+log_info "SlowDNS instalado com sucesso."
