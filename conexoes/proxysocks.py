@@ -1,3 +1,4 @@
+!/usr/bin/env python3
 #!/usr/bin/env python
 # encoding: utf-8
 # Merged Proxy: WebSocket Secure (WSS) and SOCKS on Same Port
@@ -17,7 +18,7 @@
 #     4. Run the proxy with --cert /etc/letsencrypt/live/yourdomain.com/fullchain.pem --key /etc/letsencrypt/live/yourdomain.com/privkey.pem
 #   Renew: sudo certbot renew (setup cron for auto-renewal)
 
-import socket, threading, thread, select, signal, sys, time, getopt
+import socket, threading, select, signal, sys, time, getopt
 import ssl  # Added for SSL/TLS support
 
 from os import system
