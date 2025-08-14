@@ -56,7 +56,7 @@ def _find_multiflow_root():
 
     # Valida candidatos: precisam ter 'menus' e 'ferramentas'
     for root in normalized:
-        if os.path.isdir(os.path.join(root, "menus")) and os.path.isdir(os.path.join(root, "ferramentas")):
+        if os.path.isdir(os.path.join(root, "menus")) and os.path.isdir(os.path.join(root, "ferramentas")) and os.path.isdir(os.path.join(root, "conexoes")):
             return root
     return None
 
@@ -92,6 +92,7 @@ def bootstrap_imports():
         "menu_bloqueador": "menus.menu_bloqueador",
         "menu_servidor_download": "menus.menu_servidor_download",
         "menu_openvpn": "menus.menu_openvpn",
+        "multiprotocolo": "conexoes.multiprotocolo",
     }
 
     imported = {}
@@ -137,6 +138,7 @@ bootstrap_imports()
 # Importando módulos do projeto (já resolvidos pelo bootstrap)
 from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
 from menus import menu_badvpn, menu_proxysocks, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
+from conexoes import multiprotocolo  # noqa: F401
 
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
@@ -471,6 +473,7 @@ def build_connections_frame(status_msg=""):
     s.append("\n")
     s.append(menu_option("1", "Gerenciar OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT))
     s.append(menu_option("2", "ProxySocks (Simples)", Icons.UNLOCK, MC.BLUE_GRADIENT))
+    s.append(menu_option("3", "Multiprotocolo", Icons.NETWORK, MC.ORANGE_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -552,6 +555,10 @@ def conexoes_menu():
             # NÃO sair do alt-screen; o submenu mantém a UI
             menu_proxysocks.main_menu()
             status = "ProxySocks: operação concluída."
+        elif choice == "3":
+            # NÃO sair do alt-screen; o submenu mantém a UI
+            multiprotocolo.main()
+            status = "Multiprotocolo: operação concluída."
         elif choice == "0":
             return
         else:
