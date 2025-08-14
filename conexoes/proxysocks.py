@@ -1,5 +1,4 @@
-!/usr/bin/env python3
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # encoding: utf-8
 # Merged Proxy: WebSocket Secure (WSS) and SOCKS on Same Port
 # Based on wsproxy.py by @Crazy_vpn and proxy.py by Socks Scott
@@ -288,7 +287,7 @@ class ConnectionHandler(threading.Thread):
         self.connect_target(path)
         
         # Forward the original request to the target
-        self.target.sendall(self.client_buffer.encode('utf-8', errors='ignore'))
+        self.target.sendall(self.client_buffer)
         
         # Receive response from target
         response = b''
