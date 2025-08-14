@@ -136,7 +136,7 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest='command', required=True)
     
     setup_parser = subparsers.add_parser('setup', help='Set up zram')
-    setup_parser.add_argument('--percentage', type=float, default=0.3, help='Percentage of RAM (0.3 = 30%)')
+    setup_parser.add_argument('--percentage', type=float, default=0.4, help='Percentage of RAM (0.4 = 40%)')
     setup_parser.add_argument('--algorithm', default='zstd', choices=['zstd', 'lz4', 'lzo'], help='Compression algorithm')
     setup_parser.add_argument('--priority', type=int, default=100, help='Swap priority')
     setup_parser.add_argument('--num_devices', type=int, default=None, help='Number of zram devices (defaults to CPU cores)')
