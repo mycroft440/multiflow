@@ -1,21 +1,6 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 # Merged Proxy: WebSocket Secure (WSS) and SOCKS on Same Port
-# Based on wsproxy.py by @Crazy_vpn and proxy.py by Socks Scott
-# Detects mode based on payload: If 'Upgrade: websocket' and 'Connection: Upgrade' are present, uses WSS mode; else SOCKS mode.
-# Improvements: Added TCP keepalive for stability.
-# New Features:
-# - Support for Host spoofing via X-Online-Host header (extracted and logged; can be used for validation if needed).
-# - Added support for GET and HEAD methods (besides CONNECT): Forwards the request to the target and returns response.
-# - Forced Connection: Keep-Alive in all responses for persistent connections.
-# - Added TLS/SSL support for WSS: Now the server uses HTTPS/WSS. Requires cert.pem and key.pem (self-signed OK).
-#   Generate with: openssl req -new -x509 -days 365 -nodes -out cert.pem -keyout key.pem
-#   For valid certificates, use Let's Encrypt with Certbot:
-#     1. Install Certbot: sudo apt install certbot (on Ubuntu/Debian) or follow https://certbot.eff.org/instructions
-#     2. Run: sudo certbot certonly --standalone -d yourdomain.com (stop the proxy first, as it needs port 80/443 for validation)
-#     3. Cert files: /etc/letsencrypt/live/yourdomain.com/fullchain.pem (cert) and privkey.pem (key)
-#     4. Run the proxy with --cert /etc/letsencrypt/live/yourdomain.com/fullchain.pem --key /etc/letsencrypt/live/yourdomain.com/privkey.pem
-#   Renew: sudo certbot renew (setup cron for auto-renewal)
 
 import socket, threading, select, signal, sys, time, getopt
 import ssl  # Added for SSL/TLS support
