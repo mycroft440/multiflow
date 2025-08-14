@@ -93,6 +93,11 @@ def bootstrap_imports():
         "menu_servidor_download": "menus.menu_servidor_download",
         "menu_openvpn": "menus.menu_openvpn",
         "multiprotocolo": "conexoes.multiprotocolo",
+        "dtunnel_proxy": "DtunnelProxy.dtmenu",
+        "rusty_proxy_install": "RustyProxy.install_rustyproxy",
+        "rusty_proxy_menu": "RustyProxy.menu",
+        "slowdns_installer": "Slowdns.dnstt-installer",
+        "slowdns_manager": "Slowdns.dnstt-manager",
     }
 
     imported = {}
@@ -138,7 +143,7 @@ bootstrap_imports()
 # Importando módulos do projeto (já resolvidos pelo bootstrap)
 from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
 from menus import menu_badvpn, menu_proxysocks, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
-from conexoes import multiprotocolo  # noqa: F401
+from conexoes import multiprotocolo, dtunnel_proxy, rusty_proxy_install, rusty_proxy_menu, slowdns_installer, slowdns_manager  # noqa: F401
 
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
@@ -471,10 +476,12 @@ def build_connections_frame(status_msg=""):
     s.append("\n")
     s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
     s.append("\n")
-    s.append(menu_option("1", "OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "RustyProxy", Icons.SHIELD, MC.RED_GRADIENT))
-    s.append(menu_option("3", "ProxySocks", Icons.UNLOCK, MC.BLUE_GRADIENT))
-    s.append(menu_option("4", "Multiprotocolo", Icons.NETWORK, MC.ORANGE_GRADIENT))
+    s.append(menu_option("1", "Openvpn", Icons.LOCK, MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "Dtunnel Proxy", Icons.SHIELD, MC.RED_GRADIENT))
+    s.append(menu_option("3", "RustyProxy", Icons.SHIELD, MC.ORANGE_GRADIENT))
+    s.append(menu_option("4", "Slow DNS", Icons.NETWORK, MC.BLUE_GRADIENT))
+    s.append(menu_option("5", "ProxySocks", Icons.UNLOCK, MC.PURPLE_GRADIENT))
+    s.append(menu_option("6", "Multiprotocolo", Icons.NETWORK, MC.CYAN_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -707,3 +714,72 @@ def main_menu():
 # ==================== EXECUÇÃO ====================
 if __name__ == "__main__":
     main_menu()
+
+
+def conexoes_menu():
+    status = ""
+    while True:
+        TerminalManager.enter_alt_screen()
+        TerminalManager.render(build_connections_frame(status))
+        TerminalManager.before_input()
+        choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
+        TerminalManager.after_input()
+
+        if choice == "1":
+            TerminalManager.leave_alt_screen()
+            try:
+                menu_openvpn.main_menu()
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "OpenVPN: operação concluída."
+        elif choice == "2":
+            TerminalManager.leave_alt_screen()
+            try:
+                dtunnel_proxy.main()
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "Dtunnel Proxy: operação concluída."
+        elif choice == "3":
+            TerminalManager.leave_alt_screen()
+            try:
+                # Verifica se o RustyProxy está instalado
+                if os.path.exists('/usr/local/bin/rustyproxy'):
+                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'RustyProxy', 'menu.sh')], check=True)
+                else:
+                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'RustyProxy', 'install_rustyproxy.sh')], check=True)
+            except Exception as e:
+                status = f"Erro ao gerenciar RustyProxy: {e}"
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "RustyProxy: operação concluída."
+        elif choice == "4":
+            TerminalManager.leave_alt_screen()
+            try:
+                # Verifica se o Slow DNS está instalado
+                if os.path.exists('/usr/local/bin/dnstt-server') or os.path.exists('/usr/local/bin/dnstt-client'):
+                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'Slowdns', 'dnstt-manager')], check=True)
+                else:
+                    subprocess.run(['bash', os.path.join(_find_multiflow_root(), 'Slowdns', 'dnstt-installer.sh')], check=True)
+            except Exception as e:
+                status = f"Erro ao gerenciar Slow DNS: {e}"
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "Slow DNS: operação concluída."
+        elif choice == "5":
+            TerminalManager.leave_alt_screen()
+            try:
+                menu_proxysocks.main_menu()
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "ProxySocks: operação concluída."
+        elif choice == "6":
+            TerminalManager.leave_alt_screen()
+            try:
+                multiprotocolo.main_menu()
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "Multiprotocolo: operação concluída."
+        elif choice == "0":
+            return
+        else:
+            status = "Opção inválida. Tente novamente."
