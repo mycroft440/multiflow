@@ -13,16 +13,6 @@ import random
 import importlib
 import importlib.util
 
-INSTALL_SCRIPT = "/opt/multiflow/install.sh"
-
-def execute_install_function(func_name):
-    try:
-        subprocess.run(["sudo", "bash", "-c", f"source {INSTALL_SCRIPT} && {func_name}"], check=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Erro ao executar a função de instalação {func_name}: {e}")
-        return False
-
 # ==================== BOOTSTRAP DE IMPORTAÇÃO ====================
 # Tenta localizar a raiz do projeto (contendo 'menus' e 'ferramentas'),
 # ajusta sys.path e importa os módulos necessários.
@@ -255,7 +245,7 @@ class Icons:
     EXIT = "🚪 "
     CLOCK = "🕐 "
     SYSTEM = "💻 "
-    UPDATE = "🔄 "
+    UPDATE = "� "
     DOWNLOAD = "📥 "
     KEY = "🔑 "
     LOCK = "🔒 "
@@ -306,7 +296,7 @@ def modern_header():
 
 def modern_box(title, content_lines, icon="", primary=MC.CYAN_GRADIENT, secondary=MC.CYAN_LIGHT):
     cols, _ = TerminalManager.size()
-    width = max(54, min(cols - 2, 100))
+    width = max(54, min(cols - 6, 100))
     title_text = f" {icon}{title} " if icon else f" {title} "
     header = (f"{primary}{Icons.BOX_TOP_LEFT}{Icons.BOX_HORIZONTAL * 10}"
               f"{secondary}┤{MC.BOLD}{MC.WHITE}{title_text}{MC.RESET}{secondary}├"
@@ -434,33 +424,42 @@ def system_panel_box():
         f"{MC.CYAN_LIGHT}{Icons.CPU} CPU:{MC.RESET} {cpu_bar}",
     ]
     if services:
-        line1 = f"{MC.CYAN_GRADIENT}{Icons.NETWORK} Serviços Ativos:{MC.RESET} "
-        # Divide os serviços em linhas para caber na caixa
-        current_line_len = len(re.sub(r'\033\[[0-9;]*m', '', line1))
-        for i, svc in enumerate(services):
-            clean_svc = re.sub(r'\033\[[0-9;]*m', '', svc)
-            if current_line_len + len(clean_svc) + 2 > 50 and i > 0: # 50 é um valor aproximado para a largura da caixa
-                content.append(line1)
-                line1 = " " * (len(re.sub(r'\033\[[0-9;]*m', '', f"{MC.CYAN_GRADIENT}{Icons.NETWORK} Serviços Ativos:{MC.RESET} ")))
-                current_line_len = len(re.sub(r'\033\[[0-9;]*m', '', line1))
-            line1 += f"{svc}  "
-            current_line_len += len(clean_svc) + 2
+        line1 = f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} " + " │ ".join(services[:4])
         content.append(line1)
+        if len(services) > 4:
+            content.append(" " * 13 + " │ ".join(services[4:8]))
+    else:
+        content.append(f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} {MC.GRAY}Nenhum serviço ativo{MC.RESET}")
 
-    return modern_box("STATUS DO SISTEMA", content, Icons.SERVER, MC.GREEN_GRADIENT, MC.GREEN_LIGHT)
+    content.append(f"{MC.CYAN_LIGHT}📅 Data/Hora:{MC.RESET} {MC.WHITE}{now}{MC.RESET}")
+    return modern_box("PAINEL DO SISTEMA", content, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
 
-# ==================== MENUS ====================
+def welcome_line():
+    msgs = [
+        f"{Icons.ROCKET} Bem-vindo ao MultiFlow!",
+        f"{Icons.DIAMOND} Experiência premium no seu terminal.",
+        f"{Icons.CHECK} Sistema pronto para uso.",
+    ]
+    msg = random.choice(msgs)
+    cols, _ = TerminalManager.size()
+    width = max(60, min(cols - 2, 100))
+    return f"\n{MC.CYAN_GRADIENT}{MC.BOLD}{msg.center(width)}{MC.RESET}\n\n"
+
+# ==================== RENDER DE TELAS COMPLETAS ====================
 def build_main_frame(status_msg=""):
     s = []
     s.append(modern_header())
     s.append(system_panel_box())
+    s.append(welcome_line())
+    s.append(modern_box("MENU PRINCIPAL", [], Icons.DIAMOND, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
     s.append("\n")
-    s.append(modern_box("MENU PRINCIPAL", [], Icons.TOOLS, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
+    s.append(menu_option("1", "Gerenciar Usuários SSH", Icons.USERS, MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "Gerenciar Conexões", Icons.NETWORK, MC.CYAN_GRADIENT))
+    s.append(menu_option("3", "BadVPN", Icons.SERVER, MC.PURPLE_GRADIENT))
+    s.append(menu_option("4", "Ferramentas", Icons.TOOLS, MC.ORANGE_GRADIENT))
+    s.append(menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, badge="v2"))
+    s.append(menu_option("6", "Servidor de Download", Icons.DOWNLOAD, MC.PINK_GRADIENT))
     s.append("\n")
-    s.append(menu_option("1", "Gerenciar Usuários", Icons.USERS, MC.CYAN_GRADIENT))
-    s.append(menu_option("2", "Gerenciar Conexões", Icons.NETWORK, MC.GREEN_GRADIENT))
-    s.append(menu_option("3", "Ferramentas", Icons.TOOLS, MC.ORANGE_GRADIENT))
-    s.append(menu_option("4", "Atualizar Sistema", Icons.UPDATE, MC.BLUE_GRADIENT))
     s.append(menu_option("0", "Sair", Icons.EXIT, MC.RED_GRADIENT))
     s.append(footer_line(status_msg))
     return "".join(s)
@@ -474,11 +473,10 @@ def build_connections_frame(status_msg=""):
     s.append("\n")
     s.append(menu_option("1", "OpenVPN", Icons.LOCK, MC.GREEN_GRADIENT))
     s.append(menu_option("2", "RustyProxy", Icons.SHIELD, MC.RED_GRADIENT))
-    s.append(menu_option("3", "Dtunnel Proxy", Icons.UNLOCK, MC.BLUE_GRADIENT))
-    s.append(menu_option("4", "SlowDNS", Icons.NETWORK, MC.YELLOW_GRADIENT))
-    s.append(menu_option("5", "ProxySocks", Icons.UNLOCK, MC.BLUE_GRADIENT))
-    s.append(menu_option("6", "Multiprotocolo", Icons.NETWORK, MC.ORANGE_GRADIENT))
-    s.append(menu_option("0", "Voltar", Icons.BACK, MC.YELLOW_GRADIENT))
+    s.append(menu_option("3", "ProxySocks", Icons.UNLOCK, MC.BLUE_GRADIENT))
+    s.append(menu_option("4", "Multiprotocolo", Icons.NETWORK, MC.ORANGE_GRADIENT))
+    s.append("\n")
+    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
     return "".join(s)
 
@@ -487,208 +485,225 @@ def build_tools_frame(status_msg=""):
     s.append(modern_header())
     s.append(system_panel_box())
     s.append("\n")
-    s.append(modern_box("FERRAMENTAS", [], Icons.TOOLS, MC.ORANGE_GRADIENT, MC.ORANGE_LIGHT))
+    s.append(modern_box("FERRAMENTAS DE OTIMIZAÇÃO", [], Icons.TOOLS, MC.ORANGE_GRADIENT, MC.ORANGE_LIGHT))
     s.append("\n")
-    s.append(menu_option("1", "Gerenciar BadVPN", Icons.SHIELD, MC.PURPLE_GRADIENT))
-    s.append(menu_option("2", "Bloqueador de Sites", Icons.LOCK, MC.RED_GRADIENT))
-    s.append(menu_option("3", "Servidor de Download", Icons.DOWNLOAD, MC.BLUE_GRADIENT))
-    s.append(menu_option("4", "Otimizador de VPS", Icons.ROCKET, MC.GREEN_GRADIENT))
-    s.append(menu_option("5", "Gerenciar ZRAM", Icons.RAM, MC.CYAN_GRADIENT))
-    s.append(menu_option("6", "Gerenciar SWAP", Icons.RAM, MC.CYAN_GRADIENT))
-    s.append(menu_option("0", "Voltar", Icons.BACK, MC.YELLOW_GRADIENT))
+    s.append(menu_option("1", "Otimizador de VPS", Icons.ROCKET, MC.GREEN_GRADIENT, badge="TURBO"))
+    s.append(menu_option("2", "Bloqueador de Sites", Icons.SHIELD, MC.RED_GRADIENT))
+    s.append("\n")
+    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
     return "".join(s)
 
-# ==================== LÓGICA DOS MENUS ====================
-def main_menu():
-    status = ""
-    while True:
-        TerminalManager.render(build_main_frame(status))
-        TerminalManager.before_input()
-        choice = input(f"{MC.WHITE}{MC.BOLD}Escolha uma opção: {MC.RESET}")
-        TerminalManager.after_input()
+def build_updater_frame():
+    s = []
+    s.append(modern_header())
+    s.append("\n")
+    s.append(modern_box("ATUALIZADOR MULTIFLOW", [
+        f"{MC.YELLOW_GRADIENT}{Icons.INFO} Baixar a versão mais recente do GitHub.{MC.RESET}",
+        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Serviços como BadVPN e ProxySocks serão parados.{MC.RESET}",
+        f"{MC.RED_GRADIENT}{Icons.WARNING} O programa encerra após a atualização.{MC.RESET}",
+        f"{MC.WHITE}{Icons.INFO} Reinicie com 'multiflow' após concluir.{MC.RESET}"
+    ], Icons.UPDATE, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
+    s.append(footer_line())
+    return "".join(s)
 
-        if choice == "1":
-            manusear_usuarios.gerenciar_usuarios_menu()
-            status = "Gerenciamento de Usuários: operação concluída."
-        elif choice == "2":
-            conexoes_menu()
-            status = "Gerenciamento de Conexões: operação concluída."
-        elif choice == "3":
-            ferramentas_menu()
-            status = "Ferramentas: operação concluída."
-        elif choice == "4":
-            TerminalManager.leave_alt_screen()
-            try:
-                subprocess.run(["bash", "/opt/multiflow/ferramentas/update.py"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Atualização do Sistema: operação concluída."
-        elif choice == "0":
-            break
-        else:
-            status = f"{MC.RED_GRADIENT}Opção inválida: {choice}. Tente novamente.{MC.RESET}"
-        time.sleep(0.5)
+# ==================== CHECK ROOT ====================
+def check_root():
+    try:
+        if os.geteuid() != 0:
+            TerminalManager.enter_alt_screen()
+            TerminalManager.render(
+                modern_header() +
+                modern_box("AVISO DE SEGURANÇA", [
+                    f"{MC.RED_GRADIENT}{Icons.WARNING} Este script precisa ser executado como root!{MC.RESET}",
+                    f"{MC.YELLOW_GRADIENT}Algumas operações podem falhar sem privilégios adequados.{MC.RESET}"
+                ], Icons.SHIELD, MC.RED_GRADIENT, MC.RED_LIGHT) +
+                footer_line()
+            )
+            TerminalManager.before_input()
+            resp = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar mesmo assim? (s/n): {MC.RESET}").strip().lower()
+            TerminalManager.after_input()
+            if resp != 's':
+                TerminalManager.leave_alt_screen()
+                sys.exit(0)
+            return False
+        return True
+    except AttributeError:
+        return True
+
+# ==================== MENUS (COM RENDER ÚNICO POR FRAME) ====================
+def ssh_users_main_menu():
     TerminalManager.leave_alt_screen()
+    try:
+        manusear_usuarios.main()
+    finally:
+        TerminalManager.enter_alt_screen()
 
 def conexoes_menu():
     status = ""
     while True:
+        TerminalManager.enter_alt_screen()
         TerminalManager.render(build_connections_frame(status))
         TerminalManager.before_input()
-        choice = input(f"{MC.WHITE}{MC.BOLD}Escolha uma opção: {MC.RESET}")
+        choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
         TerminalManager.after_input()
 
         if choice == "1":
-            TerminalManager.leave_alt_screen()
-            try:
-                subprocess.run(["bash", "/opt/multiflow/conexoes/openvpn.sh"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
+            # NÃO sair do alt-screen aqui; o submenu gerencia isso quando necessário
+            menu_openvpn.main_menu()
             status = "OpenVPN: operação concluída."
         elif choice == "2":
-            rustyproxy_menu()
+            TerminalManager.leave_alt_screen()
+            try:
+                subprocess.run(["bash", "/home/ubuntu/multiflow-main/RustyProxy/menu.sh"], check=True)
+            finally:
+                TerminalManager.enter_alt_screen()
             status = "RustyProxy: operação concluída."
         elif choice == "3":
-            TerminalManager.leave_alt_screen()
-            try:
-                # Check if DtunnelProxy is installed
-                if not os.path.exists("/opt/multiflow/DtunnelProxy/dtmenu"):
-                    print(f"{MC.YELLOW_GRADIENT}Instalando Dtunnel Proxy...{MC.RESET}")
-                    # This part needs to be implemented as a function
-                    # For now, we'll simulate the installation
-                    subprocess.run(["bash", "/opt/multiflow/install_dtunnelproxy.sh"], check=True)
-                    print(f"{MC.GREEN_GRADIENT}Dtunnel Proxy instalado com sucesso!{MC.RESET}")
-                    time.sleep(2)
-                subprocess.run(["bash", "/opt/multiflow/DtunnelProxy/dtmenu"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Dtunnel Proxy: operação concluída."
-        elif choice == "4":
-            TerminalManager.leave_alt_screen()
-            try:
-                # Check if SlowDNS is installed
-                if not os.path.exists("/opt/multiflow/Slowdns/slowdns"):
-                    print(f"{MC.YELLOW_GRADIENT}Instalando SlowDNS...{MC.RESET}")
-                    # This part needs to be implemented as a function
-                    # For now, we'll simulate the installation
-                    subprocess.run(["bash", "/opt/multiflow/install_slowdns.sh"], check=True)
-                    print(f"{MC.GREEN_GRADIENT}SlowDNS instalado com sucesso!{MC.RESET}")
-                    time.sleep(2)
-                subprocess.run(["bash", "/opt/multiflow/Slowdns/dnstt-manager"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "SlowDNS: operação concluída."
-        elif choice == "5":
-            menu_proxysocks.proxysocks_menu()
+            # NÃO sair do alt-screen; o submenu mantém a UI
+            menu_proxysocks.main_menu()
             status = "ProxySocks: operação concluída."
-        elif choice == "6":
-            multiprotocolo.multiprotocolo_menu()
+        elif choice == "4":
+            # NÃO sair do alt-screen; o submenu mantém a UI
+            multiprotocolo.main()
             status = "Multiprotocolo: operação concluída."
         elif choice == "0":
-            break
+            return
         else:
-            status = f"{MC.RED_GRADIENT}Opção inválida: {choice}. Tente novamente.{MC.RESET}"
-        time.sleep(0.5)
+            status = "Opção inválida. Tente novamente."
+
+def otimizadorvps_menu():
+    TerminalManager.leave_alt_screen()
+    try:
+        script_real_path = os.path.realpath(__file__)
+        script_dir = os.path.dirname(script_real_path)
+        otimizador_path = os.path.join(script_dir, 'ferramentas', 'otimizadorvps.py')
+        subprocess.run([sys.executable, otimizador_path], check=True)
+    except Exception as e:
+        print(f"\033[91mErro ao executar o otimizador: {e}\033[0m")
+    finally:
+        input("Pressione Enter para continuar...")
+        TerminalManager.enter_alt_screen()
 
 def ferramentas_menu():
     status = ""
     while True:
+        TerminalManager.enter_alt_screen()
         TerminalManager.render(build_tools_frame(status))
         TerminalManager.before_input()
-        choice = input(f"{MC.WHITE}{MC.BOLD}Escolha uma opção: {MC.RESET}")
+        choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
         TerminalManager.after_input()
 
         if choice == "1":
-            TerminalManager.leave_alt_screen()
-            try:
-                subprocess.run(["bash", "/opt/multiflow/conexoes/badvpn.sh"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "BadVPN: operação concluída."
+            otimizadorvps_menu()
+            status = "Otimizador executado."
         elif choice == "2":
-            menu_bloqueador.bloqueador_sites_menu()
-            status = "Bloqueador de Sites: operação concluída."
-        elif choice == "3":
-            menu_servidor_download.servidor_download_menu()
-            status = "Servidor de Download: operação concluída."
-        elif choice == "4":
             TerminalManager.leave_alt_screen()
             try:
-                subprocess.run(["python3", "/opt/multiflow/ferramentas/otimizadorvps.py"], check=True)
+                menu_bloqueador.main_menu()
             finally:
                 TerminalManager.enter_alt_screen()
-            status = "Otimizador de VPS: operação concluída."
-        elif choice == "5":
-            TerminalManager.leave_alt_screen()
-            try:
-                subprocess.run(["python3", "/opt/multiflow/ferramentas/zram.py"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Gerenciamento de ZRAM: operação concluída."
-        elif choice == "6":
-            TerminalManager.leave_alt_screen()
-            try:
-                subprocess.run(["python3", "/opt/multiflow/ferramentas/swap.py"], check=True)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Gerenciamento de SWAP: operação concluída."
+            status = "Bloqueador executado."
         elif choice == "0":
-            break
+            return
         else:
-            status = f"{MC.RED_GRADIENT}Opção inválida: {choice}. Tente novamente.{MC.RESET}"
-        time.sleep(0.5)
+            status = "Opção inválida. Tente novamente."
 
-def rustyproxy_menu():
+def atualizar_multiflow():
+    TerminalManager.enter_alt_screen()
+    TerminalManager.render(build_updater_frame())
+    TerminalManager.before_input()
+    confirm = input(f"\n{MC.BOLD}{MC.WHITE}Deseja continuar com a atualização? (s/n): {MC.RESET}").strip().lower()
+    TerminalManager.after_input()
+
+    if confirm == 's':
+        try:
+            script_dir = os.path.dirname(os.path.realpath(__file__))
+            update_script_path = os.path.join(script_dir, 'update.py')
+            # Alterado para o novo caminho do script de atualização
+            update_script_path = os.path.join(script_dir, 'ferramentas', 'update.py')
+            if not os.path.exists(update_script_path):
+                TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} 'update.py' não encontrado!{MC.RESET}\n")
+                TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} 'update.py' não encontrado em 'ferramentas'!{MC.RESET}\n")
+                time.sleep(2.0)
+                return
+            TerminalManager.leave_alt_screen()
+            try:
+                subprocess.run(['sudo', sys.executable, update_script_path], check=True)
+                print("\nAtualizado com sucesso. Reinicie com: multiflow\n")
+                time.sleep(1.0)
+                sys.exit(0)
+            finally:
+                TerminalManager.enter_alt_screen()
+        except subprocess.CalledProcessError:
+            TerminalManager.enter_alt_screen()
+            TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro durante a atualização.{MC.RESET}\n")
+            time.sleep(2.0)
+        except Exception as e:
+            TerminalManager.enter_alt_screen()
+            TerminalManager.render(build_updater_frame() + f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro inesperado: {e}{MC.RESET}\n")
+            time.sleep(2.0)
+    else:
+        TerminalManager.render(build_updater_frame() + f"\n{MC.YELLOW_GRADIENT}{Icons.INFO} Atualização cancelada.{MC.RESET}\n")
+        time.sleep(1.2)
+
+# ==================== MENU PRINCIPAL ====================
+def main_menu():
+    check_root()
+    TerminalManager.enter_alt_screen()
     status = ""
+
     while True:
-        TerminalManager.render(build_rustyproxy_frame(status))
-        TerminalManager.before_input()
-        choice = input(f"{MC.WHITE}{MC.BOLD}Escolha uma opção: {MC.RESET}")
-        TerminalManager.after_input()
+        try:
+            TerminalManager.render(build_main_frame(status))
+            TerminalManager.before_input()
+            choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
+            TerminalManager.after_input()
 
-        if choice == "1":
-            TerminalManager.leave_alt_screen()
-            try:
-                print(f"{MC.YELLOW_GRADIENT}Instalando RustyProxy...{MC.RESET}")
-                subprocess.run(["sudo", "bash", "/opt/multiflow/RustyProxy/install_rustyproxy.sh"], check=True)
-                print(f"{MC.GREEN_GRADIENT}RustyProxy instalado com sucesso!{MC.RESET}")
-                time.sleep(2)
-            except subprocess.CalledProcessError as e:
-                print(f"{MC.RED_GRADIENT}Erro ao instalar RustyProxy: {e}{MC.RESET}")
-                time.sleep(2)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Instalação do RustyProxy: operação concluída."
-        elif choice == "2":
-            TerminalManager.leave_alt_screen()
-            try:
-                if os.path.exists("/opt/rustyproxy/menu"):
-                    subprocess.run(["sudo", "bash", "/opt/rustyproxy/menu"], check=True)
-                else:
-                    print(f"{MC.RED_GRADIENT}RustyProxy não está instalado. Por favor, instale-o primeiro.{MC.RESET}")
-                    time.sleep(2)
-            except subprocess.CalledProcessError as e:
-                print(f"{MC.RED_GRADIENT}Erro ao acessar o menu do RustyProxy: {e}{MC.RESET}")
-                time.sleep(2)
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Menu RustyProxy: operação concluída."
-        elif choice == "0":
+            if choice == "1":
+                ssh_users_main_menu()
+                status = "Gerenciamento de usuários concluído."
+            elif choice == "2":
+                conexoes_menu()
+                status = "Conexões: operação concluída."
+            elif choice == "3":
+                TerminalManager.leave_alt_screen()
+                try:
+                    menu_badvpn.main_menu()
+                finally:
+                    TerminalManager.enter_alt_screen()
+                status = "BadVPN: operação concluída."
+            elif choice == "4":
+                ferramentas_menu()
+                status = "Ferramentas: operação concluída."
+            elif choice == "5":
+                atualizar_multiflow()
+                status = "Atualizador executado."
+            elif choice == "6":
+                TerminalManager.leave_alt_screen()
+                try:
+                    menu_servidor_download.main()
+                finally:
+                    TerminalManager.enter_alt_screen()
+                status = "Servidor de download: operação concluída."
+            elif choice == "0":
+                TerminalManager.render(build_main_frame("Saindo..."))
+                time.sleep(0.4)
+                break
+            else:
+                status = "Opção inválida. Pressione 1-6 ou 0 para sair."
+
+        except KeyboardInterrupt:
+            TerminalManager.render(build_main_frame("Interrompido pelo usuário."))
+            time.sleep(0.5)
             break
-        else:
-            status = f"{MC.RED_GRADIENT}Opção inválida: {choice}. Tente novamente.{MC.RESET}"
-        time.sleep(0.5)
+        except Exception as e:
+            TerminalManager.render(build_main_frame(f"Erro: {e}"))
+            time.sleep(1.0)
+            break
 
-def build_rustyproxy_frame(status_msg=""):
-    s = []
-    s.append(modern_header())
-    s.append(system_panel_box())
-    s.append("\n")
-    s.append(modern_box("GERENCIAR RUSTYPROXY", [], Icons.SHIELD, MC.RED_GRADIENT, MC.RED_LIGHT))
-    s.append("\n")
-    s.append(menu_option("1", "Instalar RustyProxy", Icons.DOWNLOAD, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "Menu RustyProxy", Icons.TOOLS, MC.BLUE_GRADIENT))
-    s.append(menu_option("0", "Voltar", Icons.BACK, MC.YELLOW_GRADIENT))
-    s.append(footer_line(status_msg))
-    return "".join(s)
+    TerminalManager.leave_alt_screen()
+
+# ==================== EXECUÇÃO ====================
+if __name__ == "__main__":
+    main_menu()
