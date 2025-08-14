@@ -1,117 +1,76 @@
 #!/bin/bash
-# rustyproxy Installer
+#script para a instalação do RustyProxy
 
-TOTAL_STEPS=9
-CURRENT_STEP=0
+# --- Configuração do Script ---
+set -e
+set -o pipefail
 
-show_progress() {
-    PERCENT=$((CURRENT_STEP * 100 / TOTAL_STEPS))
-    echo "Progresso: [${PERCENT}%] - $1"
+# --- Configuração de Cores e Funções de Log ---
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+BLUE="\033[0;34m"
+NC="\033[0m" # No Color
+
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[AVISO]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERRO]${NC} $1" >&2
 }
 
 error_exit() {
-    echo -e "\nErro: $1"
+    log_error "$1"
     exit 1
 }
 
-increment_step() {
-    CURRENT_STEP=$((CURRENT_STEP + 1))
-}
+# --- Início da Execução ---
 
-if [ "$EUID" -ne 0 ]; then
-    error_exit "EXECUTE COMO ROOT"
+# 1. Verificação de Privilégios
+if [ "$(id -u)" -ne 0 ]; then
+    SUDO="sudo"
+    log_warn "O script não está a ser executado como root. A usar \'sudo\' quando necessário."
 else
-    clear
-    show_progress "Atualizando repositorios..."
-    export DEBIAN_FRONTEND=noninteractive
-    apt update -y > /dev/null 2>&1 || error_exit "Falha ao atualizar os repositorios"
-    increment_step
-
-    # ---->>>> Verificação do sistema
-    show_progress "Verificando o sistema..."
-    if ! command -v lsb_release &> /dev/null; then
-        apt install lsb-release -y > /dev/null 2>&1 || error_exit "Falha ao instalar lsb-release"
-    fi
-    increment_step
-
-    # ---->>>> Verificação do sistema
-    OS_NAME=$(lsb_release -is)
-    VERSION=$(lsb_release -rs)
-
-    case $OS_NAME in
-        Ubuntu)
-            case $VERSION in
-                24.*|22.*|20.*|18.*)
-                    show_progress "Sistema Ubuntu suportado, continuando..."
-                    ;;
-                *)
-                    error_exit "Versão do Ubuntu não suportada. Use 18, 20, 22 ou 24."
-                    ;;
-            esac
-            ;;
-        Debian)
-            case $VERSION in
-                12*|11*|10*|9*)
-                    show_progress "Sistema Debian suportado, continuando..."
-                    ;;
-                *)
-                    error_exit "Versão do Debian não suportada. Use 9, 10, 11 ou 12."
-                    ;;
-            esac
-            ;;
-        *)
-            error_exit "Sistema não suportado. Use Ubuntu ou Debian."
-            ;;
-    esac
-    increment_step
-
-    # ---->>>> Instalação de pacotes requisitos e atualização do sistema
-    show_progress "Atualizando o sistema..."
-    apt upgrade -y > /dev/null 2>&1 || error_exit "Falha ao atualizar o sistema"
-    apt-get install curl build-essential git -y > /dev/null 2>&1 || error_exit "Falha ao instalar pacotes"
-    increment_step
-
-    # ---->>>> Criando o diretório do script
-    show_progress "Criando diretorio /opt/rustyproxy..."
-    mkdir -p /opt/rustyproxy > /dev/null 2>&1
-    increment_step
-
-    # ---->>>> Instalar rust
-    show_progress "Instalando Rust..."
-    if ! command -v rustc &> /dev/null; then
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y > /dev/null 2>&1 || error_exit "Falha ao instalar Rust"
-        source "$HOME/.cargo/env"
-    fi
-    increment_step
-
-    # ---->>>> Instalar o RustyProxy
-    show_progress "Compilando RustyProxy, isso pode levar algum tempo dependendo da maquina..."
-
-    if [ -d "/root/RustyProxyOnly" ]; then
-        rm -rf /root/RustyProxyOnly
-    fi
-
-
-    git clone --branch "main" https://github.com/UlekBR/RustyProxyOnly.git /root/RustyProxyOnly > /dev/null 2>&1 || error_exit "Falha ao clonar rustyproxy"
-    mv /root/RustyProxyOnly/menu.sh /opt/rustyproxy/menu
-    cd /root/RustyProxyOnly/RustyProxy
-    cargo build --release --jobs $(nproc) > /dev/null 2>&1 || error_exit "Falha ao compilar rustyproxy"
-    mv ./target/release/RustyProxy /opt/rustyproxy/proxy
-    increment_step
-
-    # ---->>>> Configuração de permissões
-    show_progress "Configurando permissões..."
-    chmod +x /opt/rustyproxy/proxy
-    chmod +x /opt/rustyproxy/menu
-    ln -sf /opt/rustyproxy/menu /usr/local/bin/rustyproxy
-    increment_step
-
-    # ---->>>> Limpeza
-    show_progress "Limpando diretórios temporários..."
-    cd /root/
-    rm -rf /root/RustyProxyOnly/
-    increment_step
-
-    # ---->>>> Instalação finalizada :)
-    echo "Instalação concluída com sucesso. Digite 'rustyproxy' para acessar o menu."
+    SUDO=""
 fi
+
+RUSTY_DIR="/opt/rustyproxy"
+
+# Criando o diretório do script
+log_info "Criando diretorio $RUSTY_DIR..."
+$SUDO mkdir -p "$RUSTY_DIR" || error_exit "Falha ao criar diretorio $RUSTY_DIR"
+
+# Instalar o RustyProxy
+log_info "Compilando RustyProxy, isso pode levar algum tempo dependendo da maquina..."
+
+if [ -d "/root/RustyProxyOnly" ]; then
+    $SUDO rm -rf /root/RustyProxyOnly
+fi
+
+$SUDO git clone --branch "main" https://github.com/UlekBR/RustyProxyOnly.git /root/RustyProxyOnly || error_exit "Falha ao clonar rustyproxy"
+$SUDO mv /root/RustyProxyOnly/menu.sh "$RUSTY_DIR/menu"
+cd /root/RustyProxyOnly/RustyProxy
+$SUDO cargo build --release --jobs $(nproc) || error_exit "Falha ao compilar rustyproxy"
+$SUDO mv ./target/release/RustyProxy "$RUSTY_DIR/proxy"
+
+# Configuração de permissões
+log_info "Configurando permissões..."
+$SUDO chmod +x "$RUSTY_DIR/proxy"
+$SUDO chmod +x "$RUSTY_DIR/menu"
+$SUDO ln -sf "$RUSTY_DIR/menu" /usr/local/bin/rustyproxy
+
+# Criação do arquivo de portas para RustyProxy
+log_info "Criando arquivo de portas para RustyProxy..."
+$SUDO touch "$RUSTY_DIR/ports"
+$SUDO chmod 666 "$RUSTY_DIR/ports"
+
+# Limpeza
+log_info "Limpando diretórios temporários..."
+$SUDO rm -rf /root/RustyProxyOnly/
+
+log_info "RustyProxy instalado com sucesso. Digite \'rustyproxy\' para acessar o menu ou use o menu principal do Multiflow."
