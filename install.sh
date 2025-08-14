@@ -100,7 +100,7 @@ $SUDO dpkg --configure -a
 log_info "A instalar dependências essenciais..."
 # REMOVIDO: build-essential, automake, autoconf, libtool, gcc, pois badvpn.c não é mais compilado.
 # REMOVIDO: python3-requests, pois não parece ser usado. Adicionado python3-psutil.
-$SUDO apt-get install -y python3 python3-pip git python3-psutil
+$SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential
 $SUDO apt-get autoremove -y
 $SUDO apt-get clean
 
