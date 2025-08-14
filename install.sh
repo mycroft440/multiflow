@@ -194,45 +194,21 @@ else
 fi
 
 
-# --- Instalação e Compilação do RustyProxy ---
-log_info "A instalar dependências para RustyProxy (Rust)..."
-$SUDO apt-get install -y curl build-essential git
+# --- Instalação do DtunnelProxy ---
+log_info "A instalar DtunnelProxy..."
+DTUNNEL_DIR="$INSTALL_DIR/DtunnelProxy"
 
-log_info "A instalar Rust..."
-if ! command -v rustc &> /dev/null; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | $SUDO sh -s -- -y || error_exit "Falha ao instalar Rust"
-    source "$HOME/.cargo/env"
-else
-    log_info "Rust já está instalado."
+if [ -d "$DTUNNEL_DIR" ]; then
+    log_warn "Diretório $DTUNNEL_DIR já existe. Removendo..."
+    $SUDO rm -rf "$DTUNNEL_DIR"
 fi
 
-log_info "A compilar RustyProxy..."
-if [ -d "/opt/rustyproxy" ]; then
-    log_warn "Diretório /opt/rustyproxy já existe. Removendo..."
-    $SUDO rm -rf /opt/rustyproxy
-fi
-$SUDO mkdir -p /opt/rustyproxy
+log_info "A copiar arquivos do DtunnelProxy..."
+$SUDO mkdir -p "$DTUNNEL_DIR"
+$SUDO cp -a "$TMP_DIR/DtunnelProxy/." "$DTUNNEL_DIR/" || error_exit "Falha ao copiar arquivos do DtunnelProxy"
 
-# Clonar o repositório RustyProxy para um diretório temporário
-log_info "A clonar o repositório RustyProxy..."
-if [ -d "$TMP_DIR/RustyProxy_temp" ]; then
-    $SUDO rm -rf "$TMP_DIR/RustyProxy_temp"
-fi
-git clone --depth 1 https://github.com/UlekBR/RustyProxyOnly.git "$TMP_DIR/RustyProxy_temp" || error_exit "Falha ao clonar RustyProxy"
+log_info "A configurar permissões para DtunnelProxy..."
+$SUDO chmod +x "$DTUNNEL_DIR/dtmenu"
+$SUDO chmod +x "$DTUNNEL_DIR/proxydt"
 
-cd "$TMP_DIR/RustyProxy_temp/RustyProxy"
-log_info "A compilar o binário do RustyProxy (isso pode levar algum tempo)..."
-cargo build --release --jobs $(nproc) || error_exit "Falha ao compilar RustyProxy"
-
-log_info "A mover binários e scripts do RustyProxy para /opt/rustyproxy..."
-$SUDO mv ./target/release/RustyProxy /opt/rustyproxy/proxy
-$SUDO mv "$TMP_DIR/RustyProxy_temp/menu.sh" /opt/rustyproxy/menu
-
-log_info "A configurar permissões para RustyProxy..."
-$SUDO chmod +x /opt/rustyproxy/proxy
-$SUDO chmod +x /opt/rustyproxy/menu
-$SUDO ln -sf /opt/rustyproxy/menu /usr/local/bin/rustyproxy
-
-log_info "Limpeza de arquivos temporários do RustyProxy..."
-cd "$TMP_DIR"
-rm -rf "$TMP_DIR/RustyProxy_temp"
+log_info "DtunnelProxy instalado com sucesso."
