@@ -557,7 +557,14 @@ def conexoes_menu():
         elif choice == "2":
             TerminalManager.leave_alt_screen()
             try:
-                subprocess.run(["bash", "/home/ubuntu/multiflow-main/RustyProxy/menu.sh"], check=True)
+                # Verifica se o RustyProxy está instalado (procura pelo script de menu)
+                if os.path.exists("/opt/multiflow/RustyProxy/rusty_menu"):
+                    subprocess.run(["/opt/multiflow/RustyProxy/rusty_menu"], check=True)
+                else:
+                    # Se não estiver instalado, executa o install.sh do RustyProxy
+                    subprocess.run(["bash", "/opt/multiflow/RustyProxy/install.sh"], check=True)
+            except Exception as e:
+                print(f"\033[91mErro ao executar o RustyProxy: {e}\033[0m")
             finally:
                 TerminalManager.enter_alt_screen()
             status = "RustyProxy: operação concluída."
@@ -765,7 +772,8 @@ def conexoes_menu():
                 status = f"Erro ao gerenciar Slow DNS: {e}"
             finally:
                 TerminalManager.enter_alt_screen()
-            status = "Slow DNS: operação concluída."        elif choice == "5":
+            status = "Slow DNS: operação concluída."
+        elif choice == "5":
             TerminalManager.leave_alt_screen()
             try:
                 menu_proxysocks.main_menu()
