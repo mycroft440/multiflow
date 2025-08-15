@@ -5,10 +5,12 @@ import os
 import json
 import subprocess
 from os import system
+
 # Arquivo de configuração
 CONFIG_FILE = '/etc/proxy_config.json'
 SERVICE_FILE = '/etc/systemd/system/proxy-multiflow.service'
 PROXY_SCRIPT = '/usr/local/bin/proxy_multiflow.py'
+
 # Configuração padrão
 DEFAULT_CONFIG = {
     'installed': False,
@@ -18,12 +20,13 @@ DEFAULT_CONFIG = {
     'password': '',
     'default_host': '0.0.0.0:22'
 }
-#conexao
+
+# Conexão
 IP = '0.0.0.0'
 try:
-   PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 80
+    PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 80
 except:
-   PORT = 80
+    PORT = 80
 PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60  # Mantido para compatibilidade, mas não usado para fechamento rígido
@@ -38,7 +41,7 @@ class ConfigManager:
     def __init__(self):
         self.config_file = CONFIG_FILE
         self.load_config()
-   
+    
     def load_config(self):
         """Carrega configuração do arquivo"""
         try:
@@ -50,7 +53,7 @@ class ConfigManager:
                 self.save_config()
         except:
             self.config = DEFAULT_CONFIG.copy()
-   
+    
     def save_config(self):
         """Salva configuração no arquivo"""
         try:
@@ -61,24 +64,24 @@ class ConfigManager:
         except Exception as e:
             print(f"\033[1;31mErro ao salvar configuração: {e}\033[0m")
             return False
-   
+    
     def is_installed(self):
         """Verifica se o proxy está instalado"""
         return self.config.get('installed', False) and os.path.exists(SERVICE_FILE)
-   
+    
     def is_active(self):
         """Verifica se o proxy está ativo"""
         try:
             result = subprocess.run(['systemctl', 'is-active', 'proxy-multiflow'],
-                                  capture_output=True, text=True)
+                                    capture_output=True, text=True)
             return result.stdout.strip() == 'active'
         except:
             return False
-   
+    
     def get_ports(self):
         """Retorna lista de portas configuradas"""
         return self.config.get('ports', [80])
-   
+    
     def add_port(self, port):
         """Adiciona uma porta"""
         if port not in self.config['ports']:
@@ -86,7 +89,7 @@ class ConfigManager:
             self.save_config()
             return True
         return False
-   
+    
     def remove_port(self, port):
         """Remove uma porta"""
         if port in self.config['ports'] and len(self.config['ports']) > 1:
@@ -94,6 +97,7 @@ class ConfigManager:
             self.save_config()
             return True
         return False
+
 class Server(threading.Thread):
     def __init__(self, host, port):
         threading.Thread.__init__(self)
@@ -103,6 +107,7 @@ class Server(threading.Thread):
         self.threads = []
         self.threadsLock = threading.Lock()
         self.logLock = threading.Lock()
+
     def run(self):
         self.soc = socket.socket(socket.AF_INET)
         self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -122,19 +127,19 @@ class Server(threading.Thread):
                     c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
                 except socket.timeout:
                     continue
-               
+                
                 conn = ConnectionHandler(c, self, addr)
                 conn.start()
                 self.addConn(conn)
         finally:
             self.running = False
             self.soc.close()
-           
+            
     def printLog(self, log):
         self.logLock.acquire()
         print(log)
         self.logLock.release()
-   
+    
     def addConn(self, conn):
         try:
             self.threadsLock.acquire()
@@ -142,24 +147,25 @@ class Server(threading.Thread):
                 self.threads.append(conn)
         finally:
             self.threadsLock.release()
-                   
+                
     def removeConn(self, conn):
         try:
             self.threadsLock.acquire()
             self.threads.remove(conn)
         finally:
             self.threadsLock.release()
-               
+            
     def close(self):
         try:
             self.running = False
             self.threadsLock.acquire()
-           
+            
             threads = list(self.threads)
             for c in threads:
                 c.close()
         finally:
             self.threadsLock.release()
+
 class ConnectionHandler(threading.Thread):
     def __init__(self, socClient, server, addr):
         threading.Thread.__init__(self)
@@ -181,7 +187,7 @@ class ConnectionHandler(threading.Thread):
             pass
         finally:
             self.clientClosed = True
-           
+        
         try:
             if not self.targetClosed:
                 self.target.shutdown(socket.SHUT_RDWR)
@@ -204,16 +210,16 @@ class ConnectionHandler(threading.Thread):
                         self.keep_alive = True
 
                     hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
-                   
+                    
                     if hostPort == '':
                         hostPort = DEFAULT_HOST
                     split = self.findHeader(self.client_buffer, 'X-Split')
                     if split != '':
                         self.client.recv(BUFLEN)
-                   
+                    
                     if hostPort != '':
                         passwd = self.findHeader(self.client_buffer, 'X-Pass')
-                       
+                        
                         if len(PASS) != 0 and passwd == PASS:
                             self.method_CONNECT(hostPort)
                         elif len(PASS) != 0 and passwd != PASS:
@@ -250,7 +256,7 @@ class ConnectionHandler(threading.Thread):
 
     def findHeader(self, head, header):
         aux = head.find(header + ': ')
-   
+    
         if aux == -1:
             return ''
         aux = head.find(':', aux)
@@ -314,6 +320,13 @@ class ConnectionHandler(threading.Thread):
                             while sent < len(data):
                                 sent += dest.send(data[sent:])
                         else:
+                            # EOF detected, shutdown the other side gracefully
+                            dest = self.client if sock is self.target else self.target
+                            try:
+                                dest.shutdown(socket.SHUT_WR)
+                            except:
+                                pass
+                            self.server.printLog(self.log + ' - EOF from one side, shutting down the other')
                             error = True
                             break
             except Exception as e:
@@ -323,18 +336,18 @@ class ConnectionHandler(threading.Thread):
 class ProxyManager:
     def __init__(self):
         self.config_manager = ConfigManager()
-       
+        
     def install_proxy(self):
         """Instala o proxy como serviço do sistema"""
         try:
             # Cria o script do proxy
             print("\033[1;33mInstalando proxy...\033[0m")
-           
+            
             # Copia o script atual para /usr/local/bin
             current_script = os.path.abspath(__file__)
             os.system(f'sudo cp {current_script} {PROXY_SCRIPT}')
             os.system(f'sudo chmod +x {PROXY_SCRIPT}')
-           
+            
             # Cria arquivo de serviço systemd
             service_content = f'''[Unit]
 Description=Proxy Multiflow Service
@@ -349,103 +362,104 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 '''
-           
+            
             with open('/tmp/proxy-multiflow.service', 'w') as f:
                 f.write(service_content)
-           
+            
             os.system('sudo mv /tmp/proxy-multiflow.service ' + SERVICE_FILE)
             os.system('sudo systemctl daemon-reload')
             os.system('sudo systemctl enable proxy-multiflow')
-           
+            
             self.config_manager.config['installed'] = True
             self.config_manager.save_config()
-           
+            
             print("\033[1;32mProxy instalado com sucesso!\033[0m")
             return True
-           
+            
         except Exception as e:
             print(f"\033[1;31mErro ao instalar: {e}\033[0m")
             return False
-   
+    
     def uninstall_proxy(self):
         """Remove o proxy do sistema"""
         try:
             print("\033[1;33mRemovendo proxy...\033[0m")
-           
+            
             # Para o serviço
             os.system('sudo systemctl stop proxy-multiflow 2>/dev/null')
             os.system('sudo systemctl disable proxy-multiflow 2>/dev/null')
-           
+            
             # Remove arquivos
             if os.path.exists(SERVICE_FILE):
                 os.system(f'sudo rm {SERVICE_FILE}')
             if os.path.exists(PROXY_SCRIPT):
                 os.system(f'sudo rm {PROXY_SCRIPT}')
-           
+            
             os.system('sudo systemctl daemon-reload')
-           
+            
             self.config_manager.config['installed'] = False
             self.config_manager.config['active'] = False
             self.config_manager.save_config()
-           
+            
             print("\033[1;32mProxy removido com sucesso!\033[0m")
             return True
-           
+            
         except Exception as e:
             print(f"\033[1;31mErro ao remover: {e}\033[0m")
             return False
-   
+    
     def start_proxy(self):
         """Inicia o serviço do proxy"""
         os.system('sudo systemctl start proxy-multiflow')
         time.sleep(2)
         return self.config_manager.is_active()
-   
+    
     def stop_proxy(self):
         """Para o serviço do proxy"""
         os.system('sudo systemctl stop proxy-multiflow')
         time.sleep(2)
         return not self.config_manager.is_active()
-   
+    
     def restart_proxy(self):
         """Reinicia o serviço do proxy"""
         os.system('sudo systemctl restart proxy-multiflow')
         time.sleep(2)
         return self.config_manager.is_active()
+
 def show_menu():
     """Exibe o menu interativo"""
     manager = ProxyManager()
-   
+    
     while True:
         system("clear")
         print("\033[0;34m" + "="*50 + "\033[0m")
         print("\033[1;32m PROXY MULTIFLOW - MENU PRINCIPAL\033[0m")
         print("\033[0;34m" + "="*50 + "\033[0m")
-       
+        
         # Status
         is_installed = manager.config_manager.is_installed()
         is_active = manager.config_manager.is_active()
         ports = manager.config_manager.get_ports()
-       
+        
         status_color = "\033[1;32m" if is_active else "\033[1;31m"
         status_text = "ATIVO" if is_active else "INATIVO"
-       
+        
         print(f"\n\033[1;33mStatus:\033[0m {status_color}{status_text}\033[0m")
         print(f"\033[1;33mInstalado:\033[0m {'Sim' if is_installed else 'Não'}")
         print(f"\033[1;33mPortas:\033[0m {', '.join(map(str, ports))}")
-       
+        
         print("\n\033[0;34m" + "-"*50 + "\033[0m")
-       
+        
         if not is_installed:
             print("\033[1;36m1.\033[0m Instalar Proxy")
         else:
             print("\033[1;36m1.\033[0m \033[1;30mInstalar Proxy (já instalado)\033[0m")
-           
+            
         if is_installed:
             print("\033[1;36m2.\033[0m Remover Proxy")
             print("\033[1;36m3.\033[0m Adicionar Porta")
             print("\033[1;36m4.\033[0m Remover Porta")
-           
+            
             if is_active:
                 print("\033[1;36m5.\033[0m Parar Proxy")
                 print("\033[1;36m6.\033[0m Reiniciar Proxy")
@@ -455,27 +469,27 @@ def show_menu():
             print("\033[1;36m2.\033[0m \033[1;30mRemover Proxy (não instalado)\033[0m")
             print("\033[1;36m3.\033[0m \033[1;30mAdicionar Porta (instale primeiro)\033[0m")
             print("\033[1;36m4.\033[0m \033[1;30mRemover Porta (instale primeiro)\033[0m")
-       
+        
         print("\033[1;36m0.\033[0m Sair")
         print("\033[0;34m" + "-"*50 + "\033[0m")
-       
+        
         try:
             choice = input("\n\033[1;33mEscolha uma opção: \033[0m")
-           
+            
             if choice == '0':
                 print("\n\033[1;32mSaindo...\033[0m")
                 break
-               
+                
             elif choice == '1' and not is_installed:
                 manager.install_proxy()
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
-               
+                
             elif choice == '2' and is_installed:
                 confirm = input("\n\033[1;31mTem certeza que deseja remover o proxy? (s/n): \033[0m")
                 if confirm.lower() == 's':
                     manager.uninstall_proxy()
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
-               
+                
             elif choice == '3' and is_installed:
                 try:
                     port = int(input("\n\033[1;33mDigite a porta a adicionar: \033[0m"))
@@ -492,7 +506,7 @@ def show_menu():
                 except ValueError:
                     print("\033[1;31mPorta inválida!\033[0m")
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
-               
+                
             elif choice == '4' and is_installed:
                 if len(ports) > 1:
                     print(f"\n\033[1;33mPortas atuais: {', '.join(map(str, ports))}\033[0m")
@@ -510,7 +524,7 @@ def show_menu():
                 else:
                     print("\033[1;31mDeve manter pelo menos uma porta!\033[0m")
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
-               
+                
             elif choice == '5' and is_installed:
                 if is_active:
                     print("\n\033[1;33mParando proxy...\033[0m")
@@ -525,7 +539,7 @@ def show_menu():
                     else:
                         print("\033[1;31mErro ao iniciar o proxy!\033[0m")
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
-               
+                
             elif choice == '6' and is_installed and is_active:
                 print("\n\033[1;33mReiniciando proxy...\033[0m")
                 if manager.restart_proxy():
@@ -533,28 +547,29 @@ def show_menu():
                 else:
                     print("\033[1;31mErro ao reiniciar o proxy!\033[0m")
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
-               
+                
             else:
                 print("\n\033[1;31mOpção inválida!\033[0m")
                 time.sleep(1)
-               
+                
         except KeyboardInterrupt:
             print("\n\n\033[1;31mInterrompido pelo usuário!\033[0m")
             break
         except Exception as e:
             print(f"\n\033[1;31mErro: {e}\033[0m")
             input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
+
 def run_daemon():
     """Executa o proxy em modo daemon"""
     config_manager = ConfigManager()
     servers = []
-   
+    
     for port in config_manager.get_ports():
         server = Server(IP, port)
         server.start()
         servers.append(server)
         print(f"Proxy iniciado na porta {port}")
-   
+    
     try:
         while True:
             time.sleep(2)
@@ -562,6 +577,7 @@ def run_daemon():
         print('\nParando servidores...')
         for server in servers:
             server.close()
+
 def main():
     """Função principal"""
     if '--daemon' in sys.argv:
@@ -573,10 +589,10 @@ def main():
         print("\033[1;33mIP:\033[1;32m " + IP)
         print("\033[1;33mPORTA:\033[1;32m " + str(PORT) + "\n")
         print("\033[0;34m"*10 + "\033[1;32m Multiflow" + "\033[0;34m\033[1;37m"*11 + "\n")
-       
+        
         server = Server(IP, PORT)
         server.start()
-       
+        
         try:
             while True:
                 time.sleep(2)
@@ -586,5 +602,6 @@ def main():
     else:
         # Modo menu interativo
         show_menu()
+
 if __name__ == '__main__':
     main()
