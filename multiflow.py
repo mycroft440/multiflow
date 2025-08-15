@@ -88,11 +88,9 @@ def bootstrap_imports():
     targets = {
         "manusear_usuarios": "ferramentas.manusear_usuarios",
         "menu_badvpn": "menus.menu_badvpn",
-        "menu_proxysocks": "menus.menu_proxysocks",
         "menu_bloqueador": "menus.menu_bloqueador",
         "menu_servidor_download": "menus.menu_servidor_download",
         "menu_openvpn": "menus.menu_openvpn",
-        "multiprotocolo": "conexoes.multiprotocolo",
     }
 
     imported = {}
@@ -120,10 +118,10 @@ def bootstrap_imports():
         yel = "\033[93m"
         rst = "\033[0m"
         sys.stderr.write(f"{red}[ERRO] Não foi possível carregar os módulos: {', '.join(still_missing)}{rst}\n")
-        sys.stderr.write(f"{yel}Dicas:\n"
-                         f" - Verifique a estrutura: {root or '/opt/multiflow'}/menus e /ferramentas existem?\n"
-                         f" - Crie __init__.py dentro de 'menus' e 'ferramentas' para habilitar import como pacote.\n"
-                         f" - Confirme MULTIFLOW_HOME ou o caminho real do projeto.\n"
+        sys.stderr.write(f"{yel}Dicas:\n" +
+                         f" - Verifique a estrutura: {root or '/opt/multiflow'}/menus e /ferramentas existem?\n" +
+                         f" - Crie __init__.py dentro de 'menus' e 'ferramentas' para habilitar import como pacote.\n" +
+                         f" - Confirme MULTIFLOW_HOME ou o caminho real do projeto.\n" +
                          f" - Você está rodando com o Python correto (sudo pode usar outro Python)?{rst}\n")
         sys.stderr.write(f"\nCaminho detectado: {root or 'N/D'}\n")
         sys.stderr.write("sys.path atual:\n - " + "\n - ".join(sys.path) + "\n")
@@ -137,8 +135,7 @@ bootstrap_imports()
 
 # Importando módulos do projeto (já resolvidos pelo bootstrap)
 from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
-from menus import menu_badvpn, menu_proxysocks, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
-from conexoes import multiprotocolo  # noqa: F401
+from menus import menu_badvpn, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
 
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
@@ -384,14 +381,6 @@ def get_active_services():
         services.append(f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} ZRAM{MC.RESET}")
     if '/swapfile' in swapon or 'partition' in swapon:
         services.append(f"{MC.GREEN_GRADIENT}{Icons.ACTIVE} SWAP{MC.RESET}")
-    try:
-        if os.path.exists(menu_proxysocks.STATE_FILE):
-            with open(menu_proxysocks.STATE_FILE, 'r') as f:
-                pid, port = f.read().strip().split(':')
-            if psutil.pid_exists(int(pid)):
-                services.append(f"{MC.BLUE_GRADIENT}{Icons.ACTIVE} Proxy:{port}{MC.RESET}")
-    except Exception:
-        pass
     if os.path.exists('/etc/openvpn/server.conf'):
         services.append(f"{MC.CYAN_GRADIENT}{Icons.ACTIVE} OpenVPN{MC.RESET}")
     try:
@@ -472,11 +461,6 @@ def build_connections_frame(status_msg=""):
     s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
     s.append("\n")
     s.append(menu_option("1", "Openvpn", Icons.LOCK, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "Dtunnel Proxy", Icons.SHIELD, MC.RED_GRADIENT))
-    s.append(menu_option("3", "RustyProxy", Icons.SHIELD, MC.ORANGE_GRADIENT))
-    s.append(menu_option("4", "Slow DNS", Icons.NETWORK, MC.BLUE_GRADIENT))
-    s.append(menu_option("5", "ProxySocks", Icons.UNLOCK, MC.PURPLE_GRADIENT))
-    s.append(menu_option("6", "Multiprotocolo", Icons.NETWORK, MC.CYAN_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -551,31 +535,12 @@ def conexoes_menu():
         TerminalManager.after_input()
 
         if choice == "1":
-            # NÃO sair do alt-screen aqui; o submenu gerencia isso quando necessário
-            menu_openvpn.main_menu()
-            status = "OpenVPN: operação concluída."
-        elif choice == "2":
             TerminalManager.leave_alt_screen()
             try:
-                # Verifica se o RustyProxy está instalado (procura pelo script de menu)
-                if os.path.exists("/opt/multiflow/RustyProxy/rusty_menu"):
-                    subprocess.run(["/opt/multiflow/RustyProxy/rusty_menu"], check=True)
-                else:
-                    # Se não estiver instalado, executa o install.sh do RustyProxy
-                    subprocess.run(["bash", "/opt/multiflow/RustyProxy/install.sh"], check=True)
-            except Exception as e:
-                print(f"\033[91mErro ao executar o RustyProxy: {e}\033[0m")
+                menu_openvpn.main_menu()
             finally:
                 TerminalManager.enter_alt_screen()
-            status = "RustyProxy: operação concluída."
-        elif choice == "3":
-            # NÃO sair do alt-screen; o submenu mantém a UI
-            menu_proxysocks.main_menu()
-            status = "ProxySocks: operação concluída."
-        elif choice == "4":
-            # NÃO sair do alt-screen; o submenu mantém a UI
-            multiprotocolo.main()
-            status = "Multiprotocolo: operação concluída."
+            status = "OpenVPN: operação concluída."
         elif choice == "0":
             return
         else:
@@ -716,78 +681,3 @@ def main_menu():
 # ==================== EXECUÇÃO ====================
 if __name__ == "__main__":
     main_menu()
-
-
-def conexoes_menu():
-    status = ""
-    while True:
-        TerminalManager.enter_alt_screen()
-        TerminalManager.render(build_connections_frame(status))
-        TerminalManager.before_input()
-        choice = input(f"\n{MC.PURPLE_GRADIENT}{MC.BOLD}└─ Escolha uma opção: {MC.RESET}").strip()
-        TerminalManager.after_input()
-
-        if choice == "1":
-            TerminalManager.leave_alt_screen()
-            try:
-                menu_openvpn.main_menu()
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "OpenVPN: operação concluída."
-        elif choice == "2":
-            TerminalManager.leave_alt_screen()
-            try:
-                subprocess.run([os.path.join(_find_multiflow_root(), 'DtunnelProxy', 'dtmenu')], check=True)
-            except Exception as e:
-                status = f"Erro ao iniciar Dtunnel Proxy: {e}"
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Dtunnel Proxy: operação concluída."
-        elif choice == "3":
-            TerminalManager.leave_alt_screen()
-            try:
-                # Verifica se o RustyProxy está instalado (pode ser um binário ou um indicador de instalação)
-                # Assumindo que a presença de menu.sh indica instalação ou que install_rustyproxy.sh pode ser chamado repetidamente
-                rusty_proxy_path = os.path.join(_find_multiflow_root(), 'RustyProxy')
-                if os.path.exists(os.path.join(rusty_proxy_path, 'menu.sh')):
-                    subprocess.run(['bash', os.path.join(rusty_proxy_path, 'menu.sh')], check=True)
-                else:
-                    subprocess.run(['bash', os.path.join(rusty_proxy_path, 'install_rustyproxy.sh')], check=True)
-            except Exception as e:
-                status = f"Erro ao gerenciar RustyProxy: {e}"
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "RustyProxy: operação concluída."
-        elif choice == "4":
-            TerminalManager.leave_alt_screen()
-            try:
-                # Verifica se o Slow DNS está instalado (pode ser um binário ou um indicador de instalação)
-                # Assumindo que a presença de dnstt-manager indica instalação ou que dnstt-installer.sh pode ser chamado repetidamente
-                slowdns_path = os.path.join(_find_multiflow_root(), 'Slowdns')
-                if os.path.exists(os.path.join(slowdns_path, 'dnstt-manager')):
-                    subprocess.run(['bash', os.path.join(slowdns_path, 'dnstt-manager')], check=True)
-                else:
-                    subprocess.run(['bash', os.path.join(slowdns_path, 'dnstt-installer.sh')], check=True)
-            except Exception as e:
-                status = f"Erro ao gerenciar Slow DNS: {e}"
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Slow DNS: operação concluída."
-        elif choice == "5":
-            TerminalManager.leave_alt_screen()
-            try:
-                menu_proxysocks.main_menu()
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "ProxySocks: operação concluída."
-        elif choice == "6":
-            TerminalManager.leave_alt_screen()
-            try:
-                multiprotocolo.main_menu()
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "Multiprotocolo: operação concluída."
-        elif choice == "0":
-            return
-        else:
-            status = "Opção inválida. Tente novamente."
