@@ -461,6 +461,7 @@ def build_connections_frame(status_msg=""):
     s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
     s.append("\n")
     s.append(menu_option("1", "Openvpn", Icons.LOCK, MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "ProxySocks", Icons.UNLOCK, MC.PURPLE_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -486,7 +487,7 @@ def build_updater_frame():
     s.append("\n")
     s.append(modern_box("ATUALIZADOR MULTIFLOW", [
         f"{MC.YELLOW_GRADIENT}{Icons.INFO} Baixar a versão mais recente do GitHub.{MC.RESET}",
-        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Serviços como BadVPN e ProxySocks serão parados.{MC.RESET}",
+        f"{MC.YELLOW_GRADIENT}{Icons.WARNING} Serviços como BadVPN serão parados.{MC.RESET}",
         f"{MC.RED_GRADIENT}{Icons.WARNING} O programa encerra após a atualização.{MC.RESET}",
         f"{MC.WHITE}{Icons.INFO} Reinicie com 'multiflow' após concluir.{MC.RESET}"
     ], Icons.UPDATE, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT))
@@ -541,6 +542,17 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "OpenVPN: operação concluída."
+        elif choice == "2":
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                proxysocks_path = os.path.join(root, 'conexoes', 'proxysocks.py')
+                subprocess.run([sys.executable, proxysocks_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar ProxySocks: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "ProxySocks: operação concluída."
         elif choice == "0":
             return
         else:
