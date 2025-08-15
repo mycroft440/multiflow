@@ -10,15 +10,15 @@ import psutil
 import select
 
 IP = '0.0.0.0'
-PORT = 80  # Porta alta para evitar permissões
+PORT = 8080  # Porta alta para evitar permissões
 PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60
-MSG = 'Connection established'
+MSG = '@TMYCOMNECTVPN'
 COR = '<font color="null">'
 FTAG = '</font>'
 DEFAULT_HOST = '0.0.0.0:22'
-RESPONSE = ("HTTP/1.1 200 " + str(COR) + str(MSG) + str(FTAG) + "\r\nConnection: keep-alive\r\n\r\n").encode()
+RESPONSE = ("HTTP/1.1 200 " + str(COR) + str(MSG) + str(FTAG) + "\r\n\r\n").encode()
 
 STATE_FILE = '/tmp/proxysocks_state.txt'
 
@@ -134,21 +134,20 @@ class ConnectionHandler(threading.Thread):
             if split != b'':
                 self.client.recv(BUFLEN)
 
-            if hostPort != b'':
+            if hostPort == b'':
+                print('- No X-Real-Host!')
+                self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
+            elif not hostPort.decode().startswith(IP):
+                self.client.send(b'HTTP/1.1 403 Forbidden!\r\n\r\n')
+            else:
                 passwd = self.findHeader(self.client_buffer, b'X-Pass')
-
                 if len(PASS) != 0:
                     if passwd.decode() == PASS:
                         self.method_CONNECT(hostPort.decode())
                     else:
                         self.client.send(b'HTTP/1.1 400 WrongPass!\r\n\r\n')
-                elif hostPort.decode().startswith(IP):
-                    self.method_CONNECT(hostPort.decode())
                 else:
-                    self.client.send(b'HTTP/1.1 403 Forbidden!\r\n\r\n')
-            else:
-                print('- No X-Real-Host!')
-                self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
+                    self.method_CONNECT(hostPort.decode())
 
         except Exception as e:
             self.log += ' - error: ' + str(e)
@@ -221,7 +220,6 @@ class ConnectionHandler(threading.Thread):
                                 self.target.sendall(data)
                             count = 0
                         else:
-                            error = True
                             break
                     except:
                         error = True
@@ -232,10 +230,10 @@ class ConnectionHandler(threading.Thread):
                 break
 
 def main(host=IP, port=PORT):
-    print("\033[0;34m━"*8 + "\033[1;32m━ PROXY MULTIFLOW" + "\033[0;34m━"*8 + "\n")
+    print("\033[0;34m━"*8 + "\033[1;32m PROXY SOCKS" + "\033[0;34m━"*8 + "\n")
     print("\033[1;33mIP:\033[1;32m " + IP)
     print("\033[1;33mPORTA:\033[1;32m " + str(port) + "\n")
-    print("\033[0;34m━"*10 + "\033[1;32m MULTIFLOW" + "\033[0;34m━\033[1;37m"*11 + "\n")
+    print("\033[0;34m━"*10 + "\033[1;32m SCOTTSSH" + "\033[0;34m━\033[1;37m"*11 + "\n")
     server = Server(host, port)
     server.start()
     print("Server rodando. Pressione Ctrl+C para parar.")
