@@ -32,7 +32,6 @@ COR = '<font color="null">'
 FTAG = '</font>'
 DEFAULT_HOST = '0.0.0.0:22'
 RESPONSE = "HTTP/1.1 200 " + COR + MSG + FTAG + "\r\n\r\n"
-HEARTBEAT_INTERVAL = 30  # Segundos para heartbeat se idle
 SELECT_TIMEOUT = 10  # Aumentado para reduzir overhead em idle
 
 class ConfigManager:
@@ -171,7 +170,7 @@ class ConnectionHandler(threading.Thread):
         self.server = server
         self.log = 'Conexao: ' + str(addr)
         self.keep_alive = False  # Flag para conexões persistentes
-        self.last_activity = time.time()  # Para heartbeats
+        self.method = None
 
     def close(self):
         try:
@@ -193,57 +192,61 @@ class ConnectionHandler(threading.Thread):
             self.targetClosed = True
 
     def run(self):
-        while True:  # Loop para suportar conexões persistentes
-            try:
-                self.client_buffer = self.client.recv(BUFLEN).decode('utf-8')
-                if not self.client_buffer:
-                    break  # Fecha se recv vazio (conexão fechada)
+        try:
+            while True:  # Loop para suportar conexões persistentes
+                try:
+                    self.client_buffer = self.client.recv(BUFLEN).decode('utf-8')
+                    if not self.client_buffer:
+                        break  # Fecha se recv vazio (conexão fechada)
 
-                # Verifica se é keep-alive para persistência
-                if 'Connection: keep-alive' in self.client_buffer:
-                    self.keep_alive = True
+                    # Verifica se é keep-alive para persistência
+                    if 'Connection: keep-alive' in self.client_buffer:
+                        self.keep_alive = True
 
-                hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
-               
-                if hostPort == '':
-                    hostPort = DEFAULT_HOST
-                split = self.findHeader(self.client_buffer, 'X-Split')
-                if split != '':
-                    self.client.recv(BUFLEN)
-               
-                if hostPort != '':
-                    passwd = self.findHeader(self.client_buffer, 'X-Pass')
+                    hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
                    
-                    if len(PASS) != 0 and passwd == PASS:
-                        self.method_CONNECT(hostPort)
-                    elif len(PASS) != 0 and passwd != PASS:
-                        self.client.send('HTTP/1.1 400 WrongPass!\r\n\r\n'.encode('utf-8'))
-                        break
-                    elif hostPort.startswith(IP):
-                        self.method_CONNECT(hostPort)
+                    if hostPort == '':
+                        hostPort = DEFAULT_HOST
+                    split = self.findHeader(self.client_buffer, 'X-Split')
+                    if split != '':
+                        self.client.recv(BUFLEN)
+                   
+                    if hostPort != '':
+                        passwd = self.findHeader(self.client_buffer, 'X-Pass')
+                       
+                        if len(PASS) != 0 and passwd == PASS:
+                            self.method_CONNECT(hostPort)
+                        elif len(PASS) != 0 and passwd != PASS:
+                            self.client.send('HTTP/1.1 400 WrongPass!\r\n\r\n'.encode('utf-8'))
+                            break
+                        elif hostPort.startswith(IP):
+                            self.method_CONNECT(hostPort)
+                        else:
+                            self.client.send('HTTP/1.1 403 Forbidden!\r\n\r\n'.encode('utf-8'))
+                            break
+                        if self.method == 'CONNECT':
+                            break  # No more HTTP after tunnel
                     else:
-                        self.client.send('HTTP/1.1 403 Forbidden!\r\n\r\n'.encode('utf-8'))
+                        print('- No X-Real-Host!')
+                        self.client.send('HTTP/1.1 400 NoXRealHost!\r\n\r\n'.encode('utf-8'))
                         break
-                else:
-                    print('- No X-Real-Host!')
-                    self.client.send('HTTP/1.1 400 NoXRealHost!\r\n\r\n'.encode('utf-8'))
-                    break
 
-                # Se não keep-alive, sai do loop após handling
-                if not self.keep_alive:
-                    break
-
-            except Exception as e:
-                if 'timeout' in str(e).lower() or 'broken pipe' in str(e).lower():  # Recuperação suave em erros transitórios
-                    self.server.printLog(self.log + ' - transient error, retrying: ' + str(e))
-                    time.sleep(1)  # Pequeno delay antes de retry
-                    continue
-                else:
-                    self.log += ' - error: ' + str(e)
-                    self.server.printLog(self.log)
-                    break
-        self.close()
-        self.server.removeConn(self)
+                    # Se não keep-alive, sai do loop após handling
+                    if not self.keep_alive:
+                        break
+                except Exception as e:
+                    if 'timeout' in str(e).lower() or 'broken pipe' in str(e).lower():  # Recuperação suave em erros transitórios
+                        self.server.printLog(self.log + ' - transient error, retrying: ' + str(e))
+                        time.sleep(1)  # Pequeno delay antes de retry
+                        continue
+                    else:
+                        raise
+        except Exception as e:
+            self.log += ' - error: ' + str(e)
+            self.server.printLog(self.log)
+        finally:
+            self.close()
+            self.server.removeConn(self)
 
     def findHeader(self, head, header):
         aux = head.find(header + ': ')
@@ -287,24 +290,15 @@ class ConnectionHandler(threading.Thread):
         self.doCONNECT()
 
     def doCONNECT(self):
-        socs = [self.client, self.target]
-        error = False
         poller = select.poll()
         poller.register(self.client, select.POLLIN | select.POLLHUP | select.POLLERR)
         poller.register(self.target, select.POLLIN | select.POLLHUP | select.POLLERR)
-        self.last_activity = time.time()
-
+        error = False
         while not error:
             try:
                 events = poller.poll(SELECT_TIMEOUT * 1000)  # Em ms
                 if not events:
-                    # Sem eventos: verifica heartbeat se idle
-                    if time.time() - self.last_activity > HEARTBEAT_INTERVAL:
-                        # Envia heartbeat (byte nulo para manter vivo sem interferir)
-                        self.target.send(b'\x00')
-                        self.client.send(b'\x00')
-                        self.last_activity = time.time()
-                    continue
+                    continue  # Rely on TCP keep-alive for idle connections
 
                 for fd, flag in events:
                     sock = self.client if fd == self.client.fileno() else self.target
@@ -315,13 +309,10 @@ class ConnectionHandler(threading.Thread):
                     if flag & select.POLLIN:
                         data = sock.recv(BUFLEN)
                         if data:
-                            if sock is self.target:
-                                self.client.send(data)
-                            else:
-                                sent = 0
-                                while sent < len(data):
-                                    sent += self.target.send(data[sent:])
-                            self.last_activity = time.time()  # Reset atividade
+                            dest = self.client if sock is self.target else self.target
+                            sent = 0
+                            while sent < len(data):
+                                sent += dest.send(data[sent:])
                         else:
                             error = True
                             break
@@ -345,7 +336,7 @@ class ProxyManager:
             os.system(f'sudo chmod +x {PROXY_SCRIPT}')
            
             # Cria arquivo de serviço systemd
-            service_content = f"""[Unit]
+            service_content = f'''[Unit]
 Description=Proxy Multiflow Service
 After=network.target
 [Service]
@@ -357,7 +348,7 @@ Restart=always
 RestartSec=10
 [Install]
 WantedBy=multi-user.target
-"""
+'''
            
             with open('/tmp/proxy-multiflow.service', 'w') as f:
                 f.write(service_content)
