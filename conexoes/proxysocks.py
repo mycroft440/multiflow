@@ -291,27 +291,42 @@ class ConnectionHandler(threading.Thread):
     def doCONNECT(self):
         socs = [self.client, self.target]
         error = False
-        while True:
-            (recv, _, err) = select.select(socs, [], socs, -1)  # Timeout infinito para low CPU
-            if err:
-                error = True
-            if recv:
-                for in_ in recv:
-                    try:
-                        data = in_.recv(BUFLEN)
+        retry_count = 0
+        while not error:
+            try:
+                (recv, _, err) = select.select(socs, [], socs, -1)  # Timeout infinito
+                if err:
+                    error = True
+                if recv:
+                    for in_ in recv:
+                        data = b''
+                        while True:  # Loop para full recv
+                            chunk = in_.recv(BUFLEN)
+                            if not chunk:
+                                break
+                            data += chunk
+                            if len(chunk) < BUFLEN:
+                                break
                         if data:
                             dest = self.client if in_ is self.target else self.target
-                            for i in range(0, len(data), random.randint(10, 50)):  # Fragmenta randômico
-                                chunk = data[i:i + random.randint(10, 50)]
-                                byte = dest.send(chunk)
-                                time.sleep(random.uniform(0.01, 0.1))  # Delay randômico
+                            sent = 0
+                            while sent < len(data):
+                                sent += dest.send(data[sent:])
                         else:
+                            error = True
                             break
-                    except:
-                        error = True
-                        break
-            if error:
-                break
+            except (ConnectionResetError, BrokenPipeError) as e:
+                if retry_count < 5:
+                    self.server.printLog(self.log + f' - Connection drop: {e}, retrying...')
+                    delay = (2 ** retry_count) + random.uniform(0, 1)
+                    time.sleep(delay)
+                    retry_count += 1
+                    self.connect_target(path)
+                else:
+                    error = True
+            except Exception as e:
+                self.server.printLog(self.log + ' - loop error: ' + str(e))
+                error = True
 
 class ProxyManager:
     def __init__(self):
