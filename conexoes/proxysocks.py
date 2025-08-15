@@ -10,7 +10,7 @@ import psutil
 from concurrent.futures import ThreadPoolExecutor
 
 IP = '0.0.0.0'
-PORT = 8080  # Porta alta para evitar permissões
+PORT = 80  # Porta alta para evitar permissões
 PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60
@@ -238,13 +238,30 @@ def main(host=IP, port=PORT):
             server.close()
             break
 
+def get_status():
+    if not os.path.exists(STATE_FILE):
+        return "No", "No", "N/A"
+    try:
+        with open(STATE_FILE, 'r') as f:
+            pid_port = f.read().strip()
+            if not pid_port:
+                return "Yes (stale)", "No", "N/A"
+            pid, port = pid_port.split(':')
+            pid = int(pid)
+            running = psutil.pid_exists(pid)
+            return "Yes", "Yes" if running else "No", port
+    except Exception:
+        return "Yes (stale)", "No", "N/A"
+
 def install_proxysocks():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
-            pid, port = f.read().strip().split(':')
-        if psutil.pid_exists(int(pid)):
-            print(f"Já instalado na porta {port}")
-            return
+            pid_port = f.read().strip()
+            if pid_port:
+                pid, port = pid_port.split(':')
+                if psutil.pid_exists(int(pid)):
+                    print(f"Já instalado na porta {port}")
+                    return
 
     port_input = input("Informe a porta para o ProxySocks: ")
     try:
@@ -281,7 +298,12 @@ def uninstall_proxysocks():
         return
 
     with open(STATE_FILE, 'r') as f:
-        pid, port = f.read().strip().split(':')
+        pid_port = f.read().strip()
+        if not pid_port:
+            os.remove(STATE_FILE)
+            print("Estado stale removido, ProxySocks desinstalado")
+            return
+        pid, port = pid_port.split(':')
 
     pid = int(pid)
     if psutil.pid_exists(pid):
@@ -299,6 +321,11 @@ def uninstall_proxysocks():
 
 def menu():
     while True:
+        installed, running, port = get_status()
+        print("\nProxySocks Status:")
+        print(f"Installed: {installed}")
+        print(f"Running: {running}")
+        print(f"Port: {port}")
         print("\nMenu ProxySocks")
         print("1. Instalar ProxySocks")
         print("2. Abrir porta")
