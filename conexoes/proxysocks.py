@@ -6,12 +6,6 @@ import json
 import subprocess
 from os import system
 import random
-import collections
-import logging
-
-# Configuração de logging avançado
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # Arquivo de configuração
 CONFIG_FILE = '/etc/proxy_config.json'
@@ -37,13 +31,8 @@ except:
 PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60  # Mantido para compatibilidade, mas não usado para fechamento rígido
-MSG = 'Connection Established'
-COR = '<font color="null">'
-FTAG = '</font>'
 DEFAULT_HOST = '0.0.0.0:22'
-RESPONSE = "HTTP/1.1 200 " + COR + MSG + FTAG + "\r\n\r\n"
-SELECT_TIMEOUT = 10  # Aumentado para reduzir overhead em idle
-MAX_RETRIES = 5  # Máximo de tentativas de reconexão
+RESPONSE = "HTTP/1.1 200 Connection Established\r\n\r\n"
 
 class ConfigManager:
     def __init__(self):
@@ -70,7 +59,7 @@ class ConfigManager:
                 json.dump(self.config, f, indent=4)
             return True
         except Exception as e:
-            logger.error(f"Erro ao salvar configuração: {e}")
+            print(f"\033[1;31mErro ao salvar configuração: {e}\033[0m")
             return False
     
     def is_installed(self):
@@ -121,19 +110,13 @@ class Server(threading.Thread):
         self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.soc.settimeout(2)
         self.soc.bind((self.host, self.port))
-        self.soc.listen(1024)  # Aumentado backlog para mais conexões
+        self.soc.listen(128)
         self.running = True
         try:
             while self.running:
                 try:
                     c, addr = self.soc.accept()
                     c.setblocking(1)
-                    # Configura TCP Keep-Alive no client socket
-                    c.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                    c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-                    c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 30)
-                    c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
-                    # Ativar TCP_NODELAY
                     c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 except socket.timeout:
                     continue
@@ -147,7 +130,7 @@ class Server(threading.Thread):
             
     def printLog(self, log):
         self.logLock.acquire()
-        logger.info(log)
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {log}")
         self.logLock.release()
     
     def addConn(self, conn):
@@ -187,9 +170,6 @@ class ConnectionHandler(threading.Thread):
         self.log = 'Conexao: ' + str(addr)
         self.keep_alive = False  # Flag para conexões persistentes
         self.method = None
-        self.path = None  # Salvar path para reconexão
-        self.send_queue = collections.deque()  # Queue para buffer de envio
-        self.last_activity = time.time()  # Para monitor de inatividade
 
     def close(self):
         try:
@@ -213,64 +193,53 @@ class ConnectionHandler(threading.Thread):
     def run(self):
         try:
             while True:  # Loop para suportar conexões persistentes
-                retry_count = 0
-                while retry_count < MAX_RETRIES:
-                    try:
-                        self.client_buffer = self.client.recv(BUFLEN).decode('utf-8')
-                        if not self.client_buffer:
-                            break  # Fecha se recv vazio (conexão fechada)
+                try:
+                    self.client_buffer = self.client.recv(BUFLEN).decode('utf-8')
+                    if not self.client_buffer:
+                        break  # Fecha se recv vazio (conexão fechada)
 
-                        # Verifica se é keep-alive para persistência
-                        if 'Connection: keep-alive' in self.client_buffer:
-                            self.keep_alive = True
+                    # Verifica se é keep-alive para persistência
+                    if 'Connection: keep-alive' in self.client_buffer:
+                        self.keep_alive = True
 
-                        hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
+                    hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
+                    
+                    if hostPort == '':
+                        hostPort = DEFAULT_HOST
+                    split = self.findHeader(self.client_buffer, 'X-Split')
+                    if split != '':
+                        self.client.recv(BUFLEN)
+                    
+                    if hostPort != '':
+                        passwd = self.findHeader(self.client_buffer, 'X-Pass')
                         
-                        if hostPort == '':
-                            hostPort = DEFAULT_HOST
-                        split = self.findHeader(self.client_buffer, 'X-Split')
-                        if split != '':
-                            self.client.recv(BUFLEN)
-                        
-                        if hostPort != '':
-                            passwd = self.findHeader(self.client_buffer, 'X-Pass')
-                            
-                            if len(PASS) != 0 and passwd == PASS:
-                                self.method_CONNECT(hostPort)
-                            elif len(PASS) != 0 and passwd != PASS:
-                                self.client.send('HTTP/1.1 400 WrongPass!\r\n\r\n'.encode('utf-8'))
-                                break
-                            elif hostPort.startswith(IP):
-                                self.method_CONNECT(hostPort)
-                            else:
-                                self.client.send('HTTP/1.1 403 Forbidden!\r\n\r\n'.encode('utf-8'))
-                                break
-                            if self.method == 'CONNECT':
-                                break  # No more HTTP after tunnel
+                        if len(PASS) != 0 and passwd == PASS:
+                            self.method_CONNECT(hostPort)
+                        elif len(PASS) != 0 and passwd != PASS:
+                            self.client.send('HTTP/1.1 400 WrongPass!\r\n\r\n'.encode('utf-8'))
+                            break
+                        elif hostPort.startswith(IP):
+                            self.method_CONNECT(hostPort)
                         else:
-                            print('- No X-Real-Host!')
-                            self.client.send('HTTP/1.1 400 NoXRealHost!\r\n\r\n'.encode('utf-8'))
+                            self.client.send('HTTP/1.1 403 Forbidden!\r\n\r\n'.encode('utf-8'))
                             break
+                        if self.method == 'CONNECT':
+                            break  # No more HTTP after tunnel
+                    else:
+                        print('- No X-Real-Host!')
+                        self.client.send('HTTP/1.1 400 NoXRealHost!\r\n\r\n'.encode('utf-8'))
+                        break
 
-                        # Se não keep-alive, sai do loop após handling
-                        if not self.keep_alive:
-                            break
-                    except (ConnectionResetError, BrokenPipeError) as e:
-                        self.server.printLog(self.log + f' - Connection drop: {e}, retrying... ({retry_count + 1}/{MAX_RETRIES})')
-                        time.sleep(2 ** retry_count + random.random())
-                        retry_count += 1
-                        if self.method == 'CONNECT' and self.path:
-                            self.connect_target(self.path)  # Reconecta target
+                    # Se não keep-alive, sai do loop após handling
+                    if not self.keep_alive:
+                        break
+                except Exception as e:
+                    if 'timeout' in str(e).lower() or 'broken pipe' in str(e).lower():  # Recuperação suave em erros transitórios
+                        self.server.printLog(self.log + ' - transient error, retrying: ' + str(e))
+                        time.sleep(1)  # Pequeno delay antes de retry
                         continue
-                    except Exception as e:
-                        if 'timeout' in str(e).lower():
-                            self.server.printLog(self.log + ' - transient error, retrying: ' + str(e))
-                            time.sleep(1)
-                            continue
-                        else:
-                            raise
-                if retry_count >= MAX_RETRIES:
-                    break
+                    else:
+                        raise
         except Exception as e:
             self.log += ' - error: ' + str(e)
             self.server.printLog(self.log)
@@ -291,7 +260,6 @@ class ConnectionHandler(threading.Thread):
         return head[:aux]
 
     def connect_target(self, host):
-        self.path = host  # Salvar para reconexão
         i = host.find(':')
         if i != -1:
             port = int(host[i+1:])
@@ -305,13 +273,12 @@ class ConnectionHandler(threading.Thread):
         self.target = socket.socket(soc_family, soc_type, proto)
         self.targetClosed = False
         self.target.connect(address)
+        self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         # Configura TCP Keep-Alive no target socket
         self.target.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
         self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 30)
         self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
-        # Ativar TCP_NODELAY
-        self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     def method_CONNECT(self, path):
         self.method = 'CONNECT'
@@ -323,19 +290,14 @@ class ConnectionHandler(threading.Thread):
         self.doCONNECT()
 
     def doCONNECT(self):
-        try:
-            poller = select.epoll()  # Usar epoll para melhor scalability
-            poller.register(self.client.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
-            poller.register(self.target.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
-            error = False
-            while not error:
-                events = poller.poll(SELECT_TIMEOUT)
-                if not events:
-                    # Monitor de inatividade (sem pings, confie em keep-alives)
-                    if time.time() - self.last_activity > 30:
-                        self.last_activity = time.time()
-                    continue
-
+        error = False
+        poller = select.epoll()
+        poller.register(self.client.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
+        poller.register(self.target.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
+        retry_count = 0
+        while not error:
+            try:
+                events = poller.poll(-1)  # Block infinito até evento
                 for fd, flag in events:
                     sock = self.client if fd == self.client.fileno() else self.target
                     if flag & (select.EPOLLHUP | select.EPOLLERR):
@@ -346,15 +308,10 @@ class ConnectionHandler(threading.Thread):
                         data = sock.recv(BUFLEN)
                         if data:
                             dest = self.client if sock is self.target else self.target
-                            self.send_queue.append(data)  # Adicionar a queue para buffer
-                            while self.send_queue:
-                                queue_data = self.send_queue.popleft()
-                                sent = 0
-                                while sent < len(queue_data):
-                                    sent += dest.send(queue_data[sent:])
-                            self.last_activity = time.time()
+                            sent = 0
+                            while sent < len(data):
+                                sent += dest.send(data[sent:])
                         else:
-                            # EOF detected, shutdown the other side gracefully
                             dest = self.client if sock is self.target else self.target
                             try:
                                 dest.shutdown(socket.SHUT_WR)
@@ -363,28 +320,34 @@ class ConnectionHandler(threading.Thread):
                             self.server.printLog(self.log + ' - EOF from one side, shutting down the other')
                             error = True
                             break
-                    if flag & select.EPOLLOUT:
-                        # Handle output if needed (para flush queues)
-                        pass
-        finally:
-            poller.close()
+            except (ConnectionResetError, BrokenPipeError) as e:
+                if retry_count < 5:
+                    self.server.printLog(self.log + f' - Connection drop: {e}, retrying...')
+                    delay = (2 ** retry_count) + random.uniform(0, 1)
+                    time.sleep(delay)
+                    retry_count += 1
+                    self.connect_target(path)
+                    poller = select.epoll()
+                    poller.register(self.client.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
+                    poller.register(self.target.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
+                else:
+                    error = True
+            except Exception as e:
+                self.server.printLog(self.log + ' - loop error: ' + str(e))
+                error = True
 
 class ProxyManager:
     def __init__(self):
         self.config_manager = ConfigManager()
         
     def install_proxy(self):
-        """Instala o proxy como serviço do sistema"""
         try:
-            # Cria o script do proxy
-            logger.info("Instalando proxy...")
+            print("\033[1;33mInstalando proxy...\033[0m")
             
-            # Copia o script atual para /usr/local/bin
             current_script = os.path.abspath(__file__)
             os.system(f'sudo cp {current_script} {PROXY_SCRIPT}')
             os.system(f'sudo chmod +x {PROXY_SCRIPT}')
             
-            # Cria arquivo de serviço systemd
             service_content = f'''[Unit]
 Description=Proxy Multiflow Service
 After=network.target
@@ -409,23 +372,20 @@ WantedBy=multi-user.target
             self.config_manager.config['installed'] = True
             self.config_manager.save_config()
             
-            logger.info("Proxy instalado com sucesso!")
+            print("\033[1;32mProxy instalado com sucesso!\033[0m")
             return True
             
         except Exception as e:
-            logger.error(f"Erro ao instalar: {e}")
+            print(f"\033[1;31mErro ao instalar: {e}\033[0m")
             return False
     
     def uninstall_proxy(self):
-        """Remove o proxy do sistema"""
         try:
-            logger.info("Removendo proxy...")
+            print("\033[1;33mRemovendo proxy...\033[0m")
             
-            # Para o serviço
             os.system('sudo systemctl stop proxy-multiflow 2>/dev/null')
             os.system('sudo systemctl disable proxy-multiflow 2>/dev/null')
             
-            # Remove arquivos
             if os.path.exists(SERVICE_FILE):
                 os.system(f'sudo rm {SERVICE_FILE}')
             if os.path.exists(PROXY_SCRIPT):
@@ -437,33 +397,29 @@ WantedBy=multi-user.target
             self.config_manager.config['active'] = False
             self.config_manager.save_config()
             
-            logger.info("Proxy removido com sucesso!")
+            print("\033[1;32mProxy removido com sucesso!\033[0m")
             return True
             
         except Exception as e:
-            logger.error(f"Erro ao remover: {e}")
+            print(f"\033[1;31mErro ao remover: {e}\033[0m")
             return False
     
     def start_proxy(self):
-        """Inicia o serviço do proxy"""
         os.system('sudo systemctl start proxy-multiflow')
         time.sleep(2)
         return self.config_manager.is_active()
     
     def stop_proxy(self):
-        """Para o serviço do proxy"""
         os.system('sudo systemctl stop proxy-multiflow')
         time.sleep(2)
         return not self.config_manager.is_active()
     
     def restart_proxy(self):
-        """Reinicia o serviço do proxy"""
         os.system('sudo systemctl restart proxy-multiflow')
         time.sleep(2)
         return self.config_manager.is_active()
 
 def show_menu():
-    """Exibe o menu interativo"""
     manager = ProxyManager()
     
     while True:
@@ -472,7 +428,6 @@ def show_menu():
         print("\033[1;32m PROXY MULTIFLOW - MENU PRINCIPAL\033[0m")
         print("\033[0;34m" + "="*50 + "\033[0m")
         
-        # Status
         is_installed = manager.config_manager.is_installed()
         is_active = manager.config_manager.is_active()
         ports = manager.config_manager.get_ports()
@@ -596,7 +551,6 @@ def show_menu():
             input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
 
 def run_daemon():
-    """Executa o proxy em modo daemon"""
     config_manager = ConfigManager()
     servers = []
     
@@ -604,23 +558,20 @@ def run_daemon():
         server = Server(IP, port)
         server.start()
         servers.append(server)
-        logger.info(f"Proxy iniciado na porta {port}")
+        print(f"Proxy iniciado na porta {port}")
     
     try:
         while True:
             time.sleep(2)
     except KeyboardInterrupt:
-        logger.info('\nParando servidores...')
+        print('\nParando servidores...')
         for server in servers:
             server.close()
 
 def main():
-    """Função principal"""
     if '--daemon' in sys.argv:
-        # Modo daemon (executado pelo systemd)
         run_daemon()
     elif len(sys.argv) > 1 and sys.argv[1].isdigit():
-        # Modo standalone com porta específica
         print("\033[0;34m"*8 + "\033[1;32m PROXY SOCKS" + "\033[0;34m"*8 + "\n")
         print("\033[1;33mIP:\033[1;32m " + IP)
         print("\033[1;33mPORTA:\033[1;32m " + str(PORT) + "\n")
@@ -636,7 +587,6 @@ def main():
             print('\nParando...')
             server.close()
     else:
-        # Modo menu interativo
         show_menu()
 
 if __name__ == '__main__':
