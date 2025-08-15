@@ -10,7 +10,7 @@ import psutil
 import select
 
 IP = '0.0.0.0'
-PORT = 8080  # Porta alta para evitar permissões
+PORT = 80  # Porta alta para evitar permissões
 PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60
