@@ -100,7 +100,7 @@ $SUDO dpkg --configure -a
 log_info "A instalar dependências essenciais..."
 # REMOVIDO: build-essential, automake, autoconf, libtool, gcc, pois badvpn.c não é mais compilado.
 # REMOVIDO: python3-requests, pois não parece ser usado. Adicionado python3-psutil.
-$SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential
+$SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential openssh-server
 $SUDO apt-get autoremove -y
 $SUDO apt-get clean
 
@@ -165,6 +165,13 @@ if ! grep -q "^ClientAliveCountMax" "$SSHD_CONFIG"; then
     echo "ClientAliveCountMax 3" | $SUDO tee -a "$SSHD_CONFIG" > /dev/null
 else
     $SUDO sed -i 's/^ClientAliveCountMax.*/ClientAliveCountMax 3/' "$SSHD_CONFIG"
+fi
+
+# Verificar e adicionar TCPKeepAlive se não existir
+if ! grep -q "^TCPKeepAlive" "$SSHD_CONFIG"; then
+    echo "TCPKeepAlive yes" | $SUDO tee -a "$SSHD_CONFIG" > /dev/null
+else
+    $SUDO sed -i 's/^TCPKeepAlive.*/TCPKeepAlive yes/' "$SSHD_CONFIG"
 fi
 
 # Reiniciar o serviço SSH para aplicar as mudanças
