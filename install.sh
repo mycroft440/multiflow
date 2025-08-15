@@ -100,23 +100,9 @@ $SUDO dpkg --configure -a
 log_info "A instalar dependências essenciais..."
 # REMOVIDO: build-essential, automake, autoconf, libtool, gcc, pois badvpn.c não é mais compilado.
 # REMOVIDO: python3-requests, pois não parece ser usado. Adicionado python3-psutil.
-$SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential openssh-server
+$SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential
 $SUDO apt-get autoremove -y
 $SUDO apt-get clean
-
-# Configurações adicionais para estabilidade de rede (sysctl)
-log_info "A configurar parâmetros sysctl para melhorar a estabilidade das conexões TCP..."
-$SUDO sysctl -w net.core.somaxconn=1024
-$SUDO sysctl -w net.ipv4.tcp_keepalive_time=60
-$SUDO sysctl -w net.ipv4.tcp_keepalive_intvl=30
-$SUDO sysctl -w net.ipv4.tcp_keepalive_probes=5
-$SUDO sysctl -w net.ipv4.tcp_fin_timeout=30
-echo "net.core.somaxconn = 1024" | $SUDO tee -a /etc/sysctl.conf
-echo "net.ipv4.tcp_keepalive_time = 60" | $SUDO tee -a /etc/sysctl.conf
-echo "net.ipv4.tcp_keepalive_intvl = 30" | $SUDO tee -a /etc/sysctl.conf
-echo "net.ipv4.tcp_keepalive_probes = 5" | $SUDO tee -a /etc/sysctl.conf
-echo "net.ipv4.tcp_fin_timeout = 30" | $SUDO tee -a /etc/sysctl.conf
-$SUDO sysctl -p
 
 # 4. Clonar o Repositório
 log_info "A baixar o projeto Multiflow de $REPO_URL..."
@@ -226,10 +212,3 @@ if [ -t 0 ]; then
 else
     log_info "Instalação concluída. Para iniciar, execute \'multiflow\'."
 fi
-
-
-# Instalação do Dtunnel Proxy (se necessário, adicione dependências aqui)
-log_info "A verificar e instalar dependências para Dtunnel Proxy..."
-$SUDO apt-get install -y unzip curl
-# Nenhuma dependência específica adicionada por padrão, pois os binários geralmente são auto-suficientes.
-# Se houver erros de biblioteca, adicione-as aqui.
