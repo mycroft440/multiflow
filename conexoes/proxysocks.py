@@ -32,7 +32,7 @@ PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60  # Mantido para compatibilidade, mas não usado para fechamento rígido
 DEFAULT_HOST = '0.0.0.0:22'
-RESPONSE = "HTTP/1.1 200 Connection Established\r\n\r\n"
+SELECT_TIMEOUT = 10  # Aumentado para reduzir overhead em idle
 
 class ConfigManager:
     def __init__(self):
@@ -110,14 +110,13 @@ class Server(threading.Thread):
         self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.soc.settimeout(2)
         self.soc.bind((self.host, self.port))
-        self.soc.listen(128)
+        self.soc.listen(0)
         self.running = True
         try:
             while self.running:
                 try:
                     c, addr = self.soc.accept()
                     c.setblocking(1)
-                    c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 except socket.timeout:
                     continue
                 
@@ -130,7 +129,7 @@ class Server(threading.Thread):
             
     def printLog(self, log):
         self.logLock.acquire()
-        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {log}")
+        print(log)
         self.logLock.release()
     
     def addConn(self, conn):
@@ -273,7 +272,6 @@ class ConnectionHandler(threading.Thread):
         self.target = socket.socket(soc_family, soc_type, proto)
         self.targetClosed = False
         self.target.connect(address)
-        self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         # Configura TCP Keep-Alive no target socket
         self.target.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
@@ -284,57 +282,49 @@ class ConnectionHandler(threading.Thread):
         self.method = 'CONNECT'
         self.log += ' - CONNECT ' + path
         self.connect_target(path)
-        self.client.sendall(RESPONSE.encode('utf-8'))
+        date = time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())
+        response = f"HTTP/1.1 200 Connection Established\r\nServer: nginx/1.18.0 (Ubuntu)\r\nDate: {date}\r\nContent-Length: 0\r\n\r\n"
+        self.client.sendall(response.encode('utf-8'))
         self.client_buffer = ''
         self.server.printLog(self.log)
         self.doCONNECT()
 
     def doCONNECT(self):
+        socs = [self.client, self.target]
         error = False
-        poller = select.epoll()
-        poller.register(self.client.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
-        poller.register(self.target.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
         retry_count = 0
         while not error:
             try:
-                events = poller.poll(-1)  # Block infinito até evento
-                for fd, flag in events:
-                    sock = self.client if fd == self.client.fileno() else self.target
-                    if flag & (select.EPOLLHUP | select.EPOLLERR):
-                        error = True
-                        self.server.printLog(self.log + ' - detected HUP/ERR, closing softly')
-                        break
-                    if flag & select.EPOLLIN:
-                        data = sock.recv(BUFLEN)
+                (recv, _, err) = select.select(socs, [], socs, 3)
+                if err:
+                    error = True
+                if recv:
+                    for in_ in recv:
+                        data = in_.recv(BUFLEN)
                         if data:
-                            dest = self.client if sock is self.target else self.target
-                            sent = 0
-                            while sent < len(data):
-                                sent += dest.send(data[sent:])
+                            dest = self.client if in_ is self.target else self.target
+                            chunks = [data[i:i+random.randint(10, 50)] for i in range(0, len(data), random.randint(10, 50))]
+                            for chunk in chunks:
+                                time.sleep(random.uniform(0.01, 0.1))
+                                byte = dest.send(chunk)
                         else:
-                            dest = self.client if sock is self.target else self.target
-                            try:
-                                dest.shutdown(socket.SHUT_WR)
-                            except:
-                                pass
-                            self.server.printLog(self.log + ' - EOF from one side, shutting down the other')
-                            error = True
                             break
+                else:
+                    continue  # No data, continue loop
             except (ConnectionResetError, BrokenPipeError) as e:
                 if retry_count < 5:
                     self.server.printLog(self.log + f' - Connection drop: {e}, retrying...')
                     delay = (2 ** retry_count) + random.uniform(0, 1)
                     time.sleep(delay)
                     retry_count += 1
-                    self.connect_target(path)
-                    poller = select.epoll()
-                    poller.register(self.client.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
-                    poller.register(self.target.fileno(), select.EPOLLIN | select.EPOLLOUT | select.EPOLLHUP | select.EPOLLERR)
+                    self.connect_target(path)  # Reconecta
                 else:
                     error = True
             except Exception as e:
                 self.server.printLog(self.log + ' - loop error: ' + str(e))
                 error = True
+            if error:
+                break
 
 class ProxyManager:
     def __init__(self):
