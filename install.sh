@@ -149,6 +149,28 @@ else
     log_warn "Script de SWAP não encontrado."
 fi
 
+# Configuração de Keep-Alives no SSHD
+SSHD_CONFIG="/etc/ssh/sshd_config"
+log_info "A configurar keep-alives no sshd_config para manter conexões SSH ativas..."
+
+# Verificar e adicionar ClientAliveInterval se não existir
+if ! grep -q "^ClientAliveInterval" "$SSHD_CONFIG"; then
+    echo "ClientAliveInterval 60" | $SUDO tee -a "$SSHD_CONFIG" > /dev/null
+else
+    $SUDO sed -i 's/^ClientAliveInterval.*/ClientAliveInterval 60/' "$SSHD_CONFIG"
+fi
+
+# Verificar e adicionar ClientAliveCountMax se não existir
+if ! grep -q "^ClientAliveCountMax" "$SSHD_CONFIG"; then
+    echo "ClientAliveCountMax 3" | $SUDO tee -a "$SSHD_CONFIG" > /dev/null
+else
+    $SUDO sed -i 's/^ClientAliveCountMax.*/ClientAliveCountMax 3/' "$SSHD_CONFIG"
+fi
+
+# Reiniciar o serviço SSH para aplicar as mudanças
+$SUDO systemctl restart ssh || $SUDO service ssh restart || log_warn "Não foi possível reiniciar o serviço SSH."
+log_info "Configuração de keep-alives no SSH concluída."
+
 # 9. Criação de Links Simbólicos
 log_info "A criar links simbólicos para facilitar a execução..."
 $SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/multiflow
