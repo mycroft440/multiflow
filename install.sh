@@ -104,6 +104,20 @@ $SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release buil
 $SUDO apt-get autoremove -y
 $SUDO apt-get clean
 
+# Configurações adicionais para estabilidade de rede (sysctl)
+log_info "A configurar parâmetros sysctl para melhorar a estabilidade das conexões TCP..."
+$SUDO sysctl -w net.core.somaxconn=1024
+$SUDO sysctl -w net.ipv4.tcp_keepalive_time=60
+$SUDO sysctl -w net.ipv4.tcp_keepalive_intvl=30
+$SUDO sysctl -w net.ipv4.tcp_keepalive_probes=5
+$SUDO sysctl -w net.ipv4.tcp_fin_timeout=30
+echo "net.core.somaxconn = 1024" | $SUDO tee -a /etc/sysctl.conf
+echo "net.ipv4.tcp_keepalive_time = 60" | $SUDO tee -a /etc/sysctl.conf
+echo "net.ipv4.tcp_keepalive_intvl = 30" | $SUDO tee -a /etc/sysctl.conf
+echo "net.ipv4.tcp_keepalive_probes = 5" | $SUDO tee -a /etc/sysctl.conf
+echo "net.ipv4.tcp_fin_timeout = 30" | $SUDO tee -a /etc/sysctl.conf
+$SUDO sysctl -p
+
 # 4. Clonar o Repositório
 log_info "A baixar o projeto Multiflow de $REPO_URL..."
 git clone --depth 1 "$REPO_URL" "$TMP_DIR"
