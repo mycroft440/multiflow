@@ -26,12 +26,15 @@ except:
    PORT = 80
 PASS = ''
 BUFLEN = 8196 * 8
-TIMEOUT = 60
+TIMEOUT = 60  # Mantido para compatibilidade, mas não usado para fechamento rígido
 MSG = 'Connection Established'
 COR = '<font color="null">'
 FTAG = '</font>'
 DEFAULT_HOST = '0.0.0.0:22'
 RESPONSE = "HTTP/1.1 200 " + COR + MSG + FTAG + "\r\n\r\n"
+HEARTBEAT_INTERVAL = 30  # Segundos para heartbeat se idle
+SELECT_TIMEOUT = 10  # Aumentado para reduzir overhead em idle
+
 class ConfigManager:
     def __init__(self):
         self.config_file = CONFIG_FILE
@@ -113,6 +116,11 @@ class Server(threading.Thread):
                 try:
                     c, addr = self.soc.accept()
                     c.setblocking(1)
+                    # Configura TCP Keep-Alive no client socket
+                    c.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+                    c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 30)
+                    c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
                 except socket.timeout:
                     continue
                
@@ -162,6 +170,9 @@ class ConnectionHandler(threading.Thread):
         self.client_buffer = ''
         self.server = server
         self.log = 'Conexao: ' + str(addr)
+        self.keep_alive = False  # Flag para conexões persistentes
+        self.last_activity = time.time()  # Para heartbeats
+
     def close(self):
         try:
             if not self.clientClosed:
@@ -180,39 +191,60 @@ class ConnectionHandler(threading.Thread):
             pass
         finally:
             self.targetClosed = True
+
     def run(self):
-        try:
-            self.client_buffer = self.client.recv(BUFLEN).decode('utf-8')
-       
-            hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
-           
-            if hostPort == '':
-                hostPort = DEFAULT_HOST
-            split = self.findHeader(self.client_buffer, 'X-Split')
-            if split != '':
-                self.client.recv(BUFLEN)
-           
-            if hostPort != '':
-                passwd = self.findHeader(self.client_buffer, 'X-Pass')
+        while True:  # Loop para suportar conexões persistentes
+            try:
+                self.client_buffer = self.client.recv(BUFLEN).decode('utf-8')
+                if not self.client_buffer:
+                    break  # Fecha se recv vazio (conexão fechada)
+
+                # Verifica se é keep-alive para persistência
+                if 'Connection: keep-alive' in self.client_buffer:
+                    self.keep_alive = True
+
+                hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
                
-                if len(PASS) != 0 and passwd == PASS:
-                    self.method_CONNECT(hostPort)
-                elif len(PASS) != 0 and passwd != PASS:
-                    self.client.send('HTTP/1.1 400 WrongPass!\r\n\r\n'.encode('utf-8'))
-                elif hostPort.startswith(IP):
-                    self.method_CONNECT(hostPort)
+                if hostPort == '':
+                    hostPort = DEFAULT_HOST
+                split = self.findHeader(self.client_buffer, 'X-Split')
+                if split != '':
+                    self.client.recv(BUFLEN)
+               
+                if hostPort != '':
+                    passwd = self.findHeader(self.client_buffer, 'X-Pass')
+                   
+                    if len(PASS) != 0 and passwd == PASS:
+                        self.method_CONNECT(hostPort)
+                    elif len(PASS) != 0 and passwd != PASS:
+                        self.client.send('HTTP/1.1 400 WrongPass!\r\n\r\n'.encode('utf-8'))
+                        break
+                    elif hostPort.startswith(IP):
+                        self.method_CONNECT(hostPort)
+                    else:
+                        self.client.send('HTTP/1.1 403 Forbidden!\r\n\r\n'.encode('utf-8'))
+                        break
                 else:
-                    self.client.send('HTTP/1.1 403 Forbidden!\r\n\r\n'.encode('utf-8'))
-            else:
-                print('- No X-Real-Host!')
-                self.client.send('HTTP/1.1 400 NoXRealHost!\r\n\r\n'.encode('utf-8'))
-        except Exception as e:
-            self.log += ' - error: ' + str(e)
-            self.server.printLog(self.log)
-            pass
-        finally:
-            self.close()
-            self.server.removeConn(self)
+                    print('- No X-Real-Host!')
+                    self.client.send('HTTP/1.1 400 NoXRealHost!\r\n\r\n'.encode('utf-8'))
+                    break
+
+                # Se não keep-alive, sai do loop após handling
+                if not self.keep_alive:
+                    break
+
+            except Exception as e:
+                if 'timeout' in str(e).lower() or 'broken pipe' in str(e).lower():  # Recuperação suave em erros transitórios
+                    self.server.printLog(self.log + ' - transient error, retrying: ' + str(e))
+                    time.sleep(1)  # Pequeno delay antes de retry
+                    continue
+                else:
+                    self.log += ' - error: ' + str(e)
+                    self.server.printLog(self.log)
+                    break
+        self.close()
+        self.server.removeConn(self)
+
     def findHeader(self, head, header):
         aux = head.find(header + ': ')
    
@@ -224,6 +256,7 @@ class ConnectionHandler(threading.Thread):
         if aux == -1:
             return ''
         return head[:aux]
+
     def connect_target(self, host):
         i = host.find(':')
         if i != -1:
@@ -238,6 +271,12 @@ class ConnectionHandler(threading.Thread):
         self.target = socket.socket(soc_family, soc_type, proto)
         self.targetClosed = False
         self.target.connect(address)
+        # Configura TCP Keep-Alive no target socket
+        self.target.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+        self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 30)
+        self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
+
     def method_CONNECT(self, path):
         self.method = 'CONNECT'
         self.log += ' - CONNECT ' + path
@@ -246,37 +285,50 @@ class ConnectionHandler(threading.Thread):
         self.client_buffer = ''
         self.server.printLog(self.log)
         self.doCONNECT()
-                   
+
     def doCONNECT(self):
         socs = [self.client, self.target]
-        count = 0
         error = False
-        while True:
-            count += 1
-            (recv, _, err) = select.select(socs, [], socs, 3)
-            if err:
-                error = True
-            if recv:
-                for in_ in recv:
-                    try:
-                        data = in_.recv(BUFLEN)
+        poller = select.poll()
+        poller.register(self.client, select.POLLIN | select.POLLHUP | select.POLLERR)
+        poller.register(self.target, select.POLLIN | select.POLLHUP | select.POLLERR)
+        self.last_activity = time.time()
+
+        while not error:
+            try:
+                events = poller.poll(SELECT_TIMEOUT * 1000)  # Em ms
+                if not events:
+                    # Sem eventos: verifica heartbeat se idle
+                    if time.time() - self.last_activity > HEARTBEAT_INTERVAL:
+                        # Envia heartbeat (byte nulo para manter vivo sem interferir)
+                        self.target.send(b'\x00')
+                        self.client.send(b'\x00')
+                        self.last_activity = time.time()
+                    continue
+
+                for fd, flag in events:
+                    sock = self.client if fd == self.client.fileno() else self.target
+                    if flag & (select.POLLHUP | select.POLLERR):
+                        error = True
+                        self.server.printLog(self.log + ' - detected HUP/ERR, closing softly')
+                        break
+                    if flag & select.POLLIN:
+                        data = sock.recv(BUFLEN)
                         if data:
-                            if in_ is self.target:
+                            if sock is self.target:
                                 self.client.send(data)
                             else:
-                                while data:
-                                    byte = self.target.send(data)
-                                    data = data[byte:]
-                            count = 0
+                                sent = 0
+                                while sent < len(data):
+                                    sent += self.target.send(data[sent:])
+                            self.last_activity = time.time()  # Reset atividade
                         else:
+                            error = True
                             break
-                    except:
-                        error = True
-                        break
-            if count == TIMEOUT:
+            except Exception as e:
+                self.server.printLog(self.log + ' - loop error: ' + str(e))
                 error = True
-            if error:
-                break
+
 class ProxyManager:
     def __init__(self):
         self.config_manager = ConfigManager()
