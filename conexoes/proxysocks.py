@@ -4,13 +4,13 @@ import socket
 import threading
 import sys
 import time
+import os
+import subprocess
+import psutil
 from concurrent.futures import ThreadPoolExecutor
 
 IP = '0.0.0.0'
-try:
-    PORT = int(sys.argv[1])
-except IndexError:
-    PORT = 8080  # Porta alta para evitar permissões
+PORT = 8080  # Porta alta para evitar permissões
 PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60
@@ -19,6 +19,8 @@ COR = '<font color="null">'
 FTAG = '</font>'
 DEFAULT_HOST = '0.0.0.0:22'
 RESPONSE = ("HTTP/1.1 200 " + str(COR) + str(MSG) + str(FTAG) + "\r\nConnection: keep-alive\r\n\r\n").encode()
+
+STATE_FILE = '/tmp/proxysocks_state.txt'
 
 class Server(threading.Thread):
     def __init__(self, host, port):
@@ -221,9 +223,9 @@ class ConnectionHandler(threading.Thread):
                 print(f"Timeout or error in relay: {e}")
 
 def main(host=IP, port=PORT):
-    print("\033[0;34m━"*8 + "\033[1;32m PROXY MULTIFLOW" + "\033[0;34m━"*8 + "\n")
+    print("\033[0;34m━"*8 + "\033[1;32m━ PROXY MULTIFLOW" + "\033[0;34m━"*8 + "\n")
     print("\033[1;33mIP:\033[1;32m " + IP)
-    print("\033[1;33mPORTA:\033[1;32m " + str(PORT) + "\n")
+    print("\033[1;33mPORTA:\033[1;32m " + str(port) + "\n")
     print("\033[0;34m━"*10 + "\033[1;32m MULTIFLOW" + "\033[0;34m━\033[1;37m"*11 + "\n")
     server = Server(host, port)
     server.start()
@@ -236,5 +238,94 @@ def main(host=IP, port=PORT):
             server.close()
             break
 
+def install_proxysocks():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            pid, port = f.read().strip().split(':')
+        if psutil.pid_exists(int(pid)):
+            print(f"Já instalado na porta {port}")
+            return
+
+    port_input = input("Informe a porta para o ProxySocks: ")
+    try:
+        port = int(port_input)
+    except ValueError:
+        print("Porta inválida")
+        return
+
+    # Abrir porta no firewall (se ufw estiver instalado)
+    subprocess.run(['sudo', 'ufw', 'allow', str(port)], check=False)
+
+    # Iniciar o servidor em background
+    proc = subprocess.Popen([sys.executable, __file__, str(port)])
+
+    # Salvar state
+    with open(STATE_FILE, 'w') as f:
+        f.write(f"{proc.pid}:{port}")
+
+    print(f"ProxySocks instalado e iniciado na porta {port}")
+
+def open_port():
+    port_input = input("Informe a porta para abrir no firewall: ")
+    subprocess.run(['sudo', 'ufw', 'allow', port_input], check=False)
+    print(f"Porta {port_input} aberta no firewall (se ufw estiver instalado)")
+
+def remove_port():
+    port_input = input("Informe a porta para remover do firewall: ")
+    subprocess.run(['sudo', 'ufw', 'delete', 'allow', port_input], check=False)
+    print(f"Porta {port_input} removida do firewall (se ufw estiver instalado)")
+
+def uninstall_proxysocks():
+    if not os.path.exists(STATE_FILE):
+        print("ProxySocks não está instalado")
+        return
+
+    with open(STATE_FILE, 'r') as f:
+        pid, port = f.read().strip().split(':')
+
+    pid = int(pid)
+    if psutil.pid_exists(pid):
+        process = psutil.Process(pid)
+        process.terminate()
+        time.sleep(1)
+        if psutil.pid_exists(pid):
+            process.kill()
+
+    # Remover porta do firewall
+    subprocess.run(['sudo', 'ufw', 'delete', 'allow', port], check=False)
+
+    os.remove(STATE_FILE)
+    print("ProxySocks desinstalado")
+
+def menu():
+    while True:
+        print("\nMenu ProxySocks")
+        print("1. Instalar ProxySocks")
+        print("2. Abrir porta")
+        print("3. Remover porta")
+        print("4. Desinstalar ProxySocks")
+        print("0. Sair")
+        choice = input("Escolha uma opção: ").strip()
+
+        if choice == '1':
+            install_proxysocks()
+        elif choice == '2':
+            open_port()
+        elif choice == '3':
+            remove_port()
+        elif choice == '4':
+            uninstall_proxysocks()
+        elif choice == '0':
+            break
+        else:
+            print("Opção inválida")
+
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) > 1:
+        try:
+            PORT = int(sys.argv[1])
+            main(port=PORT)
+        except ValueError:
+            print("Porta inválida")
+    else:
+        menu()
