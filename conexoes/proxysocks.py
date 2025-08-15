@@ -32,7 +32,6 @@ PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60  # Mantido para compatibilidade, mas não usado para fechamento rígido
 DEFAULT_HOST = '0.0.0.0:22'
-SELECT_TIMEOUT = 10  # Aumentado para reduzir overhead em idle
 
 class ConfigManager:
     def __init__(self):
@@ -292,37 +291,25 @@ class ConnectionHandler(threading.Thread):
     def doCONNECT(self):
         socs = [self.client, self.target]
         error = False
-        retry_count = 0
-        while not error:
-            try:
-                (recv, _, err) = select.select(socs, [], socs, 3)
-                if err:
-                    error = True
-                if recv:
-                    for in_ in recv:
+        while True:
+            (recv, _, err) = select.select(socs, [], socs, -1)  # Timeout infinito para low CPU
+            if err:
+                error = True
+            if recv:
+                for in_ in recv:
+                    try:
                         data = in_.recv(BUFLEN)
                         if data:
                             dest = self.client if in_ is self.target else self.target
-                            chunks = [data[i:i+random.randint(10, 50)] for i in range(0, len(data), random.randint(10, 50))]
-                            for chunk in chunks:
-                                time.sleep(random.uniform(0.01, 0.1))
+                            for i in range(0, len(data), random.randint(10, 50)):  # Fragmenta randômico
+                                chunk = data[i:i + random.randint(10, 50)]
                                 byte = dest.send(chunk)
+                                time.sleep(random.uniform(0.01, 0.1))  # Delay randômico
                         else:
                             break
-                else:
-                    continue  # No data, continue loop
-            except (ConnectionResetError, BrokenPipeError) as e:
-                if retry_count < 5:
-                    self.server.printLog(self.log + f' - Connection drop: {e}, retrying...')
-                    delay = (2 ** retry_count) + random.uniform(0, 1)
-                    time.sleep(delay)
-                    retry_count += 1
-                    self.connect_target(path)  # Reconecta
-                else:
-                    error = True
-            except Exception as e:
-                self.server.printLog(self.log + ' - loop error: ' + str(e))
-                error = True
+                    except:
+                        error = True
+                        break
             if error:
                 break
 
@@ -331,6 +318,7 @@ class ProxyManager:
         self.config_manager = ConfigManager()
         
     def install_proxy(self):
+        """Instala o proxy como serviço do sistema"""
         try:
             print("\033[1;33mInstalando proxy...\033[0m")
             
@@ -370,6 +358,7 @@ WantedBy=multi-user.target
             return False
     
     def uninstall_proxy(self):
+        """Remove o proxy do sistema"""
         try:
             print("\033[1;33mRemovendo proxy...\033[0m")
             
