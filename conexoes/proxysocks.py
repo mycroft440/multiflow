@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # encoding: utf-8
-import socket, threading, select, signal, sys, time
+import socket, threading, select, sys, time
 import os
 import json
 import subprocess
@@ -300,7 +300,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/usr/local/bin
-ExecStart=/usr/bin/python {PROXY_SCRIPT} --daemon
+ExecStart=/usr/bin/python3 {PROXY_SCRIPT} --daemon
 Restart=always
 RestartSec=10
 [Install]
