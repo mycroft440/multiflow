@@ -31,6 +31,10 @@ DEFAULT_CONFIG = {
         'enabled': False,
         'type': 'scramblesuit',
         'shared_secret': ''  # Chave compartilhada para ofuscação (deve ser a mesma no client)
+    },
+    'mimic_protocol': {
+        'enabled': False,
+        'type': 'dns'  # Pode ser 'dns' ou 'http2'; expanda para mais
     }
 }
 
@@ -193,6 +197,9 @@ class ConnectionHandler(threading.Thread):
         self.shared_secret = ConfigManager().config.get('obfuscation', {}).get('shared_secret', '')
         self.send_count = 0  # Contador para chave rotativa
         self.recv_count = 0
+        self.mimic_enabled = ConfigManager().config.get('mimic_protocol', {}).get('enabled', False)
+        self.mimic_type = ConfigManager().config.get('mimic_protocol', {}).get('type', 'dns')
+        self.mimic_sent = False  # Flag para enviar mimic prefix apenas uma vez
 
     def close(self):
         try:
@@ -307,6 +314,16 @@ class ConnectionHandler(threading.Thread):
             self.recv_count += 1
         return obfuscated
 
+    def mimic_prefix(self):
+        """Gera prefixo para imitação de protocolo"""
+        if self.mimic_type == 'dns':
+            # Simples DNS query header para google.com A record
+            return b'\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01'
+        elif self.mimic_type == 'http2':
+            # HTTP/2 magic prefix
+            return b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n'
+        return b''
+
     def method_CONNECT(self, path):
         self.method = 'CONNECT'
         self.log += ' - CONNECT ' + path
@@ -333,12 +350,17 @@ class ConnectionHandler(threading.Thread):
                             # Desofuscar dados recebidos
                             data = self.obfuscate_data(data, is_send=False)
                             if in_ is self.target:
-                                # Ofuscar antes de enviar para client
                                 obfuscated_data = self.obfuscate_data(data, is_send=True)
+                                # Adicionar mimic prefix se ativado e não enviado ainda
+                                if self.mimic_enabled and not self.mimic_sent:
+                                    obfuscated_data = self.mimic_prefix() + obfuscated_data
+                                    self.mimic_sent = True
                                 self.client.sendall(obfuscated_data)
                             else:
-                                # Ofuscar antes de enviar para target
                                 obfuscated_data = self.obfuscate_data(data, is_send=True)
+                                if self.mimic_enabled and not self.mimic_sent:
+                                    obfuscated_data = self.mimic_prefix() + obfuscated_data
+                                    self.mimic_sent = True
                                 self.target.sendall(obfuscated_data)
                             count = 0
                         else:
