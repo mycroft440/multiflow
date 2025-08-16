@@ -462,6 +462,7 @@ def build_connections_frame(status_msg=""):
     s.append("\n")
     s.append(menu_option("1", "Openvpn", Icons.LOCK, MC.GREEN_GRADIENT))
     s.append(menu_option("2", "ProxySocks", Icons.UNLOCK, MC.PURPLE_GRADIENT))
+    s.append(menu_option("3", "MultiFlow Proxy", Icons.KEY, MC.BLUE_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -553,6 +554,17 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "ProxySocks: operação concluída."
+        elif choice == "3":
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                multiflowproxy_path = os.path.join(root, 'conexoes', 'multiflowproxy.py')
+                subprocess.run([sys.executable, multiflowproxy_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar MultiFlow Proxy: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "MultiFlow Proxy: operação concluída."
         elif choice == "0":
             return
         else:
