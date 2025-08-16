@@ -10,6 +10,7 @@ import json
 import subprocess
 import signal
 import errno
+import hashlib
 from os import system
 from concurrent.futures import ThreadPoolExecutor
 
@@ -25,7 +26,12 @@ DEFAULT_CONFIG = {
     'ports': [80],
     'ip': '0.0.0.0',
     'password': '',
-    'default_host': '0.0.0.0:22'
+    'default_host': '0.0.0.0:22',
+    'obfuscation': {
+        'enabled': False,
+        'type': 'scramblesuit',
+        'shared_secret': ''  # Chave compartilhada para ofuscação (deve ser a mesma no client)
+    }
 }
 
 # Conexão
@@ -183,6 +189,10 @@ class ConnectionHandler(threading.Thread):
         self.server = server
         self.log = 'Conexao: ' + str(addr)
         self.method = None  # Adicionado para compatibilidade
+        self.obfuscation_enabled = ConfigManager().config.get('obfuscation', {}).get('enabled', False)
+        self.shared_secret = ConfigManager().config.get('obfuscation', {}).get('shared_secret', '')
+        self.send_count = 0  # Contador para chave rotativa
+        self.recv_count = 0
 
     def close(self):
         try:
@@ -284,6 +294,19 @@ class ConnectionHandler(threading.Thread):
             raise
         self.targetClosed = False
 
+    def obfuscate_data(self, data, is_send=True):
+        """Ofuscação inspirada em ScrambleSuit: XOR com chave rotativa baseada no shared_secret"""
+        if not self.obfuscation_enabled or not self.shared_secret:
+            return data
+        count = self.send_count if is_send else self.recv_count
+        key = hashlib.sha256(self.shared_secret.encode() + str(count).encode()).digest()
+        obfuscated = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+        if is_send:
+            self.send_count += 1
+        else:
+            self.recv_count += 1
+        return obfuscated
+
     def method_CONNECT(self, path):
         self.method = 'CONNECT'
         self.log += ' - CONNECT ' + path
@@ -307,10 +330,16 @@ class ConnectionHandler(threading.Thread):
                     try:
                         data = in_.recv(BUFLEN)
                         if data:
+                            # Desofuscar dados recebidos
+                            data = self.obfuscate_data(data, is_send=False)
                             if in_ is self.target:
-                                self.client.sendall(data)  # Usar sendall para otimização
+                                # Ofuscar antes de enviar para client
+                                obfuscated_data = self.obfuscate_data(data, is_send=True)
+                                self.client.sendall(obfuscated_data)
                             else:
-                                self.target.sendall(data)  # Usar sendall para otimização
+                                # Ofuscar antes de enviar para target
+                                obfuscated_data = self.obfuscate_data(data, is_send=True)
+                                self.target.sendall(obfuscated_data)
                             count = 0
                         else:
                             error = True
