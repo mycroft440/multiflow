@@ -29,7 +29,7 @@ DEFAULT_CONFIG = {
     'default_host': '0.0.0.0:22',
     'traffic_shaping': {
         'enabled': False,
-        'max_padding': 0,  # Alterado para 0 para evitar corruption
+        'max_padding': 32,  # Reintroduzido para traffic shaping expandido
         'max_delay': 0.001  # Máximo delay em segundos (ex.: 1ms)
     }
 }
@@ -44,7 +44,10 @@ PASS = ''
 BUFLEN = 8196 * 8
 TIMEOUT = 60  # Mantido, mas não usado para fechamento forçado
 DEFAULT_HOST = '0.0.0.0:22'
-RESPONSE = "HTTP/1.1 200 Connection Established\r\nConnection: keep-alive\r\n\r\n"  # Adicionado keep-alive header
+RESPONSE = "HTTP/1.1 200 Connection Established\r\n"
+RESPONSE += "Server: nginx/1.18.0\r\n"  # Mimic servidor web real
+RESPONSE += "Content-Type: text/html; charset=UTF-8\r\n"
+RESPONSE += "Connection: keep-alive\r\n\r\n"
 
 class ConfigManager:
     def __init__(self):
@@ -196,7 +199,7 @@ class ConnectionHandler(threading.Thread):
         self.log = 'Conexao: ' + str(addr)
         self.method = None  # Adicionado para compatibilidade
         self.shaping_enabled = ConfigManager().config.get('traffic_shaping', {}).get('enabled', False)
-        self.max_padding = ConfigManager().config.get('traffic_shaping', {}).get('max_padding', 0)
+        self.max_padding = ConfigManager().config.get('traffic_shaping', {}).get('max_padding', 32)
         self.max_delay = ConfigManager().config.get('traffic_shaping', {}).get('max_delay', 0.001)
         self.handshake_done = False  # Flag para pular ofuscações durante handshake
 
@@ -224,6 +227,18 @@ class ConnectionHandler(threading.Thread):
             self.client_buffer = self.client.recv(BUFLEN).decode('utf-8')
             if not self.client_buffer:
                 raise Exception("No buffer")
+
+            # Simular servidor web real: Responder a requests não-CONNECT com fake 404
+            if self.client_buffer.startswith('GET') or self.client_buffer.startswith('POST') or self.client_buffer.startswith('HEAD'):
+                fake_html = "<html><body>404 Not Found - Site em manutenção</body></html>"
+                fake_response = "HTTP/1.1 404 Not Found\r\n"
+                fake_response += "Server: nginx/1.18.0\r\n"
+                fake_response += f"Content-Length: {len(fake_html)}\r\n"
+                fake_response += "Content-Type: text/html; charset=UTF-8\r\n\r\n"
+                fake_response += fake_html
+                self.client.sendall(fake_response.encode('utf-8'))
+                self.close()
+                return
 
             hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
             
@@ -301,11 +316,19 @@ class ConnectionHandler(threading.Thread):
         self.targetClosed = False
 
     def apply_shaping(self, data):
-        """Aplica traffic shaping: apenas delay, sem padding para evitar corruption"""
+        """Aplica traffic shaping expandido: delay, padding randômico e bursting"""
         if self.shaping_enabled:
-            # Adicionar delay randômico (0 a max_delay segundos)
+            # Adicionar delay randômico
             delay = random.uniform(0, self.max_delay)
             time.sleep(delay)
+            
+            # Adicionar padding randômico (bytes aleatórios no final)
+            padding_size = random.randint(0, self.max_padding)
+            data += os.urandom(padding_size)
+            
+            # Bursting: Com probabilidade, adicionar delay extra para simular acumulação
+            if random.random() < 0.2:  # 20% chance de burst
+                time.sleep(random.uniform(0.01, 0.05))  # Delay extra para bursting
         return data
 
     def method_CONNECT(self, path):
@@ -332,16 +355,10 @@ class ConnectionHandler(threading.Thread):
                         data = in_.recv(BUFLEN)
                         if data:
                             if in_ is self.target:
-                                shaped_data = data
-                                # Aplicar traffic shaping se handshake done
-                                if self.handshake_done:
-                                    shaped_data = self.apply_shaping(shaped_data)
+                                shaped_data = self.apply_shaping(data) if self.handshake_done else data
                                 self.client.sendall(shaped_data)
                             else:
-                                shaped_data = data
-                                # Aplicar traffic shaping se handshake done
-                                if self.handshake_done:
-                                    shaped_data = self.apply_shaping(shaped_data)
+                                shaped_data = self.apply_shaping(data) if self.handshake_done else data
                                 self.target.sendall(shaped_data)
                             count = 0
                             self.handshake_done = True  # Setar após primeiro recv/send
