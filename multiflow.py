@@ -329,7 +329,7 @@ def footer_line(status_msg=""):
     cols, _ = TerminalManager.size()
     width = max(60, min(cols - 2, 100))
     bar = f"\n{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
-    status = f"{MC.GRAY}MultiFlow │ github.com/seu-repo{MC.RESET}"
+    status = f"{MC.GRAY}MultiFlow{MC.RESET}"
     if status_msg:
         status += f"  {MC.YELLOW_GRADIENT}{status_msg}{MC.RESET}"
     return bar + status + "\n" + f"{MC.DARK_GRAY}{'─' * width}{MC.RESET}\n"
@@ -407,10 +407,10 @@ def system_panel_box():
     services = get_active_services()
 
     content = [
-        f"{MC.CYAN_LIGHT}{Icons.SYSTEM} Sistema:{MC.RESET} {MC.WHITE}{os_name}{MC.RESET}",
-        f"{MC.CYAN_LIGHT}{Icons.CLOCK} Uptime:{MC.RESET} {MC.WHITE}{uptime}{MC.RESET}",
-        f"{MC.CYAN_LIGHT}{Icons.RAM} RAM:{MC.RESET} {ram_bar}",
-        f"{MC.CYAN_LIGHT}{Icons.CPU} CPU:{MC.RESET} {cpu_bar}",
+        f"{MC.CYAN_LIGHT}Sistema:{MC.RESET} {MC.WHITE}{os_name}{MC.RESET}",
+        f"{MC.CYAN_LIGHT}Uptime:{MC.RESET} {MC.WHITE}{uptime}{MC.RESET}",
+        f"{MC.CYAN_LIGHT}RAM:{MC.RESET} {ram_bar}",
+        f"{MC.CYAN_LIGHT}CPU:{MC.RESET} {cpu_bar}",
     ]
     if services:
         line1 = f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} " + " │ ".join(services[:4])
@@ -420,7 +420,7 @@ def system_panel_box():
     else:
         content.append(f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} {MC.GRAY}Nenhum serviço ativo{MC.RESET}")
 
-    content.append(f"{MC.CYAN_LIGHT}📅 Data/Hora:{MC.RESET} {MC.WHITE}{now}{MC.RESET}")
+    content.append(f"{MC.CYAN_LIGHT}Data/Hora:{MC.RESET} {MC.WHITE}{now}{MC.RESET}")
     return modern_box("PAINEL DO SISTEMA", content, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
 
 def welcome_line():
@@ -442,14 +442,14 @@ def build_main_frame(status_msg=""):
     s.append(welcome_line())
     s.append(modern_box("MENU PRINCIPAL", [], Icons.DIAMOND, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
     s.append("\n")
-    s.append(menu_option("1", "Gerenciar Usuários SSH", Icons.USERS, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "Gerenciar Conexões", Icons.NETWORK, MC.CYAN_GRADIENT))
-    s.append(menu_option("3", "BadVPN", Icons.SERVER, MC.PURPLE_GRADIENT))
-    s.append(menu_option("4", "Ferramentas", Icons.TOOLS, MC.ORANGE_GRADIENT))
-    s.append(menu_option("5", "Atualizar Multiflow", Icons.UPDATE, MC.YELLOW_GRADIENT, badge="v2"))
-    s.append(menu_option("6", "Servidor de Download", Icons.DOWNLOAD, MC.PINK_GRADIENT))
+    s.append(menu_option("1", "Gerenciar Usuários SSH", "", MC.GREEN_DARK))
+    s.append(menu_option("2", "Gerenciar Conexões", "", MC.GREEN_DARK))
+    s.append(menu_option("3", "BadVPN", "", MC.GREEN_DARK))
+    s.append(menu_option("4", "Ferramentas", "", MC.GREEN_DARK))
+    s.append(menu_option("5", "Atualizar Multiflow", "", MC.YELLOW_LIGHT, badge="v2"))
+    s.append(menu_option("6", "Servidor de Download", "", MC.GREEN_DARK))
     s.append("\n")
-    s.append(menu_option("0", "Sair", Icons.EXIT, MC.RED_GRADIENT))
+    s.append(menu_option("0", "Sair", "", MC.RED_DARK))
     s.append(footer_line(status_msg))
     return "".join(s)
 
