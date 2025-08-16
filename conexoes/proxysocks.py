@@ -33,13 +33,13 @@ DEFAULT_CONFIG = {
         'type': 'scramblesuit',
         'shared_secret': ''  # Chave compartilhada para ofuscação (deve ser a mesma no client)
     },
-    'mimic_protocol': {
+    'pt_protocol': {
         'enabled': False,
-        'type': 'dns'  # Pode ser 'dns' ou 'http2'; expanda para mais
+        'type': 'obfs4'  # Substituído por Pluggable Transport real
     },
     'traffic_shaping': {
         'enabled': False,
-        'max_padding': 32,  # Máximo de bytes randômicos para padding
+        'max_padding': 0,  # Alterado para 0 para evitar corruption
         'max_delay': 0.001  # Máximo delay em segundos (ex.: 1ms)
     }
 }
@@ -123,11 +123,11 @@ class ConfigManager:
         self.save_config()
         return self.config['obfuscation']['enabled']
 
-    def toggle_mimic_protocol(self):
-        """Alterna a ativação da imitação de protocolo"""
-        self.config['mimic_protocol']['enabled'] = not self.config['mimic_protocol']['enabled']
+    def toggle_pt_protocol(self):
+        """Alterna a ativação do Pluggable Transport"""
+        self.config['pt_protocol']['enabled'] = not self.config['pt_protocol']['enabled']
         self.save_config()
-        return self.config['mimic_protocol']['enabled']
+        return self.config['pt_protocol']['enabled']
 
     def toggle_traffic_shaping(self):
         """Alterna a ativação do traffic shaping"""
@@ -221,11 +221,8 @@ class ConnectionHandler(threading.Thread):
         self.shared_secret = ConfigManager().config.get('obfuscation', {}).get('shared_secret', '')
         self.send_count = 0  # Contador para chave rotativa
         self.recv_count = 0
-        self.mimic_enabled = ConfigManager().config.get('mimic_protocol', {}).get('enabled', False)
-        self.mimic_type = ConfigManager().config.get('mimic_protocol', {}).get('type', 'dns')
-        self.mimic_sent = False  # Flag para enviar mimic prefix apenas uma vez
         self.shaping_enabled = ConfigManager().config.get('traffic_shaping', {}).get('enabled', False)
-        self.max_padding = ConfigManager().config.get('traffic_shaping', {}).get('max_padding', 32)
+        self.max_padding = ConfigManager().config.get('traffic_shaping', {}).get('max_padding', 0)
         self.max_delay = ConfigManager().config.get('traffic_shaping', {}).get('max_delay', 0.001)
         self.handshake_done = False  # Flag para pular ofuscações durante handshake
 
@@ -342,22 +339,9 @@ class ConnectionHandler(threading.Thread):
             self.recv_count += 1
         return obfuscated
 
-    def mimic_prefix(self):
-        """Gera prefixo para imitação de protocolo"""
-        if self.mimic_type == 'dns':
-            # Simples DNS query header para google.com A record
-            return b'\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01'
-        elif self.mimic_type == 'http2':
-            # HTTP/2 magic prefix
-            return b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n'
-        return b''
-
     def apply_shaping(self, data):
-        """Aplica traffic shaping: padding randômico e delay mínimo"""
+        """Aplica traffic shaping: apenas delay, sem padding para evitar corruption"""
         if self.shaping_enabled:
-            # Adicionar padding randômico (0 a max_padding bytes)
-            padding_size = random.randint(0, self.max_padding)
-            data += os.urandom(padding_size)
             # Adicionar delay randômico (0 a max_delay segundos)
             delay = random.uniform(0, self.max_delay)
             time.sleep(delay)
@@ -390,20 +374,12 @@ class ConnectionHandler(threading.Thread):
                             data = self.obfuscate_data(data, is_send=False)
                             if in_ is self.target:
                                 obfuscated_data = self.obfuscate_data(data, is_send=True)
-                                # Adicionar mimic prefix se ativado e não enviado ainda e handshake done
-                                if self.mimic_enabled and not self.mimic_sent and self.handshake_done:
-                                    obfuscated_data = self.mimic_prefix() + obfuscated_data
-                                    self.mimic_sent = True
                                 # Aplicar traffic shaping se handshake done
                                 if self.handshake_done:
                                     obfuscated_data = self.apply_shaping(obfuscated_data)
                                 self.client.sendall(obfuscated_data)
                             else:
                                 obfuscated_data = self.obfuscate_data(data, is_send=True)
-                                # Adicionar mimic prefix se ativado e não enviado ainda e handshake done
-                                if self.mimic_enabled and not self.mimic_sent and self.handshake_done:
-                                    obfuscated_data = self.mimic_prefix() + obfuscated_data
-                                    self.mimic_sent = True
                                 # Aplicar traffic shaping se handshake done
                                 if self.handshake_done:
                                     obfuscated_data = self.apply_shaping(obfuscated_data)
@@ -540,14 +516,14 @@ def show_menu():
         status_text = "ATIVO" if is_active else "INATIVO"
         
         obfuscation_status = "\033[1;32mAtivado\033[0m" if config['obfuscation']['enabled'] else "\033[1;31mDesativado\033[0m"
-        mimic_status = "\033[1;32mAtivado\033[0m" if config['mimic_protocol']['enabled'] else "\033[1;31mDesativado\033[0m"
+        pt_status = "\033[1;32mAtivado\033[0m" if config['pt_protocol']['enabled'] else "\033[1;31mDesativado\033[0m"
         shaping_status = "\033[1;32mAtivado\033[0m" if config['traffic_shaping']['enabled'] else "\033[1;31mDesativado\033[0m"
         
         print(f"\n\033[1;33mStatus:\033[0m {status_color}{status_text}\033[0m")
         print(f"\033[1;33mInstalado:\033[0m {'Sim' if is_installed else 'Não'}")
         print(f"\033[1;33mPortas:\033[0m {', '.join(map(str, ports))}")
         print(f"\033[1;33mOfuscação:\033[0m {obfuscation_status}")
-        print(f"\033[1;33mImitação de Protocolo:\033[0m {mimic_status}")
+        print(f"\033[1;33mPluggable Transport (obfs4):\033[0m {pt_status}")
         print(f"\033[1;33mTraffic Shaping:\033[0m {shaping_status}")
         
         print("\n\033[0;34m" + "-"*50 + "\033[0m")
@@ -568,7 +544,7 @@ def show_menu():
             else:
                 print("\033[1;36m5.\033[0m Iniciar Proxy")
             print("\033[1;36m7.\033[0m Alternar Ofuscação")
-            print("\033[1;36m8.\033[0m Alternar Imitação de Protocolo")
+            print("\033[1;36m8.\033[0m Alternar Pluggable Transport (obfs4)")
             print("\033[1;36m9.\033[0m Alternar Traffic Shaping")
         else:
             print("\033[1;36m2.\033[0m \033[1;30mRemover Proxy (não instalado)\033[0m")
@@ -655,6 +631,16 @@ def show_menu():
                 
             elif choice == '7' and is_installed:
                 enabled = manager.config_manager.toggle_obfuscation()
+                if enabled and not manager.config_manager.config['obfuscation'].get('shared_secret'):
+                    shared_secret = input("\n\033[1;33mDigite a chave compartilhada para ofuscação (obrigatória): \033[0m")
+                    if shared_secret:
+                        manager.config_manager.config['obfuscation']['shared_secret'] = shared_secret
+                        manager.config_manager.save_config()
+                        print(f"\033[1;32mChave definida com sucesso!\033[0m")
+                    else:
+                        print("\033[1;31mChave não definida; ofuscação permanecerá inativa.\033[0m")
+                        manager.config_manager.config['obfuscation']['enabled'] = False
+                        manager.config_manager.save_config()
                 status = "ativada" if enabled else "desativada"
                 print(f"\n\033[1;32mOfuscação {status} com sucesso!\033[0m")
                 if is_active:
@@ -663,9 +649,10 @@ def show_menu():
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
                 
             elif choice == '8' and is_installed:
-                enabled = manager.config_manager.toggle_mimic_protocol()
+                enabled = manager.config_manager.toggle_pt_protocol()
                 status = "ativada" if enabled else "desativada"
-                print(f"\n\033[1;32mImitação de Protocolo {status} com sucesso!\033[0m")
+                print(f"\n\033[1;32mPluggable Transport {status} com sucesso!\033[0m")
+                print("\033[1;33mNota: Certifique-se de que obfs4proxy está instalado. Verifique /etc/obfs4-state/obfs4_bridgeline.txt para configuração do cliente após reinício.\033[0m")
                 if is_active:
                     print("\033[1;33mReiniciando proxy...\033[0m")
                     manager.restart_proxy()
@@ -691,8 +678,11 @@ def show_menu():
             print(f"\n\033[1;31mErro: {e}\033[0m")
             input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
 
+procs = []  # Global para processes do obfs4
+
 def run_daemon():
     """Executa o proxy em modo daemon"""
+    global procs
     config_manager = ConfigManager()
     servers = []
     
@@ -700,16 +690,42 @@ def run_daemon():
         print('Shutdown signal received')
         for server in servers:
             server.close()
+        for proc in procs:
+            proc.terminate()
         sys.exit(0)
     
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
     
-    for port in config_manager.get_ports():
-        server = Server(IP, port)
+    pt_enabled = config_manager.config.get('pt_protocol', {}).get('enabled', False)
+    internal_ip = '127.0.0.1'
+    internal_port = 8080
+    if pt_enabled:
+        state_dir = '/etc/obfs4-state'
+        os.makedirs(state_dir, exist_ok=True)
+        procs = []
+        for port in config_manager.get_ports():
+            bindaddr = f"obfs4-{IP}:{port}"
+            cmd = ['obfs4proxy', '-server', '--stateDir', state_dir, '-bindaddr', bindaddr, '-orport', f"{internal_ip}:{internal_port}"]
+            proc = subprocess.Popen(cmd)
+            procs.append(proc)
+        time.sleep(2)  # Espera inicialização
+        bridgeline_file = os.path.join(state_dir, 'obfs4_bridgeline.txt')
+        if os.path.exists(bridgeline_file):
+            with open(bridgeline_file, 'r') as f:
+                print("Linha de bridge para o cliente:")
+                print(f.read())
+        else:
+            print("Arquivo de bridge line não encontrado. Verifique logs do obfs4proxy.")
+        server = Server(internal_ip, internal_port)
         server.start()
         servers.append(server)
-        print(f"Proxy iniciado na porta {port}")
+    else:
+        for port in config_manager.get_ports():
+            server = Server(IP, port)
+            server.start()
+            servers.append(server)
+            print(f"Proxy iniciado na porta {port}")
     
     try:
         while True:
@@ -718,6 +734,8 @@ def run_daemon():
         print('\nParando servidores...')
         for server in servers:
             server.close()
+        for proc in procs:
+            proc.terminate()
 
 def main():
     """Função principal"""
