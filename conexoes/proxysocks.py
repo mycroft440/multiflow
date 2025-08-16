@@ -117,6 +117,24 @@ class ConfigManager:
             return True
         return False
 
+    def toggle_obfuscation(self):
+        """Alterna a ativação da ofuscação"""
+        self.config['obfuscation']['enabled'] = not self.config['obfuscation']['enabled']
+        self.save_config()
+        return self.config['obfuscation']['enabled']
+
+    def toggle_mimic_protocol(self):
+        """Alterna a ativação da imitação de protocolo"""
+        self.config['mimic_protocol']['enabled'] = not self.config['mimic_protocol']['enabled']
+        self.save_config()
+        return self.config['mimic_protocol']['enabled']
+
+    def toggle_traffic_shaping(self):
+        """Alterna a ativação do traffic shaping"""
+        self.config['traffic_shaping']['enabled'] = not self.config['traffic_shaping']['enabled']
+        self.save_config()
+        return self.config['traffic_shaping']['enabled']
+
 class Server(threading.Thread):
     def __init__(self, host, port):
         threading.Thread.__init__(self)
@@ -500,6 +518,7 @@ WantedBy=multi-user.target
 def show_menu():
     """Exibe o menu interativo"""
     manager = ProxyManager()
+    config = manager.config_manager.config
     
     while True:
         system("clear")
@@ -515,9 +534,16 @@ def show_menu():
         status_color = "\033[1;32m" if is_active else "\033[1;31m"
         status_text = "ATIVO" if is_active else "INATIVO"
         
+        obfuscation_status = "\033[1;32mAtivado\033[0m" if config['obfuscation']['enabled'] else "\033[1;31mDesativado\033[0m"
+        mimic_status = "\033[1;32mAtivado\033[0m" if config['mimic_protocol']['enabled'] else "\033[1;31mDesativado\033[0m"
+        shaping_status = "\033[1;32mAtivado\033[0m" if config['traffic_shaping']['enabled'] else "\033[1;31mDesativado\033[0m"
+        
         print(f"\n\033[1;33mStatus:\033[0m {status_color}{status_text}\033[0m")
         print(f"\033[1;33mInstalado:\033[0m {'Sim' if is_installed else 'Não'}")
         print(f"\033[1;33mPortas:\033[0m {', '.join(map(str, ports))}")
+        print(f"\033[1;33mOfuscação:\033[0m {obfuscation_status}")
+        print(f"\033[1;33mImitação de Protocolo:\033[0m {mimic_status}")
+        print(f"\033[1;33mTraffic Shaping:\033[0m {shaping_status}")
         
         print("\n\033[0;34m" + "-"*50 + "\033[0m")
         
@@ -536,6 +562,9 @@ def show_menu():
                 print("\033[1;36m6.\033[0m Reiniciar Proxy")
             else:
                 print("\033[1;36m5.\033[0m Iniciar Proxy")
+            print("\033[1;36m7.\033[0m Alternar Ofuscação")
+            print("\033[1;36m8.\033[0m Alternar Imitação de Protocolo")
+            print("\033[1;36m9.\033[0m Alternar Traffic Shaping")
         else:
             print("\033[1;36m2.\033[0m \033[1;30mRemover Proxy (não instalado)\033[0m")
             print("\033[1;36m3.\033[0m \033[1;30mAdicionar Porta (instale primeiro)\033[0m")
@@ -617,6 +646,33 @@ def show_menu():
                     print("\033[1;32mProxy reiniciado com sucesso!\033[0m")
                 else:
                     print("\033[1;31mErro ao reiniciar o proxy!\033[0m")
+                input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
+                
+            elif choice == '7' and is_installed:
+                enabled = manager.config_manager.toggle_obfuscation()
+                status = "ativada" if enabled else "desativada"
+                print(f"\n\033[1;32mOfuscação {status} com sucesso!\033[0m")
+                if is_active:
+                    print("\033[1;33mReiniciando proxy...\033[0m")
+                    manager.restart_proxy()
+                input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
+                
+            elif choice == '8' and is_installed:
+                enabled = manager.config_manager.toggle_mimic_protocol()
+                status = "ativada" if enabled else "desativada"
+                print(f"\n\033[1;32mImitação de Protocolo {status} com sucesso!\033[0m")
+                if is_active:
+                    print("\033[1;33mReiniciando proxy...\033[0m")
+                    manager.restart_proxy()
+                input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
+                
+            elif choice == '9' and is_installed:
+                enabled = manager.config_manager.toggle_traffic_shaping()
+                status = "ativada" if enabled else "desativada"
+                print(f"\n\033[1;32mTraffic Shaping {status} com sucesso!\033[0m")
+                if is_active:
+                    print("\033[1;33mReiniciando proxy...\033[0m")
+                    manager.restart_proxy()
                 input("\n\033[1;33mPressione ENTER para continuar...\033[0m")
                 
             else:
