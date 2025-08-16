@@ -227,6 +227,7 @@ class ConnectionHandler(threading.Thread):
         self.shaping_enabled = ConfigManager().config.get('traffic_shaping', {}).get('enabled', False)
         self.max_padding = ConfigManager().config.get('traffic_shaping', {}).get('max_padding', 32)
         self.max_delay = ConfigManager().config.get('traffic_shaping', {}).get('max_delay', 0.001)
+        self.handshake_done = False  # Flag para pular ofuscações durante handshake
 
     def close(self):
         try:
@@ -389,22 +390,26 @@ class ConnectionHandler(threading.Thread):
                             data = self.obfuscate_data(data, is_send=False)
                             if in_ is self.target:
                                 obfuscated_data = self.obfuscate_data(data, is_send=True)
-                                # Adicionar mimic prefix se ativado e não enviado ainda
-                                if self.mimic_enabled and not self.mimic_sent:
+                                # Adicionar mimic prefix se ativado e não enviado ainda e handshake done
+                                if self.mimic_enabled and not self.mimic_sent and self.handshake_done:
                                     obfuscated_data = self.mimic_prefix() + obfuscated_data
                                     self.mimic_sent = True
-                                # Aplicar traffic shaping
-                                obfuscated_data = self.apply_shaping(obfuscated_data)
+                                # Aplicar traffic shaping se handshake done
+                                if self.handshake_done:
+                                    obfuscated_data = self.apply_shaping(obfuscated_data)
                                 self.client.sendall(obfuscated_data)
                             else:
                                 obfuscated_data = self.obfuscate_data(data, is_send=True)
-                                if self.mimic_enabled and not self.mimic_sent:
+                                # Adicionar mimic prefix se ativado e não enviado ainda e handshake done
+                                if self.mimic_enabled and not self.mimic_sent and self.handshake_done:
                                     obfuscated_data = self.mimic_prefix() + obfuscated_data
                                     self.mimic_sent = True
-                                # Aplicar traffic shaping
-                                obfuscated_data = self.apply_shaping(obfuscated_data)
+                                # Aplicar traffic shaping se handshake done
+                                if self.handshake_done:
+                                    obfuscated_data = self.apply_shaping(obfuscated_data)
                                 self.target.sendall(obfuscated_data)
                             count = 0
+                            self.handshake_done = True  # Setar após primeiro recv/send
                         else:
                             error = True
                             break
