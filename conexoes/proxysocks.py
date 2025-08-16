@@ -11,6 +11,7 @@ import subprocess
 import signal
 import errno
 import hashlib
+import random
 from os import system
 from concurrent.futures import ThreadPoolExecutor
 
@@ -35,6 +36,11 @@ DEFAULT_CONFIG = {
     'mimic_protocol': {
         'enabled': False,
         'type': 'dns'  # Pode ser 'dns' ou 'http2'; expanda para mais
+    },
+    'traffic_shaping': {
+        'enabled': False,
+        'max_padding': 32,  # Máximo de bytes randômicos para padding
+        'max_delay': 0.001  # Máximo delay em segundos (ex.: 1ms)
     }
 }
 
@@ -200,6 +206,9 @@ class ConnectionHandler(threading.Thread):
         self.mimic_enabled = ConfigManager().config.get('mimic_protocol', {}).get('enabled', False)
         self.mimic_type = ConfigManager().config.get('mimic_protocol', {}).get('type', 'dns')
         self.mimic_sent = False  # Flag para enviar mimic prefix apenas uma vez
+        self.shaping_enabled = ConfigManager().config.get('traffic_shaping', {}).get('enabled', False)
+        self.max_padding = ConfigManager().config.get('traffic_shaping', {}).get('max_padding', 32)
+        self.max_delay = ConfigManager().config.get('traffic_shaping', {}).get('max_delay', 0.001)
 
     def close(self):
         try:
@@ -324,6 +333,17 @@ class ConnectionHandler(threading.Thread):
             return b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n'
         return b''
 
+    def apply_shaping(self, data):
+        """Aplica traffic shaping: padding randômico e delay mínimo"""
+        if self.shaping_enabled:
+            # Adicionar padding randômico (0 a max_padding bytes)
+            padding_size = random.randint(0, self.max_padding)
+            data += os.urandom(padding_size)
+            # Adicionar delay randômico (0 a max_delay segundos)
+            delay = random.uniform(0, self.max_delay)
+            time.sleep(delay)
+        return data
+
     def method_CONNECT(self, path):
         self.method = 'CONNECT'
         self.log += ' - CONNECT ' + path
@@ -355,12 +375,16 @@ class ConnectionHandler(threading.Thread):
                                 if self.mimic_enabled and not self.mimic_sent:
                                     obfuscated_data = self.mimic_prefix() + obfuscated_data
                                     self.mimic_sent = True
+                                # Aplicar traffic shaping
+                                obfuscated_data = self.apply_shaping(obfuscated_data)
                                 self.client.sendall(obfuscated_data)
                             else:
                                 obfuscated_data = self.obfuscate_data(data, is_send=True)
                                 if self.mimic_enabled and not self.mimic_sent:
                                     obfuscated_data = self.mimic_prefix() + obfuscated_data
                                     self.mimic_sent = True
+                                # Aplicar traffic shaping
+                                obfuscated_data = self.apply_shaping(obfuscated_data)
                                 self.target.sendall(obfuscated_data)
                             count = 0
                         else:
