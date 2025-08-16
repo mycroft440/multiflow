@@ -5,7 +5,7 @@ import os
 import subprocess
 import shutil
 
-PORTS_FILE = "/opt/rustyproxy/ports"
+PORTS_FILE = "/opt/multiflowproxy/ports"
 
 def is_root():
     return os.geteuid() == 0
@@ -105,7 +105,11 @@ async def start_http(server):
 
 async def run_proxy():
     port = get_port_from_args()
-    server = await asyncio.start_server(handle_client, '::', port)
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    sock.bind(('::', port))
+    sock.listen(100)
+    server = await asyncio.start_server(handle_client, sock=sock)
     print(f"Iniciando serviço na porta: {port}")
     await start_http(server)
 
@@ -126,10 +130,10 @@ def add_proxy_port(port, status="@RustyProxy"):
         print(f"A porta {port} já está em uso.")
         return
 
-    command = f"python /opt/rustyproxy/proxy.py --port {port} --status {status}"
+    command = f"python /opt/multiflowproxy/proxy.py --port {port} --status {status}"
     service_file_path = f"/etc/systemd/system/proxy{port}.service"
     service_content = f"""[Unit]
-Description=RustyProxy{port}
+Description=MultiflowProxy{port}
 After=network.target
 
 [Service]
@@ -212,21 +216,21 @@ def install_proxy():
     subprocess.run(['apt', 'upgrade', '-y'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(['apt-get', 'install', 'curl', 'build-essential', 'git', '-y'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    show_progress("Criando diretorio /opt/rustyproxy...")
-    os.makedirs('/opt/rustyproxy', exist_ok=True)
+    show_progress("Criando diretorio /opt/multiflowproxy...")
+    os.makedirs('/opt/multiflowproxy', exist_ok=True)
 
-    # Copiar o script atual para /opt/rustyproxy/proxy.py
+    # Copiar o script atual para /opt/multiflowproxy/proxy.py
     current_script = os.path.abspath(sys.argv[0])
-    shutil.copy(current_script, '/opt/rustyproxy/proxy.py')
+    shutil.copy(current_script, '/opt/multiflowproxy/proxy.py')
 
     show_progress("Configurando permissões...")
-    os.chmod('/opt/rustyproxy/proxy.py', 0o755)
-    os.symlink('/opt/rustyproxy/proxy.py', '/usr/local/bin/rustyproxy')
+    os.chmod('/opt/multiflowproxy/proxy.py', 0o755)
+    os.symlink('/opt/multiflowproxy/proxy.py', '/usr/local/bin/multiflowproxy')
 
     if not os.path.exists(PORTS_FILE):
         open(PORTS_FILE, 'w').close()
 
-    print("Instalação concluída com sucesso. Digite 'rustyproxy' para acessar o menu.")
+    print("Instalação concluída com sucesso. Digite 'multiflowproxy' para acessar o menu.")
 
 def uninstall_proxy():
     if not is_root():
@@ -240,8 +244,8 @@ def uninstall_proxy():
             del_proxy_port(port)
 
     # Remover diretórios e links
-    shutil.rmtree('/opt/rustyproxy', ignore_errors=True)
-    os.remove('/usr/local/bin/rustyproxy') if os.path.exists('/usr/local/bin/rustyproxy') else None
+    shutil.rmtree('/opt/multiflowproxy', ignore_errors=True)
+    os.remove('/usr/local/bin/multiflowproxy') if os.path.exists('/usr/local/bin/multiflowproxy') else None
 
     print("Desinstalação concluída com sucesso.")
 
@@ -278,7 +282,7 @@ def show_menu():
             while not port.isdigit():
                 print("Digite uma porta válida.")
                 port = input("Digite a porta: ")
-            status = input("Digite o status de conexão (deixe vazio para o padrão): ") or "@RustyProxy"
+            status = input("Digite o status de conexão (deixe vazio para o padrão): ") or "Switching Protocols"
             add_proxy_port(int(port), status)
             input("> Porta ativada com sucesso. Pressione qualquer tecla para voltar ao menu.")
         elif option == '3':
