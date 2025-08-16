@@ -295,9 +295,10 @@ def modern_box(title, content_lines, icon="", primary=MC.CYAN_GRADIENT, secondar
     cols, _ = TerminalManager.size()
     width = max(54, min(cols - 6, 100))
     title_text = f" {icon}{title} " if icon else f" {title} "
+    extra = 1 if icon else 0
     header = (f"{primary}{Icons.BOX_TOP_LEFT}{Icons.BOX_HORIZONTAL * 10}"
               f"{secondary}┤{MC.BOLD}{MC.WHITE}{title_text}{MC.RESET}{secondary}├"
-              f"{primary}{Icons.BOX_HORIZONTAL * (width - len(title_text) - 12)}"
+              f"{primary}{Icons.BOX_HORIZONTAL * (width - len(title_text) - 12 + extra)}"
               f"{Icons.BOX_TOP_RIGHT}{MC.RESET}\n")
     body = ""
     for line in content_lines:
@@ -400,7 +401,6 @@ def get_active_services():
 def system_panel_box():
     info = get_system_info()
     uptime = get_system_uptime()
-    now = datetime.now().strftime("%d/%m/%Y - %H:%M:%S")
     os_name = (info['os_name'][:35] + '...') if len(info['os_name']) > 38 else info['os_name']
     ram_bar = progress_bar(info["ram_percent"])
     cpu_bar = progress_bar(info["cpu_percent"])
@@ -408,19 +408,18 @@ def system_panel_box():
 
     content = [
         f"{MC.CYAN_LIGHT}Sistema:{MC.RESET} {MC.WHITE}{os_name}{MC.RESET}",
-        f"{MC.CYAN_LIGHT}Uptime:{MC.RESET} {MC.WHITE}{uptime}{MC.RESET}",
         f"{MC.CYAN_LIGHT}RAM:{MC.RESET} {ram_bar}",
         f"{MC.CYAN_LIGHT}CPU:{MC.RESET} {cpu_bar}",
+        f"{MC.CYAN_LIGHT}Uptime:{MC.RESET} {MC.WHITE}{uptime}{MC.RESET}",
     ]
     if services:
-        line1 = f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} " + " │ ".join(services[:4])
+        line1 = f"{MC.CYAN_LIGHT}Serviços:{MC.RESET} " + " │ ".join(services[:4])
         content.append(line1)
         if len(services) > 4:
             content.append(" " * 13 + " │ ".join(services[4:8]))
     else:
-        content.append(f"{MC.CYAN_LIGHT}{Icons.NETWORK} Serviços:{MC.RESET} {MC.GRAY}Nenhum serviço ativo{MC.RESET}")
+        content.append(f"{MC.CYAN_LIGHT}Serviços:{MC.RESET} {MC.GRAY}Nenhum serviço ativo{MC.RESET}")
 
-    content.append(f"{MC.CYAN_LIGHT}Data/Hora:{MC.RESET} {MC.WHITE}{now}{MC.RESET}")
     return modern_box("PAINEL DO SISTEMA", content, Icons.CHART, MC.PURPLE_GRADIENT, MC.PURPLE_LIGHT)
 
 def welcome_line():
@@ -446,8 +445,8 @@ def build_main_frame(status_msg=""):
     s.append(menu_option("2", "Gerenciar Conexões", "", MC.GREEN_DARK))
     s.append(menu_option("3", "BadVPN", "", MC.GREEN_DARK))
     s.append(menu_option("4", "Ferramentas", "", MC.GREEN_DARK))
-    s.append(menu_option("5", "Atualizar Multiflow", "", MC.YELLOW_LIGHT, badge="v2"))
-    s.append(menu_option("6", "Servidor de Download", "", MC.GREEN_DARK))
+    s.append(menu_option("5", "Servidor de Download", "", MC.GREEN_DARK))
+    s.append(menu_option("6", "Atualizar Multiflow", "", MC.ORANGE_GRADIENT, badge="v2"))
     s.append("\n")
     s.append(menu_option("0", "Sair", "", MC.RED_DARK))
     s.append(footer_line(status_msg))
@@ -675,15 +674,15 @@ def main_menu():
                 ferramentas_menu()
                 status = "Ferramentas: operação concluída."
             elif choice == "5":
-                atualizar_multiflow()
-                status = "Atualizador executado."
-            elif choice == "6":
                 TerminalManager.leave_alt_screen()
                 try:
                     menu_servidor_download.main()
                 finally:
                     TerminalManager.enter_alt_screen()
                 status = "Servidor de download: operação concluída."
+            elif choice == "6":
+                atualizar_multiflow()
+                status = "Atualizador executado."
             elif choice == "0":
                 TerminalManager.render(build_main_frame("Saindo..."))
                 time.sleep(0.4)
