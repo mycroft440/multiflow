@@ -7,6 +7,7 @@ import shutil
 import json
 import time
 import random
+import ssl  # Added for SSL support
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
 PROXY_DIR = "/opt/multiflowproxy"
@@ -23,6 +24,13 @@ DEFAULT_CONFIG = {
         'enabled': False,
         'max_padding': 32,
         'max_delay': 0.001
+    },
+    'ssl': {
+        'enabled': False,
+        'domain': '',
+        'email': '',
+        'cert_path': '',
+        'key_path': ''
     }
 }
 
@@ -125,6 +133,14 @@ def get_port_status(port):
     except:
         return "✗ Erro"
 
+def is_port_active(port):
+    try:
+        result = subprocess.run(['systemctl', 'is-active', f'proxy{port}.service'],
+                                capture_output=True, text=True)
+        return result.stdout.strip() == 'active'
+    except:
+        return False
+
 async def peek_stream(transport):
     sock = transport.get_extra_info('socket')
     if sock is None:
@@ -190,13 +206,25 @@ async def start_http(server):
 
 async def run_proxy():
     port = get_port_from_args()
+    config_manager = ConfigManager()
+    ssl_context = None
+    if config_manager.config['ssl']['enabled']:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        try:
+            ssl_context.load_cert_chain(
+                config_manager.config['ssl']['cert_path'],
+                config_manager.config['ssl']['key_path']
+            )
+        except Exception as e:
+            print(f"Erro ao carregar certificado SSL: {e}")
+            sys.exit(1)
     try:
         sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         sock.bind(('::', port))
         sock.listen(100)
-        server = await asyncio.start_server(handle_client, sock=sock)
-        print(f"Iniciando serviço na porta: {port}")
+        server = await asyncio.start_server(handle_client, sock=sock, ssl=ssl_context)
+        print(f"Iniciando serviço na porta: {port}{' com SSL' if ssl_context else ''}")
         await start_http(server)
     except Exception as e:
         print(f"Erro ao iniciar o proxy: {str(e)}")
@@ -360,6 +388,80 @@ def uninstall_proxy():
     os.remove('/usr/local/bin/multiflowproxy')
     print("\n✓ Desinstalação concluída com sucesso.")
 
+def generate_ssl_cert(domain, email):
+    try:
+        # Instalar Certbot se não estiver instalado
+        if not shutil.which('certbot'):
+            subprocess.run(['apt', 'install', 'snapd', '-y'], check=True)
+            subprocess.run(['snap', 'install', 'core'], check=True)
+            subprocess.run(['snap', 'refresh', 'core'], check=True)
+            subprocess.run(['snap', 'install', '--classic', 'certbot'], check=True)
+            subprocess.run(['ln', '-s', '/snap/bin/certbot', '/usr/bin/certbot'], check=True)
+        
+        # Parar porta 80 temporariamente se ativa
+        was_running = False
+        if is_port_active(80):
+            subprocess.run(['systemctl', 'stop', 'proxy80.service'], check=True)
+            was_running = True
+        
+        # Preparar comando base
+        cmd = [
+            'certbot', 'certonly', '--standalone', '-d', domain,
+            '--agree-tos', '--non-interactive'
+        ]
+        
+        if email:
+            cmd += ['--email', email]
+        else:
+            cmd += ['--register-unsafely-without-email']
+        
+        # Gerar certificado
+        subprocess.run(cmd, check=True)
+        
+        # Reiniciar porta 80 se estava rodando
+        if was_running:
+            subprocess.run(['systemctl', 'start', 'proxy80.service'], check=True)
+        
+        print("\nCertificado SSL gerado com sucesso!")
+        return True
+    except Exception as e:
+        print(f"\n\033[1;31mErro ao gerar certificado SSL: {e}\033[0m")
+        return False
+
+def configure_ssl(config_manager):
+    print("\nDeseja rodar SSL em qual porta?")
+    print("1. 80 e 443")
+    print("2. Somente 443")
+    option = input("\033[1;33m ➜ \033[0m")
+    while option not in ['1', '2']:
+        print("\033[1;31m✗ Opção inválida. Escolha 1 ou 2.\033[0m")
+        option = input("\033[1;33m ➜ \033[0m")
+    
+    domain = input("\nAgora É MUITO IMPORTANTE digite o seu dominio que está apontado para seu IP para o SSL funcionar?\nDigite: ")
+    while not domain:
+        print("\033[1;31m✗ Domínio obrigatório.\033[0m")
+        domain = input("Digite o domínio: ")
+    
+    email = input("\nDigite seu email para notificações do Let's Encrypt (opcional, pressione Enter para pular): ").strip()
+    
+    if generate_ssl_cert(domain, email):
+        config_manager.config['ssl']['enabled'] = True
+        config_manager.config['ssl']['domain'] = domain
+        config_manager.config['ssl']['email'] = email
+        config_manager.config['ssl']['cert_path'] = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
+        config_manager.config['ssl']['key_path'] = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+        config_manager.save_config()
+        
+        # Adicionar portas conforme opção
+        if option == '1':
+            if not os.path.exists(PORTS_FILE) or '80' not in open(PORTS_FILE).read():
+                add_proxy_port(80)
+            add_proxy_port(443)
+        elif option == '2':
+            add_proxy_port(443)
+    else:
+        print("\033[1;31m✗ Falha ao configurar SSL.\033[0m")
+
 def show_menu():
     config_manager = ConfigManager()
     while True:
@@ -383,6 +485,9 @@ def show_menu():
                     active_ports = ", ".join(ports)
         print(f"\033[1;33mPortas:\033[0m \033[1;32m{active_ports}\033[0m\n")
         
+        ssl_status = "\033[1;32mAtivado\033[0m" if config_manager.config['ssl']['enabled'] else "\033[1;31mDesativado\033[0m"
+        print(f"\033[1;33mSSL:\033[0m {ssl_status}\n")
+        
         print("\033[0;34m━"*10, "\033[1;32m MENU \033[0m", "\033[0;34m━\033[1;37m"*11, "\n")
         
         if not is_proxy_installed():
@@ -394,6 +499,7 @@ def show_menu():
             print("\033[1;33m[3]\033[0m Reiniciar Porta")
             print("\033[1;33m[4]\033[0m Desinstalar Proxy")
             print("\033[1;33m[5]\033[0m Alternar Traffic Shaping")
+            print("\033[1;33m[6]\033[0m Adicionar SSL")
             print("\033[1;33m[0]\033[0m Sair")
         
         print("\n\033[0;34m━"*10, "\033[1;32m ESCOLHA \033[0m", "\033[0;34m━\033[1;37m"*11, "\n")
@@ -457,6 +563,10 @@ def show_menu():
             enabled = config_manager.toggle_traffic_shaping()
             status = "\033[1;32mativada\033[0m" if enabled else "\033[1;31mdesativada\033[0m"
             print(f"\nTraffic Shaping {status} com sucesso!")
+            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
+           
+        elif option == '6' and is_proxy_installed():
+            configure_ssl(config_manager)
             input("\n\033[1;33mPressione Enter para continuar...\033[0m")
            
         elif option == '0':
