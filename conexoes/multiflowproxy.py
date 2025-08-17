@@ -140,17 +140,44 @@ async def peek_stream(transport):
 
 async def transfer_data(source_reader, dest_writer):
     config_manager = ConfigManager()
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1"
+    ]  # Lista de User-Agents reais para rotatividade
     while True:
         data = await source_reader.read(8192)
         if len(data) == 0:
             break
         if config_manager.config['traffic_shaping']['enabled']:
+            # Header fake: Adicionar User-Agent rotativo
+            header = f"User-Agent: {random.choice(user_agents)}\r\n".encode()
+            data = header + data
+            
+            # Padding existente + ruído extra (bytes aleatórios como "ruído")
             padding_size = random.randint(0, config_manager.config['traffic_shaping']['max_padding'])
+            noise_size = random.randint(0, 16)  # Ruído extra: até 16 bytes aleatórios
+            data += bytes([random.randint(0, 255) for _ in range(noise_size)]) + bytes([0] * padding_size)
+            
+            # Delay aleatório
             delay = random.uniform(0, config_manager.config['traffic_shaping']['max_delay'])
-            data += bytes([0] * padding_size)
             await asyncio.sleep(delay)
-        dest_writer.write(data)
-        await dest_writer.drain()
+            
+            # Fragmentação: Dividir payloads grandes em chunks com delays
+            threshold = 4096
+            if len(data) > threshold:
+                chunks = [data[i:i+2048] for i in range(0, len(data), 2048)]
+                for chunk in chunks:
+                    dest_writer.write(chunk)
+                    await asyncio.sleep(random.uniform(0, 0.005))  # Delay variável por chunk (0-5ms)
+                    await dest_writer.drain()
+            else:
+                dest_writer.write(data)
+                await dest_writer.drain()
+        else:
+            dest_writer.write(data)
+            await dest_writer.drain()
     dest_writer.close()
 
 async def handle_client(reader, writer):
