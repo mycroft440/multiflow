@@ -105,13 +105,17 @@ async def start_http(server):
 
 async def run_proxy():
     port = get_port_from_args()
-    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-    sock.bind(('::', port))
-    sock.listen(100)
-    server = await asyncio.start_server(handle_client, sock=sock)
-    print(f"Iniciando serviço na porta: {port}")
-    await start_http(server)
+    try:
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(('::', port))
+        sock.listen(100)
+        server = await asyncio.start_server(handle_client, sock=sock)
+        print(f"Iniciando serviço na porta: {port}")
+        await start_http(server)
+    except Exception as e:
+        print(f"Erro ao iniciar o proxy: {str(e)}")
+        sys.exit(1)
 
 def is_port_in_use(port):
     try:
@@ -125,12 +129,12 @@ def is_port_in_use(port):
     except Exception:
         return False
 
-def add_proxy_port(port, status="@RustyProxy"):
+def add_proxy_port(port, status="Switching Protocols"):
     if is_port_in_use(port):
         print(f"A porta {port} já está em uso.")
         return
 
-    command = f"python /opt/multiflowproxy/proxy.py --port {port} --status {status}"
+    command = f"/usr/bin/python3 /opt/multiflowproxy/proxy.py --port {port} --status '{status}'"
     service_file_path = f"/etc/systemd/system/proxy{port}.service"
     service_content = f"""[Unit]
 Description=MultiflowProxy{port}
@@ -149,6 +153,8 @@ LimitFSIZE=infinity
 Type=simple
 ExecStart={command}
 Restart=always
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -158,8 +164,13 @@ WantedBy=multi-user.target
         f.write(service_content)
 
     subprocess.run(['systemctl', 'daemon-reload'])
-    subprocess.run(['systemctl', 'enable', f"proxy{port}.service"])
-    subprocess.run(['systemctl', 'start', f"proxy{port}.service"])
+
+    try:
+        subprocess.run(['systemctl', 'enable', f"proxy{port}.service"], check=True)
+        subprocess.run(['systemctl', 'start', f"proxy{port}.service"], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Falha ao ativar o serviço: {e.stderr.decode() if e.stderr else str(e)}")
+        return
 
     with open(PORTS_FILE, 'a') as f:
         f.write(f"{port}\n")
@@ -167,9 +178,14 @@ WantedBy=multi-user.target
     print(f"Porta {port} aberta com sucesso.")
 
 def del_proxy_port(port):
-    subprocess.run(['systemctl', 'disable', f"proxy{port}.service"])
-    subprocess.run(['systemctl', 'stop', f"proxy{port}.service"])
-    os.remove(f"/etc/systemd/system/proxy{port}.service")
+    try:
+        subprocess.run(['systemctl', 'disable', f"proxy{port}.service"], check=True)
+        subprocess.run(['systemctl', 'stop', f"proxy{port}.service"], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Falha ao desativar o serviço: {e.stderr.decode() if e.stderr else str(e)}")
+
+    if os.path.exists(f"/etc/systemd/system/proxy{port}.service"):
+        os.remove(f"/etc/systemd/system/proxy{port}.service")
     subprocess.run(['systemctl', 'daemon-reload'])
 
     lines = []
@@ -184,8 +200,12 @@ def del_proxy_port(port):
     print(f"Porta {port} fechada com sucesso.")
 
 def restart_proxy_port(port):
-    subprocess.run(['systemctl', 'restart', f"proxy{port}.service"])
-    print(f"Proxy na porta {port} reiniciado com sucesso.")
+    try:
+        subprocess.run(['systemctl', 'restart', f"proxy{port}.service"], check=True)
+        print(f"Proxy na porta {port} reiniciado com sucesso.")
+    except subprocess.CalledProcessError as e:
+        print(f"Falha ao reiniciar o serviço: {e.stderr.decode() if e.stderr else str(e)}")
+        print("Dica: Rode 'systemctl status proxy{port}.service' ou 'journalctl -xeu proxy{port}.service' para detalhes.")
 
 def install_proxy():
     if not is_root():
