@@ -141,19 +141,6 @@ def is_port_active(port):
     except:
         return False
 
-async def peek_stream(transport):
-    sock = transport.get_extra_info('socket')
-    if sock is None:
-        return ""
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.sock_recv(sock, 0)
-        peek_buffer = sock.recv(8192, socket.MSG_PEEK)
-        data_str = peek_buffer.decode('utf-8', errors='replace')
-        return data_str
-    except Exception:
-        return ""
-
 async def transfer_data(source_reader, dest_writer, traffic_shaping):
     while True:
         data = await source_reader.read(8192)
@@ -176,17 +163,21 @@ async def handle_client(reader, writer):
     writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
     await writer.drain()
     buffer = await reader.read(1024)
-    writer.write(f"HTTP/1.1 200 OK\r\n\r\n".encode())
+    writer.write(f"HTTP/1.1 204 No Content\r\n\r\n".encode())
     await writer.drain()
+    
     try:
-        data = await asyncio.wait_for(peek_stream(writer.transport), timeout=1.0)
+        initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
     except (asyncio.TimeoutError, Exception):
-        data = ""
+        initial_data = b""
+    
+    data_str = initial_data.decode('utf-8', errors='replace')
     addr_proxy = "0.0.0.0:22"
-    if "SSH" in data or data == "":
+    if "SSH" in data_str or not initial_data:
         addr_proxy = "0.0.0.0:22"
     else:
         addr_proxy = "0.0.0.0:1194"
+    
     try:
         server_reader, server_writer = await asyncio.open_connection(
             addr_proxy.split(':')[0], int(addr_proxy.split(':')[1])
@@ -196,6 +187,11 @@ async def handle_client(reader, writer):
         writer.close()
         await writer.wait_closed()
         return
+    
+    if initial_data:
+        server_writer.write(initial_data)
+        await server_writer.drain()
+    
     client_to_server = asyncio.create_task(transfer_data(reader, server_writer, traffic_shaping))
     server_to_client = asyncio.create_task(transfer_data(server_reader, writer, traffic_shaping))
     await asyncio.gather(client_to_server, server_to_client)
