@@ -10,6 +10,7 @@ import random
 import time
 import json
 from datetime import datetime, timedelta
+import readline  # Adicionado para pré-preencher o input da senha
 
 # Path setup
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -322,7 +323,7 @@ def build_create_user_frame():
         f"{MC.WHITE}• Começar com letra minúscula{MC.RESET}",
         f"{MC.WHITE}• Usar apenas: a-z, 0-9, _, -{MC.RESET}",
         "",
-        f"{MC.CYAN_LIGHT}A senha será gerada automaticamente{MC.RESET}"
+        f"{MC.CYAN_LIGHT}A senha será gerada automaticamente, mas pode ser editada no input{MC.RESET}"
     ], "", MC.GREEN_GRADIENT, MC.GREEN_LIGHT))
     s.append(footer_line())
     return "".join(s)
@@ -452,6 +453,20 @@ def criar_usuario():
         return False, f"O usuário {username} já existe"
     
     password = generate_random_password()
+    
+    # Pré-preenche o input com a senha gerada
+    readline.set_startup_hook(lambda: readline.insert_text(password))
+    try:
+        new_password = input(f"{MC.CYAN_GRADIENT}Senha do usuário: {MC.RESET}")
+    finally:
+        readline.set_startup_hook(None)
+    
+    if new_password:
+        password = new_password  # Usa a editada se não vazia (mas como pré-preenchida, vazia só se apagada)
+    
+    if not validar_senha(password):
+        TerminalManager.after_input()
+        return False, "Senha deve ter pelo menos 4 caracteres"
     
     try:
         limite_input = input(f"{MC.CYAN_GRADIENT}Limite de conexões [1]: {MC.RESET}") or "1"
