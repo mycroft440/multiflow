@@ -159,17 +159,51 @@ async def handle_client(reader, writer):
     config_manager = ConfigManager()
     traffic_shaping = config_manager.config['traffic_shaping'].copy()  # Copy to avoid mutable issues
     
-    status = "Switching Protocols"
-    writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
-    await writer.drain()
-    buffer = await reader.read(1024)
-    writer.write(f"HTTP/1.1 204 No Content\r\n\r\n".encode())
-    await writer.drain()
+    status_options = [
+        "100 Continue",
+        "101 Switching Protocols",
+        "102 Processing",
+        "200 OK",
+        "201 Created",
+        "202 Accepted",
+        "204 No Content",
+        "206 Partial Content",
+        "300 Multiple Choices",
+        "301 Moved Permanently",
+        "302 Found",
+        "304 Not Modified",
+        "307 Temporary Redirect",
+        "308 Permanent Redirect",
+        "400 Bad Request",
+        "401 Unauthorized",
+        "403 Forbidden",
+        "404 Not Found",
+        "405 Method Not Allowed",
+        "408 Request Timeout",
+        "429 Too Many Requests",
+        "500 Internal Server Error",
+        "501 Not Implemented",
+        "502 Bad Gateway",
+        "503 Service Unavailable",
+        "504 Gateway Timeout"
+    ]
     
-    try:
-        initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
-    except (asyncio.TimeoutError, Exception):
-        initial_data = b""
+    for status in status_options:
+        writer.write(f"HTTP/1.1 {status}\r\n\r\n".encode())
+        await writer.drain()
+        
+        try:
+            initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
+            if initial_data:
+                break  # Dados recebidos, prosseguir com este status
+        except (asyncio.TimeoutError, Exception):
+            continue  # Tentar próximo status se timeout
+    
+    else:
+        # Se nenhum status funcionar, fechar conexão
+        writer.close()
+        await writer.wait_closed()
+        return
     
     data_str = initial_data.decode('utf-8', errors='replace')
     addr_proxy = "0.0.0.0:22"
