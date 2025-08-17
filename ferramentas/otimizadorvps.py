@@ -157,14 +157,14 @@ def display_menu():
     """Exibe o menu principal."""
     clear_screen()
     print("\033[0;34m━" * 10, "\033[1;32m OTIMIZADOR DE VPS ", "\033[0;34m━" * 10, "\n")
-    print("[ \033[1;33m1\033[0m ] \033[1;32mAtivar Limpeza Automatica\033[0m")
-    print("[ \033[1;33m2\033[0m ] \033[1;32mExecutar as funçoes do 3 ao 6\033[0m")
-    print("[ \033[1;33m3\033[0m ] \033[1;32mLimpar Ram\033[0m")
-    print("[ \033[1;33m4\033[0m ] \033[1;32mLimpar Pacotes\033[0m")
-    print("[ \033[1;33m5\033[0m ] \033[1;32mRemover Pacotes Inuteis\033[0m")
-    print("[ \033[1;33m6\033[0m ] \033[1;32mLimpar Logs Antigos\033[0m")
-    print("[ \033[1;33m7\033[0m ] \033[1;33mRemover Limpeza Automatica\033[0m")
-    print("[ \033[1;33m0\033[0m ] \033[1;31mSair\033[0m")
+    print(" \033[1;32m[ 1 ] Ativar Limpeza Automatica\033[0m")
+    print(" \033[1;32m[ 2 ] Executar as funçoes do 3 ao 6\033[0m")
+    print(" \033[1;32m[ 3 ] Limpar Ram\033[0m")
+    print(" \033[1;32m[ 4 ] Limpar Pacotes\033[0m")
+    print(" \033[1;32m[ 5 ] Remover Pacotes Inuteis\033[0m")
+    print(" \033[1;32m[ 6 ] Limpar Logs Antigos\033[0m")
+    print(" \033[1;33m[ 7 ] Remover Limpeza Automatica\033[0m")
+    print("\n \033[1;31m[ 0 ] Sair\033[0m")
     print("\033[0;34m" + "─" * 48 + "\033[0m\n")
 
 def main():
