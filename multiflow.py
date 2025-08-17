@@ -295,7 +295,7 @@ def modern_box(title, content_lines, icon="", primary=MC.CYAN_GRADIENT, secondar
     cols, _ = TerminalManager.size()
     width = max(54, min(cols - 6, 100))
     title_text = f" {icon}{title} " if icon else f" {title} "
-    extra = 1 if icon else 0
+    extra = -1 if icon else 0
     header = (f"{primary}{Icons.BOX_TOP_LEFT}{Icons.BOX_HORIZONTAL * 10}"
               f"{secondary}┤{MC.BOLD}{MC.WHITE}{title_text}{MC.RESET}{secondary}├"
               f"{primary}{Icons.BOX_HORIZONTAL * (width - len(title_text) - 12 + extra)}"
@@ -442,11 +442,12 @@ def build_main_frame(status_msg=""):
     s.append(modern_box("MENU PRINCIPAL", [], Icons.DIAMOND, MC.BLUE_GRADIENT, MC.BLUE_LIGHT))
     s.append("\n")
     s.append(menu_option("1", "Gerenciar Usuários SSH", "", MC.GREEN_DARK))
-    s.append(menu_option("2", "Gerenciar Conexões", "", MC.GREEN_DARK))
-    s.append(menu_option("3", "BadVPN", "", MC.GREEN_DARK))
-    s.append(menu_option("4", "Ferramentas", "", MC.GREEN_DARK))
-    s.append(menu_option("5", "Servidor de Download", "", MC.GREEN_DARK))
-    s.append(menu_option("6", "Atualizar Multiflow", "", MC.ORANGE_GRADIENT, badge="v2"))
+    s.append(menu_option("2", "Monitor Online", "", MC.GREEN_DARK))
+    s.append(menu_option("3", "Gerenciar Conexões", "", MC.GREEN_DARK))
+    s.append(menu_option("4", "BadVPN", "", MC.GREEN_DARK))
+    s.append(menu_option("5", "Ferramentas", "", MC.GREEN_DARK))
+    s.append(menu_option("6", "Servidor de Download", "", MC.GREEN_DARK))
+    s.append(menu_option("7", "Atualizar Multiflow", "", MC.ORANGE_GRADIENT, badge="v2"))
     s.append("\n")
     s.append(menu_option("0", "Sair", "", MC.RED_DARK))
     s.append(footer_line(status_msg))
@@ -523,6 +524,17 @@ def ssh_users_main_menu():
     TerminalManager.leave_alt_screen()
     try:
         manusear_usuarios.main()
+    finally:
+        TerminalManager.enter_alt_screen()
+
+def monitor_online_menu():
+    TerminalManager.leave_alt_screen()
+    try:
+        root = _find_multiflow_root()
+        usuarios_online_path = os.path.join(root, 'ferramentas', 'usuarios_online.py')
+        subprocess.run([sys.executable, usuarios_online_path], check=True)
+    except Exception as e:
+        print(f"Erro ao executar Monitor Online: {e}")
     finally:
         TerminalManager.enter_alt_screen()
 
@@ -661,26 +673,29 @@ def main_menu():
                 ssh_users_main_menu()
                 status = "Gerenciamento de usuários concluído."
             elif choice == "2":
+                monitor_online_menu()
+                status = "Monitor Online concluído."
+            elif choice == "3":
                 conexoes_menu()
                 status = "Conexões: operação concluída."
-            elif choice == "3":
+            elif choice == "4":
                 TerminalManager.leave_alt_screen()
                 try:
                     menu_badvpn.main_menu()
                 finally:
                     TerminalManager.enter_alt_screen()
                 status = "BadVPN: operação concluída."
-            elif choice == "4":
+            elif choice == "5":
                 ferramentas_menu()
                 status = "Ferramentas: operação concluída."
-            elif choice == "5":
+            elif choice == "6":
                 TerminalManager.leave_alt_screen()
                 try:
                     menu_servidor_download.main()
                 finally:
                     TerminalManager.enter_alt_screen()
                 status = "Servidor de download: operação concluída."
-            elif choice == "6":
+            elif choice == "7":
                 atualizar_multiflow()
                 status = "Atualizador executado."
             elif choice == "0":
@@ -688,7 +703,7 @@ def main_menu():
                 time.sleep(0.4)
                 break
             else:
-                status = "Opção inválida. Pressione 1-6 ou 0 para sair."
+                status = "Opção inválida. Pressione 1-7 ou 0 para sair."
 
         except KeyboardInterrupt:
             TerminalManager.render(build_main_frame("Interrompido pelo usuário."))
