@@ -462,11 +462,28 @@ def configure_ssl(config_manager):
     else:
         print("\033[1;31m✗ Falha ao configurar SSL.\033[0m")
 
+def remove_ssl(config_manager):
+    if not config_manager.config['ssl']['enabled']:
+        print("\n\033[1;31mSSL já está desativado.\033[0m")
+        return
+    
+    config_manager.config['ssl']['enabled'] = False
+    config_manager.config['ssl']['cert_path'] = ''
+    config_manager.config['ssl']['key_path'] = ''
+    config_manager.save_config()
+    print("\nSSL desativado com sucesso!")
+    
+    # Reiniciar portas 80 e 443 se estiverem ativas
+    for port in [80, 443]:
+        if is_port_active(port):
+            restart_proxy_port(port)
+
 def show_menu():
     config_manager = ConfigManager()
     while True:
         os.system('clear')
-        print("\033[0;34m━"*8, "\033[1;32m MULTIFLOW PROXY \033[0m", "\033[0;34m━"*8, "\n")
+        print("\033[1;32mMULTIFLOW PROXY\033[0m")
+        print("\033[0;34m---------------------------\033[0m\n")
         
         proxy_status = get_proxy_status()
         if "ATIVO" in proxy_status:
@@ -475,7 +492,7 @@ def show_menu():
             status_color = "\033[1;33m"
         else:
             status_color = "\033[1;31m"
-        print(f"\033[1;33mStatus:\033[0m {status_color}{proxy_status}\033[0m")
+        print(f"Status: {status_color}{proxy_status}\033[0m")
         
         active_ports = "Nenhuma porta configurada"
         if os.path.exists(PORTS_FILE) and os.path.getsize(PORTS_FILE) > 0:
@@ -483,12 +500,14 @@ def show_menu():
                 ports = f.read().splitlines()
                 if ports:
                     active_ports = ", ".join(ports)
-        print(f"\033[1;33mPortas:\033[0m \033[1;32m{active_ports}\033[0m\n")
+        print(f"Portas: \033[1;32m{active_ports}\033[0m")
         
         ssl_status = "\033[1;32mAtivado\033[0m" if config_manager.config['ssl']['enabled'] else "\033[1;31mDesativado\033[0m"
-        print(f"\033[1;33mSSL:\033[0m {ssl_status}\n")
+        print(f"SSL: {ssl_status}\n")
         
-        print("\033[0;34m━"*10, "\033[1;32m MENU \033[0m", "\033[0;34m━\033[1;37m"*11, "\n")
+        print("\033[0;34m---------------------------\033[0m")
+        print("\033[1;32mMENU\033[0m")
+        print("\033[0;34m---------------------------\033[0m")
         
         if not is_proxy_installed():
             print("\033[1;33m[1]\033[0m Instalar Proxy")
@@ -500,10 +519,11 @@ def show_menu():
             print("\033[1;33m[4]\033[0m Desinstalar Proxy")
             print("\033[1;33m[5]\033[0m Alternar Traffic Shaping")
             print("\033[1;33m[6]\033[0m Adicionar SSL")
+            print("\033[1;33m[7]\033[0m Remover SSL")
             print("\033[1;33m[0]\033[0m Sair")
         
-        print("\n\033[0;34m━"*10, "\033[1;32m ESCOLHA \033[0m", "\033[0;34m━\033[1;37m"*11, "\n")
-        option = input("\033[1;33m ➜ \033[0m")
+        print("\n\033[0;34m---------------------------\033[0m")
+        option = input("\033[1;33mEscolha uma opção: \033[0m")
         
         if option == '1':
             if not is_proxy_installed():
@@ -567,6 +587,10 @@ def show_menu():
            
         elif option == '6' and is_proxy_installed():
             configure_ssl(config_manager)
+            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
+           
+        elif option == '7' and is_proxy_installed():
+            remove_ssl(config_manager)
             input("\n\033[1;33mPressione Enter para continuar...\033[0m")
            
         elif option == '0':
