@@ -57,7 +57,7 @@ class ConfigManager:
                 json.dump(self.config, f, indent=4)
             return True
         except Exception as e:
-            print(f"\033[1;31mErro ao salvar configuração: {e}\033[0m")
+            print(f"\033[1;31m❌ Erro ao salvar configuração: {e}\033[0m")
             return False
     
     def toggle_traffic_shaping(self):
@@ -69,11 +69,47 @@ def is_root():
     return os.geteuid() == 0
 
 def show_progress(message):
-    print(f"Progresso: - {message}")
+    print(f"⏳ {message}")
 
 def error_exit(message):
-    print(f"\nErro: {message}")
+    print(f"\n❌ Erro: {message}")
     sys.exit(1)
+
+def success_message(message):
+    print(f"\n✅ {message}")
+
+def warning_message(message):
+    print(f"\n⚠️ {message}")
+
+def info_message(message):
+    print(f"ℹ️ {message}")
+
+def print_header():
+    """Imprime o cabeçalho estilizado do programa"""
+    print("\033[2J\033[H")  # Limpa a tela completamente
+    print("\033[1;36m" + "╔" + "═" * 58 + "╗" + "\033[0m")
+    print("\033[1;36m║\033[0m" + " " * 58 + "\033[1;36m║\033[0m")
+    print("\033[1;36m║\033[0m\033[1;32m         🌐 MULTIFLOW PROXY MANAGER 🌐         \033[0m\033[1;36m║\033[0m")
+    print("\033[1;36m║\033[0m\033[1;37m            Sistema Avançado de Proxy            \033[0m\033[1;36m║\033[0m")
+    print("\033[1;36m║\033[0m" + " " * 58 + "\033[1;36m║\033[0m")
+    print("\033[1;36m" + "╚" + "═" * 58 + "╝" + "\033[0m")
+    print()
+
+def print_system_info():
+    """Exibe informações do sistema"""
+    try:
+        # Obter informações do sistema
+        hostname = subprocess.run(['hostname'], capture_output=True, text=True).stdout.strip()
+        uptime_output = subprocess.run(['uptime', '-p'], capture_output=True, text=True).stdout.strip()
+        
+        print("\033[1;34m┌─ Informações do Sistema\033[0m")
+        print(f"\033[1;37m│ 🖥️  Servidor: \033[1;32m{hostname}\033[0m")
+        print(f"\033[1;37m│ ⏰ Uptime: \033[1;32m{uptime_output}\033[0m")
+        print(f"\033[1;37m│ 📅 Data/Hora: \033[1;32m{time.strftime('%d/%m/%Y - %H:%M:%S')}\033[0m")
+        print("\033[1;34m└─\033[0m")
+        print()
+    except:
+        pass
 
 def get_port_from_args():
     args = sys.argv[1:]
@@ -127,11 +163,11 @@ def get_port_status(port):
         result = subprocess.run(['systemctl', 'is-active', f'proxy{port}.service'],
                               capture_output=True, text=True)
         if result.stdout.strip() == 'active':
-            return "✓ Ativo"
+            return "🟢 Ativo"
         else:
-            return "✗ Inativo"
+            return "🔴 Inativo"
     except:
-        return "✗ Erro"
+        return "❌ Erro"
 
 def is_port_active(port):
     try:
@@ -140,6 +176,59 @@ def is_port_active(port):
         return result.stdout.strip() == 'active'
     except:
         return False
+
+def print_status_panel(config_manager):
+    """Exibe o painel de status do sistema"""
+    proxy_status = get_proxy_status()
+    
+    # Definir cores baseadas no status
+    if "ATIVO" in proxy_status:
+        status_color = "\033[1;32m"
+        status_icon = "🟢"
+    elif "INATIVO" in proxy_status:
+        status_color = "\033[1;33m"
+        status_icon = "🟡"
+    else:
+        status_color = "\033[1;31m"
+        status_icon = "🔴"
+    
+    # Obter informações das portas
+    active_ports_info = []
+    if os.path.exists(PORTS_FILE) and os.path.getsize(PORTS_FILE) > 0:
+        with open(PORTS_FILE, 'r') as f:
+            ports = f.read().splitlines()
+            for port in ports:
+                if port.strip():
+                    status = get_port_status(int(port))
+                    active_ports_info.append(f"{port} {status}")
+    
+    # Status SSL
+    ssl_status = "🟢 Ativado" if config_manager.config['ssl']['enabled'] else "🔴 Desativado"
+    ssl_domain = config_manager.config['ssl'].get('domain', '')
+    
+    # Traffic Shaping
+    ts_status = "🟢 Ativado" if config_manager.config['traffic_shaping']['enabled'] else "🔴 Desativado"
+    
+    print("\033[1;34m┌─ Status do Sistema\033[0m")
+    print(f"\033[1;37m│ {status_icon} Status Geral: {status_color}{proxy_status}\033[0m")
+    print(f"\033[1;37m│ 🔒 SSL: {ssl_status}\033[0m")
+    if ssl_domain:
+        print(f"\033[1;37m│    └─ Domínio: \033[1;36m{ssl_domain}\033[0m")
+    print(f"\033[1;37m│ 🌊 Traffic Shaping: {ts_status}\033[0m")
+    print("\033[1;34m└─\033[0m")
+    print()
+    
+    # Painel de portas
+    if active_ports_info:
+        print("\033[1;34m┌─ Portas Configuradas\033[0m")
+        for i, port_info in enumerate(active_ports_info):
+            connector = "├─" if i < len(active_ports_info) - 1 else "└─"
+            print(f"\033[1;34m{connector}\033[0m \033[1;37m🔌 Porta {port_info}\033[0m")
+        print()
+    else:
+        print("\033[1;34m┌─ Portas Configuradas\033[0m")
+        print("\033[1;34m└─\033[0m \033[1;33m⚠️  Nenhuma porta configurada\033[0m")
+        print()
 
 async def transfer_data(source_reader, dest_writer, traffic_shaping):
     while True:
@@ -223,8 +312,18 @@ async def handle_client(reader, writer):
         "511 Network Authentication Required"
     ]
     
+    server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]  # Rotacionar para ofuscação
+    user_agents = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",  # Exemplos
+                   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15"]
+    
+    headers = f"Server: {random.choice(server_variants)}\r\n" \
+              f"Content-Length: 0\r\n" \
+              f"Connection: keep-alive\r\n" \
+              f"User-Agent: {random.choice(user_agents)}\r\n\r\n"  # Adicione mais se necessário
+    
     for status in status_options:
-        writer.write(f"HTTP/1.1 {status}\r\n\r\n".encode())
+        response = f"HTTP/1.1 {status}\r\n{headers}".encode()
+        writer.write(response)
         await writer.drain()
         
         try:
@@ -309,8 +408,10 @@ def is_port_in_use(port):
 
 def add_proxy_port(port):
     if is_port_in_use(port):
-        print(f"A porta {port} já está em uso.")
+        warning_message(f"A porta {port} já está em uso.")
         return
+    
+    print(f"\n⚙️ Configurando porta {port}...")
     command = f"/usr/bin/python3 {PROXY_DIR}/multiflowproxy.py --port {port}"
     service_name = f"proxy{port}.service"
     service_file = f"/etc/systemd/system/{service_name}"
@@ -342,9 +443,10 @@ WantedBy=multi-user.target
     subprocess.run(['systemctl', 'start', service_name])
     with open(PORTS_FILE, 'a') as f:
         f.write(f"{port}\n")
-    print(f"Porta {port} adicionada com sucesso.")
+    success_message(f"Porta {port} adicionada e iniciada com sucesso!")
 
 def del_proxy_port(port):
+    print(f"\n⚙️ Removendo porta {port}...")
     service_name = f"proxy{port}.service"
     subprocess.run(['systemctl', 'disable', service_name])
     subprocess.run(['systemctl', 'stop', service_name])
@@ -357,12 +459,13 @@ def del_proxy_port(port):
             for line in lines:
                 if line.strip() != str(port):
                     f.write(line)
-    print(f"Porta {port} removida com sucesso.")
+    success_message(f"Porta {port} removida com sucesso!")
 
 def restart_proxy_port(port):
+    print(f"\n🔄 Reiniciando porta {port}...")
     service_name = f"proxy{port}.service"
     subprocess.run(['systemctl', 'restart', service_name])
-    print(f"Porta {port} reiniciada com sucesso.")
+    success_message(f"Porta {port} reiniciada com sucesso!")
 
 def list_active_ports():
     if not os.path.exists(PORTS_FILE):
@@ -381,9 +484,11 @@ def install_proxy():
     def increment_step():
         nonlocal CURRENT_STEP
         CURRENT_STEP += 1
-        show_progress(f"[{CURRENT_STEP}/{TOTAL_STEPS}]")
+        show_progress(f"Progresso: [{CURRENT_STEP}/{TOTAL_STEPS}]")
 
-    os.system('clear')
+    print_header()
+    print("\033[1;32m🚀 INICIANDO INSTALAÇÃO DO MULTIFLOW PROXY\033[0m\n")
+    
     show_progress("Atualizando repositórios...")
     os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
     try:
@@ -410,10 +515,10 @@ def install_proxy():
             error_exit("Versão do Debian não suportada. Use 9, 10, 11 ou 12.")
     else:
         error_exit("Sistema não suportado. Use Ubuntu ou Debian.")
-    show_progress("Sistema suportado, continuando...")
+    show_progress(f"Sistema {os_name} {version} suportado! ✓")
     increment_step()
 
-    show_progress("Atualizando o sistema e instalando pacotes...")
+    show_progress("Atualizando o sistema e instalando dependências...")
     try:
         subprocess.run(['apt', 'upgrade', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(['apt-get', 'install', 'curl', 'build-essential', 'git', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -421,42 +526,68 @@ def install_proxy():
         error_exit("Falha ao atualizar o sistema ou instalar pacotes")
     increment_step()
 
-    show_progress("Criando diretório /opt/multiflowproxy...")
+    show_progress("Criando estrutura de diretórios...")
     os.makedirs('/opt/multiflowproxy', exist_ok=True)
     increment_step()
 
-    show_progress("Copiando script...")
+    show_progress("Copiando arquivos do sistema...")
     current_script = os.path.abspath(sys.argv[0])
     shutil.copy(current_script, '/opt/multiflowproxy/multiflowproxy.py')
     increment_step()
 
-    show_progress("Configurando permissões...")
+    show_progress("Configurando permissões e links simbólicos...")
     os.chmod('/opt/multiflowproxy/multiflowproxy.py', 0o755)
+    if os.path.exists('/usr/local/bin/multiflowproxy'):
+        os.remove('/usr/local/bin/multiflowproxy')
     os.symlink('/opt/multiflowproxy/multiflowproxy.py', '/usr/local/bin/multiflowproxy')
     increment_step()
 
-    show_progress("Limpando temporários...")
+    show_progress("Finalizando configuração...")
+    time.sleep(1)
     increment_step()
 
-    print("Instalação concluída com sucesso. Digite 'multiflowproxy' para acessar o menu.")
+    show_progress("Limpeza final...")
+    increment_step()
+
+    print("\n" + "="*60)
+    success_message("INSTALAÇÃO CONCLUÍDA COM SUCESSO! 🎉")
+    print("\n\033[1;36m💡 Para acessar o menu, digite: \033[1;32mmultiflowproxy\033[0m")
+    print("\033[1;36m💡 Ou execute novamente este script como root.\033[0m")
+    print("="*60)
 
 def uninstall_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
+    
+    print("\n🗑️ Iniciando desinstalação...")
+    
     if os.path.exists(PORTS_FILE):
         with open(PORTS_FILE, 'r') as f:
             ports = f.read().splitlines()
+        print("📋 Removendo serviços das portas...")
         for port in ports:
-            del_proxy_port(int(port))
+            if port.strip():
+                del_proxy_port(int(port))
+    
+    print("🗂️ Removendo diretórios e arquivos...")
     if os.path.exists(PROXY_DIR):
         shutil.rmtree(PROXY_DIR)
-    os.remove('/usr/local/bin/multiflowproxy')
-    print("\n✓ Desinstalação concluída com sucesso.")
+    
+    if os.path.exists('/usr/local/bin/multiflowproxy'):
+        os.remove('/usr/local/bin/multiflowproxy')
+    
+    if os.path.exists(CONFIG_FILE):
+        os.remove(CONFIG_FILE)
+    
+    success_message("DESINSTALAÇÃO CONCLUÍDA COM SUCESSO! 🗑️")
 
 def generate_ssl_cert(domain, email):
     try:
+        print("\n🔐 Configurando certificado SSL...")
+        
         # Instalar Certbot se não estiver instalado
         if not shutil.which('certbot'):
+            print("📦 Instalando Certbot...")
             subprocess.run(['apt', 'install', 'snapd', '-y'], check=True)
             subprocess.run(['snap', 'install', 'core'], check=True)
             subprocess.run(['snap', 'refresh', 'core'], check=True)
@@ -466,6 +597,7 @@ def generate_ssl_cert(domain, email):
         # Parar porta 80 temporariamente se ativa
         was_running = False
         if is_port_active(80):
+            print("⏸️ Parando porta 80 temporariamente...")
             subprocess.run(['systemctl', 'stop', 'proxy80.service'], check=True)
             was_running = True
         
@@ -481,195 +613,45 @@ def generate_ssl_cert(domain, email):
             cmd += ['--register-unsafely-without-email']
         
         # Gerar certificado
+        print("🔄 Gerando certificado SSL...")
         subprocess.run(cmd, check=True)
         
         # Reiniciar porta 80 se estava rodando
         if was_running:
+            print("▶️ Reiniciando porta 80...")
             subprocess.run(['systemctl', 'start', 'proxy80.service'], check=True)
         
-        print("\nCertificado SSL gerado com sucesso!")
+        success_message("Certificado SSL gerado com sucesso! 🔒")
         return True
     except Exception as e:
-        print(f"\n\033[1;31mErro ao gerar certificado SSL: {e}\033[0m")
+        print(f"\n\033[1;31m❌ Erro ao gerar certificado SSL: {e}\033[0m")
         return False
 
 def configure_ssl(config_manager):
-    print("\nDeseja rodar SSL em qual porta?")
-    print("1. 80 e 443")
-    print("2. Somente 443")
-    option = input("\033[1;33m ➜ \033[0m")
+    print("\n\033[1;34m┌─ Configuração SSL\033[0m")
+    print("\033[1;34m│\033[0m")
+    print("\033[1;34m│\033[0m 🔐 \033[1;37mEscolha a configuração de porta para SSL:\033[0m")
+    print("\033[1;34m│\033[0m")
+    print("\033[1;34m│\033[0m   \033[1;32m[1]\033[0m 🌐 HTTP (80) + HTTPS (443)")
+    print("\033[1;34m│\033[0m   \033[1;32m[2]\033[0m 🔒 Apenas HTTPS (443)")
+    print("\033[1;34m│\033[0m")
+    print("\033[1;34m└─\033[0m")
+    
+    option = input("\n\033[1;33m🎯 Escolha uma opção (1 ou 2): \033[0m")
     while option not in ['1', '2']:
-        print("\033[1;31m✗ Opção inválida. Escolha 1 ou 2.\033[0m")
-        option = input("\033[1;33m ➜ \033[0m")
+        print("\033[1;31m❌ Opção inválida. Escolha 1 ou 2.\033[0m")
+        option = input("\033[1;33m🎯 Escolha uma opção (1 ou 2): \033[0m")
     
-    domain = input("\nAgora É MUITO IMPORTANTE digite o seu dominio que está apontado para seu IP para o SSL funcionar?\nDigite: ")
+    print("\n" + "─" * 50)
+    domain = input("\n🌐 \033[1;37mDigite o seu domínio (ex: meusite.com.br):\033[0m\n\033[1;33m➤ \033[0m")
     while not domain:
-        print("\033[1;31m✗ Domínio obrigatório.\033[0m")
-        domain = input("Digite o domínio: ")
+        print("\033[1;31m❌ Domínio obrigatório.\033[0m")
+        domain = input("\033[1;33m🌐 Digite o domínio: \033[0m")
     
-    email = input("\nDigite seu email para notificações do Let's Encrypt (opcional, pressione Enter para pular): ").strip()
+    email = input("\n📧 \033[1;37mDigite seu email para notificações (opcional):\033[0m\n\033[1;33m➤ \033[0m").strip()
     
     if generate_ssl_cert(domain, email):
         config_manager.config['ssl']['enabled'] = True
         config_manager.config['ssl']['domain'] = domain
         config_manager.config['ssl']['email'] = email
-        config_manager.config['ssl']['cert_path'] = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-        config_manager.config['ssl']['key_path'] = f"/etc/letsencrypt/live/{domain}/privkey.pem"
-        config_manager.save_config()
-        
-        # Adicionar portas conforme opção
-        if option == '1':
-            if not os.path.exists(PORTS_FILE) or '80' not in open(PORTS_FILE).read():
-                add_proxy_port(80)
-            add_proxy_port(443)
-        elif option == '2':
-            add_proxy_port(443)
-    else:
-        print("\033[1;31m✗ Falha ao configurar SSL.\033[0m")
-
-def remove_ssl(config_manager):
-    if not config_manager.config['ssl']['enabled']:
-        print("\n\033[1;31mSSL já está desativado.\033[0m")
-        return
-    
-    config_manager.config['ssl']['enabled'] = False
-    config_manager.config['ssl']['cert_path'] = ''
-    config_manager.config['ssl']['key_path'] = ''
-    config_manager.save_config()
-    print("\nSSL desativado com sucesso!")
-    
-    # Reiniciar portas 80 e 443 se estiverem ativas
-    for port in [80, 443]:
-        if is_port_active(port):
-            restart_proxy_port(port)
-
-def show_menu():
-    config_manager = ConfigManager()
-    while True:
-        os.system('clear')
-        print("\033[1;32mMULTIFLOW PROXY\033[0m")
-        print("\033[0;34m---------------------------\033[0m\n")
-        
-        proxy_status = get_proxy_status()
-        if "ATIVO" in proxy_status:
-            status_color = "\033[1;32m"
-        elif "INATIVO" in proxy_status:
-            status_color = "\033[1;33m"
-        else:
-            status_color = "\033[1;31m"
-        print(f"Status: {status_color}{proxy_status}\033[0m")
-        
-        active_ports = "Nenhuma porta configurada"
-        if os.path.exists(PORTS_FILE) and os.path.getsize(PORTS_FILE) > 0:
-            with open(PORTS_FILE, 'r') as f:
-                ports = f.read().splitlines()
-                if ports:
-                    active_ports = ", ".join(ports)
-        print(f"Portas: \033[1;32m{active_ports}\033[0m")
-        
-        ssl_status = "\033[1;32mAtivado\033[0m" if config_manager.config['ssl']['enabled'] else "\033[1;31mDesativado\033[0m"
-        print(f"SSL: {ssl_status}\n")
-        
-        print("\033[0;34m---------------------------\033[0m")
-        print("\033[1;32mMENU\033[0m")
-        print("\033[0;34m---------------------------\033[0m")
-        
-        if not is_proxy_installed():
-            print("\033[1;33m[1]\033[0m Instalar Proxy")
-            print("\033[1;33m[0]\033[0m Sair")
-        else:
-            print("\033[1;33m[1]\033[0m Adicionar Porta")
-            print("\033[1;33m[2]\033[0m Remover Porta")
-            print("\033[1;33m[3]\033[0m Reiniciar Porta")
-            print("\033[1;33m[4]\033[0m Desinstalar Proxy")
-            print("\033[1;33m[5]\033[0m Alternar Traffic Shaping")
-            print("\033[1;33m[6]\033[0m Adicionar SSL")
-            print("\033[1;33m[7]\033[0m Remover SSL")
-            print("\033[1;33m[0]\033[0m Sair")
-        
-        print("\n\033[0;34m---------------------------\033[0m")
-        option = input("\033[1;33mEscolha uma opção: \033[0m")
-        
-        if option == '1':
-            if not is_proxy_installed():
-                install_proxy()
-                port_input = input("\n\033[1;33mDeseja iniciar proxy em qual porta? \033[0m")
-                while not port_input.isdigit() or int(port_input) < 1 or int(port_input) > 65535:
-                    print("\033[1;31m✗ Digite uma porta válida (1-65535).\033[0m")
-                    port_input = input("\033[1;33mDeseja iniciar proxy em qual porta? \033[0m")
-                add_proxy_port(int(port_input))
-            else:
-                port = input("\n\033[1;33m➜ Digite a porta para adicionar: \033[0m")
-                while not port.isdigit() or int(port) < 1 or int(port) > 65535:
-                    print("\033[1;31m✗ Digite uma porta válida (1-65535).\033[0m")
-                    port = input("\033[1;33m➜ Digite a porta: \033[0m")
-                add_proxy_port(int(port))
-            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
-           
-        elif option == '2' and is_proxy_installed():
-            port_info = list_active_ports()
-            if port_info:
-                print("\n\033[1;33mPortas ativas:\033[0m")
-                for port, status in port_info:
-                    print(f" \033[1;32m{port}\033[0m - {status}")
-                port = input("\n\033[1;33m➜ Digite a porta para remover: \033[0m")
-                while not port.isdigit():
-                    print("\033[1;31m✗ Digite uma porta válida.\033[0m")
-                    port = input("\033[1;33m➜ Digite a porta: \033[0m")
-                del_proxy_port(int(port))
-            else:
-                print("\033[1;31m✗ Nenhuma porta ativa para remover.\033[0m")
-            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
-           
-        elif option == '3' and is_proxy_installed():
-            port_info = list_active_ports()
-            if port_info:
-                print("\n\033[1;33mPortas disponíveis para reiniciar:\033[0m")
-                for port, status in port_info:
-                    print(f" \033[1;32m{port}\033[0m - {status}")
-                port = input("\n\033[1;33m➜ Digite a porta para reiniciar (ou 'all' para todas): \033[0m")
-               
-                if port.lower() == 'all':
-                    for p, _ in port_info:
-                        restart_proxy_port(int(p))
-                elif port.isdigit():
-                    restart_proxy_port(int(port))
-                else:
-                    print("\033[1;31m✗ Opção inválida.\033[0m")
-            else:
-                print("\033[1;31m✗ Nenhuma porta ativa para reiniciar.\033[0m")
-            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
-           
-        elif option == '4' and is_proxy_installed():
-            uninstall_proxy()
-            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
-           
-        elif option == '5' and is_proxy_installed():
-            enabled = config_manager.toggle_traffic_shaping()
-            status = "\033[1;32mativada\033[0m" if enabled else "\033[1;31mdesativada\033[0m"
-            print(f"\nTraffic Shaping {status} com sucesso!")
-            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
-           
-        elif option == '6' and is_proxy_installed():
-            configure_ssl(config_manager)
-            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
-           
-        elif option == '7' and is_proxy_installed():
-            remove_ssl(config_manager)
-            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
-           
-        elif option == '0':
-            print("\nSaindo...")
-            sys.exit(0)
-           
-        else:
-            print("\n\033[1;31m✗ Opção inválida.\033[0m")
-            input("\033[1;33mPressione Enter para continuar...\033[0m")
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and ("--port" in sys.argv):
-        asyncio.run(run_proxy())
-    else:
-        if not is_root():
-            error_exit("EXECUTE COMO ROOT para acessar o menu.")
-        show_menu()
+        config_manager.config['ssl']['cert_path'] = f"/etc/letsencrypt
