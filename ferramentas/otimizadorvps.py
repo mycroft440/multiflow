@@ -157,14 +157,14 @@ def display_menu():
     """Exibe o menu principal."""
     clear_screen()
     print("\033[0;34m━" * 10, "\033[1;32m OTIMIZADOR DE VPS ", "\033[0;34m━" * 10, "\n")
-    print(" \033[1;33m1.\033[1;32m Executar todas as funçoes do 2 ao 5\033[0m")
-    print("\n \033[1;33m2.\033[1;37m Limpar Cache de Memória RAM")
-    print(" \033[1;33m3.\033[1;37m Limpar Cache de Pacotes (APT)")
-    print(" \033[1;33m4.\033[1;37m Remover Pacotes Inúteis (Autoremove)")
-    print(" \033[1;33m5.\033[1;37m Limpar Logs Antigos do Sistema")
-    print("\n \033[1;33m6.\033[1;36m Adicionar Limpeza Automática (Otimizada)\033[0m")
-    print(" \033[1;33m7.\033[1;31m Remover Limpeza Automática\033[0m")
-    print("\n \033[1;33m0.\033[1;37m Sair")
+    print("[ \033[1;33m1\033[0m ] \033[1;32mAtivar Limpeza Automatica\033[0m")
+    print("[ \033[1;33m2\033[0m ] \033[1;32mExecutar as funçoes do 3 ao 6\033[0m")
+    print("[ \033[1;33m3\033[0m ] \033[1;32mLimpar Ram\033[0m")
+    print("[ \033[1;33m4\033[0m ] \033[1;32mLimpar Pacotes\033[0m")
+    print("[ \033[1;33m5\033[0m ] \033[1;32mRemover Pacotes Inuteis\033[0m")
+    print("[ \033[1;33m6\033[0m ] \033[1;32mLimpar Logs Antigos\033[0m")
+    print("[ \033[1;33m7\033[0m ] \033[1;33mRemover Limpeza Automatica\033[0m")
+    print("[ \033[1;33m0\033[0m ] \033[1;31mSair\033[0m")
     print("\033[0;34m" + "─" * 48 + "\033[0m\n")
 
 def main():
@@ -175,17 +175,17 @@ def main():
         choice = input("\033[1;36mEscolha uma opção: \033[0m")
         
         if choice == '1':
-            run_all_optimizations()
-        elif choice == '2':
-            clean_memory_cache()
-        elif choice == '3':
-            clean_apt_cache()
-        elif choice == '4':
-            autoremove_packages()
-        elif choice == '5':
-            clean_journal_logs()
-        elif choice == '6':
             setup_automatic_cleaning()
+        elif choice == '2':
+            run_all_optimizations()
+        elif choice == '3':
+            clean_memory_cache()
+        elif choice == '4':
+            clean_apt_cache()
+        elif choice == '5':
+            autoremove_packages()
+        elif choice == '6':
+            clean_journal_logs()
         elif choice == '7':
             remove_automatic_cleaning()
         elif choice == '0':
