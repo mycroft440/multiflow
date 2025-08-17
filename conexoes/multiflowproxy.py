@@ -269,6 +269,27 @@ def install_proxy():
         open(PORTS_FILE, 'w').close()
     print("\n✓ Instalação concluída com sucesso!")
     print("Digite 'multiflowproxy' para acessar o menu.")
+    # Perguntar pela porta e iniciar o proxy nessa porta
+    port = input("\n➜ Digite a porta para iniciar o proxy: ")
+    while not port.isdigit() or int(port) < 1 or int(port) > 65535:
+        print("✗ Digite uma porta válida (1-65535).")
+        port = input("➜ Digite a porta: ")
+    print("\nStatus de conexão disponíveis:")
+    print("1 - Switching Protocols (padrão)")
+    print("2 - WebSocket")
+    print("3 - Connection Established")
+    print("4 - Custom (personalizado)")
+    status_option = input("\n➜ Escolha o status (1-4): ")
+    status_map = {
+        '1': "Switching Protocols",
+        '2': "WebSocket",
+        '3': "Connection Established"
+    }
+    if status_option == '4':
+        status = input("➜ Digite o status personalizado: ")
+    else:
+        status = status_map.get(status_option, "Switching Protocols")
+    add_proxy_port(int(port), status)
 def uninstall_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
@@ -287,23 +308,6 @@ def uninstall_proxy():
     if os.path.exists('/usr/local/bin/multiflowproxy'):
         os.remove('/usr/local/bin/multiflowproxy')
     print("\n✓ Desinstalação concluída com sucesso.")
-def show_ports_details():
-    """Mostra detalhes das portas"""
-    os.system('clear')
-    print("================================================")
-    print("| DETALHES DAS PORTAS ATIVAS |")
-    print("================================================")
-   
-    port_info = list_active_ports()
-   
-    if not port_info:
-        print("| Nenhuma porta configurada |")
-    else:
-        for port, status in port_info:
-            print(f"| Porta {port:<6} - {status:<30}|")
-   
-    print("================================================")
-    input("\nPressione Enter para voltar ao menu...")
 def show_menu():
     while True:
         os.system('clear')
@@ -341,50 +345,24 @@ def show_menu():
             print("| 1 - Instalar Proxy |")
             print("| 0 - Sair |")
         else:
-            print("| 1 - Reinstalar/Atualizar Proxy |")
-            print("| 2 - Abrir Nova Porta |")
-            print("| 3 - Remover Porta |")
-            print("| 4 - Reiniciar Proxy |")
-            print("| 5 - Ver Detalhes das Portas |")
-            print("| 6 - Desinstalar Proxy |")
+            print("| 1 - Adicionar nova porta |")
+            print("| 2 - Remover porta |")
+            print("| 3 - Reiniciar Proxy |")
+            print("| 4 - Reinstalar |")
+            print("| 5 - Desinstalar |")
             print("| 0 - Sair |")
        
         print("================================================")
         print()
         option = input(" ➜ Selecione uma opção: ")
         if option == '1':
-            install_proxy()
+            if not is_proxy_installed():
+                install_proxy()
+            else:
+                install_proxy()  # Reinstalar
             input("\n➜ Pressione Enter para continuar...")
            
         elif option == '2' and is_proxy_installed():
-            port = input("\n➜ Digite a porta: ")
-            while not port.isdigit() or int(port) < 1 or int(port) > 65535:
-                print("✗ Digite uma porta válida (1-65535).")
-                port = input("➜ Digite a porta: ")
-           
-            print("\nStatus de conexão disponíveis:")
-            print("1 - Switching Protocols (padrão)")
-            print("2 - WebSocket")
-            print("3 - Connection Established")
-            print("4 - Custom (personalizado)")
-           
-            status_option = input("\n➜ Escolha o status (1-4): ")
-           
-            status_map = {
-                '1': "Switching Protocols",
-                '2': "WebSocket",
-                '3': "Connection Established"
-            }
-           
-            if status_option == '4':
-                status = input("➜ Digite o status personalizado: ")
-            else:
-                status = status_map.get(status_option, "Switching Protocols")
-           
-            add_proxy_port(int(port), status)
-            input("\n➜ Pressione Enter para continuar...")
-           
-        elif option == '3' and is_proxy_installed():
             port_info = list_active_ports()
             if port_info:
                 print("\nPortas ativas:")
@@ -399,7 +377,7 @@ def show_menu():
                 print("✗ Nenhuma porta ativa para remover.")
             input("\n➜ Pressione Enter para continuar...")
            
-        elif option == '4' and is_proxy_installed():
+        elif option == '3' and is_proxy_installed():
             port_info = list_active_ports()
             if port_info:
                 print("\nPortas disponíveis para reiniciar:")
@@ -418,10 +396,11 @@ def show_menu():
                 print("✗ Nenhuma porta ativa para reiniciar.")
             input("\n➜ Pressione Enter para continuar...")
            
-        elif option == '5' and is_proxy_installed():
-            show_ports_details()
+        elif option == '4' and is_proxy_installed():
+            install_proxy()  # Reinstalar
+            input("\n➜ Pressione Enter para continuar...")
            
-        elif option == '6' and is_proxy_installed():
+        elif option == '5' and is_proxy_installed():
             uninstall_proxy()
             input("\n➜ Pressione Enter para continuar...")
            
