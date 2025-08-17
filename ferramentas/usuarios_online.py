@@ -329,7 +329,7 @@ def build_realtime_monitor_frame(monitor):
     s.append(menu_option("0", "Voltar ao Menu Principal", "", MC.YELLOW_GRADIENT))
     s.append(footer_line(f"Atualização: TEMPO REAL"))
     
-    return "".join(s)
+    return "\n".join(s)  # Changed to join with \n for consistent line endings
 
 def monitor_realtime():
     """Monitor de alta precisão em tempo real"""
@@ -346,6 +346,7 @@ def monitor_realtime():
         import psutil
     
     TerminalManager.enter_alt_screen()
+    print('\033[?25l')  # Hide cursor to reduce flicker
     monitor = RealTimeMonitor()
     refresh_rate = 1  # Atualização a cada 1 segundo por padrão
     paused = False
@@ -366,7 +367,11 @@ def monitor_realtime():
             
             # Atualiza display se não estiver pausado e passou o tempo
             if not paused and (current_time - last_update) >= refresh_rate:
-                TerminalManager.render(build_realtime_monitor_frame(monitor))
+                content = build_realtime_monitor_frame(monitor)
+                # Custom render to minimize flicker: move to home, print lines with EOL clear, then clear to EOS
+                lines = content.splitlines()
+                output = '\033[H' + '\n'.join(line + '\033[K' for line in lines) + '\033[J'
+                print(output, end='', flush=True)
                 last_update = current_time
             
             # Verifica input sem bloquear
@@ -394,6 +399,7 @@ def monitor_realtime():
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
         except:
             pass
+        print('\033[?25h')  # Show cursor
         TerminalManager.leave_alt_screen()
     
     return True, "Monitor encerrado"
