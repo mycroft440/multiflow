@@ -342,6 +342,12 @@ def show_menu():
         if option == '1':
             if not is_proxy_installed():
                 install_proxy()
+                # Após instalação, perguntar pela porta e iniciar
+                port_input = input("\nDeseja iniciar proxy em qual porta? ")
+                while not port_input.isdigit() or int(port_input) < 1 or int(port_input) > 65535:
+                    print("✗ Digite uma porta válida (1-65535).")
+                    port_input = input("Deseja iniciar proxy em qual porta? ")
+                add_proxy_port(int(port_input))
             else:
                 # Adicionar nova porta
                 port = input("\n➜ Digite a porta para adicionar: ")
