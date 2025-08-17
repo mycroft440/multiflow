@@ -212,10 +212,73 @@ def list_active_ports():
 def install_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
-    show_progress("Verificando sistema...")
-    # (O código de instalação continua igual, mas foi truncado no documento original; assuma que está completo)
-    # ... (adicionar o resto se necessário, mas como não foi alterado, mantenho)
-    print("Instalação concluída.")
+    
+    TOTAL_STEPS = 9
+    CURRENT_STEP = 0
+    
+    def increment_step():
+        nonlocal CURRENT_STEP
+        CURRENT_STEP += 1
+        show_progress(f"[{CURRENT_STEP}/{TOTAL_STEPS}]")
+
+    os.system('clear')
+    show_progress("Atualizando repositórios...")
+    os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
+    try:
+        subprocess.run(['apt', 'update', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        error_exit("Falha ao atualizar os repositórios")
+    increment_step()
+
+    show_progress("Verificando o sistema...")
+    try:
+        subprocess.run(['apt', 'install', 'lsb-release', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        error_exit("Falha ao instalar lsb-release")
+    increment_step()
+
+    os_name = subprocess.run(['lsb_release', '-is'], capture_output=True, text=True).stdout.strip()
+    version = subprocess.run(['lsb_release', '-rs'], capture_output=True, text=True).stdout.strip()
+
+    if os_name == 'Ubuntu':
+        if not version.startswith(('24.', '22.', '20.', '18.')):
+            error_exit("Versão do Ubuntu não suportada. Use 18, 20, 22 ou 24.")
+    elif os_name == 'Debian':
+        if not version.startswith(('12', '11', '10', '9')):
+            error_exit("Versão do Debian não suportada. Use 9, 10, 11 ou 12.")
+    else:
+        error_exit("Sistema não suportado. Use Ubuntu ou Debian.")
+    show_progress("Sistema suportado, continuando...")
+    increment_step()
+
+    show_progress("Atualizando o sistema e instalando pacotes...")
+    try:
+        subprocess.run(['apt', 'upgrade', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['apt-get', 'install', 'curl', 'build-essential', 'git', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        error_exit("Falha ao atualizar o sistema ou instalar pacotes")
+    increment_step()
+
+    show_progress("Criando diretório /opt/multiflowproxy...")
+    os.makedirs('/opt/multiflowproxy', exist_ok=True)
+    increment_step()
+
+    # Assumindo que o script Python é o próprio arquivo; copie-o para o dir
+    show_progress("Copiando script...")
+    current_script = os.path.abspath(sys.argv[0])
+    shutil.copy(current_script, '/opt/multiflowproxy/multiflowproxy.py')
+    increment_step()
+
+    show_progress("Configurando permissões...")
+    os.chmod('/opt/multiflowproxy/multiflowproxy.py', 0o755)
+    os.symlink('/opt/multiflowproxy/multiflowproxy.py', '/usr/local/bin/multiflowproxy')
+    increment_step()
+
+    show_progress("Limpando temporários...")
+    # Adicione limpeza se necessário, por exemplo, remoção de arquivos temporários se existirem
+    increment_step()
+
+    print("Instalação concluída com sucesso. Digite 'multiflowproxy' para acessar o menu.")
 def uninstall_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
