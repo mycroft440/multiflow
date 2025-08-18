@@ -200,27 +200,7 @@ def add_proxy_port(port):
     command = "/usr/bin/python3 " + PROXY_DIR + "/multiflowproxy.py --port " + str(port)
     service_name = "proxy" + str(port) + ".service"
     service_file = "/etc/systemd/system/" + service_name
-    service_content = """[Unit]
-Description=MultiFlowProxy on port """ + str(port) + """
-After=network.target
-
-[Service]
-LimitNOFILE=infinity
-LimitNPROC=infinity
-LimitMEMLOCK=infinity
-LimitSTACK=infinity
-LimitCORE=0
-LimitAS=infinity
-LimitRSS=infinity
-LimitCPU=infinity
-LimitFSIZE=infinity
-Type=simple
-ExecStart=""" + command + """
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-"""
+    service_content = "[Unit]\nDescription=MultiFlowProxy on port " + str(port) + "\nAfter=network.target\n\n[Service]\nLimitNOFILE=infinity\nLimitNPROC=infinity\nLimitMEMLOCK=infinity\nLimitSTACK=infinity\nLimitCORE=0\nLimitAS=infinity\nLimitRSS=infinity\nLimitCPU=infinity\nLimitFSIZE=infinity\nType=simple\nExecStart=" + command + "\nRestart=always\n\n[Install]\nWantedBy=multi-user.target\n"
     with open(service_file, 'w') as f:
         f.write(service_content)
     subprocess.run(['systemctl', 'daemon-reload'])
