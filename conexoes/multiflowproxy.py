@@ -4,8 +4,6 @@ import socket
 import os
 import subprocess
 import shutil
-import time
-import random
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
 
@@ -115,22 +113,14 @@ async def handle_client(reader, writer):
         "511 Network Authentication Required"
     ]
    
-    headers = "Connection: keep-alive\r\n" + \
-              "Date: {0}\r\n".format(time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())) + \
-              "Content-Type: text/html; charset=UTF-8\r\n" + \
-              "Cache-Control: no-cache\r\n" + \
-              "X-Content-Type-Options: nosniff\r\n" + \
-              "X-Frame-Options: DENY\r\n" + \
-              "X-XSS-Protection: 1; mode=block\r\n" + \
-              "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" + \
-              "Set-Cookie: sessionid={0}; Path=/; HttpOnly\r\n\r\n".format(random.randint(100000, 999999))
+    headers = "\r\n"  # Sem headers extras
    
     if cached_status:
         status_options = [cached_status] + [s for s in status_options if s != cached_status]  # Prioriza o cached
     
     successful_status = None
     for status in status_options:
-        response = "HTTP/1.1 {0}\r\n{1}".format(status, headers).encode()
+        response = f"HTTP/1.1 {status}\r\n\r\n".encode()
         
         writer.write(response)
         await writer.drain()
@@ -214,8 +204,8 @@ def add_proxy_port(port):
 
     command = f"/usr/bin/python3 /opt/multiflowproxy/proxy.py --port {port}"
     service_file_path = f"/etc/systemd/system/proxy{port}.service"
-    service_content = """[Unit]
-Description=MultiflowProxy{0}
+    service_content = f"""[Unit]
+Description=MultiflowProxy{port}
 After=network.target
 
 [Service]
@@ -229,14 +219,14 @@ LimitRSS=infinity
 LimitCPU=infinity
 LimitFSIZE=infinity
 Type=simple
-ExecStart={1}
+ExecStart={command}
 Restart=always
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-""".format(port, command)
+"""
 
     with open(service_file_path, 'w') as f:
         f.write(service_content)
