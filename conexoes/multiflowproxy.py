@@ -115,10 +115,7 @@ async def handle_client(reader, writer):
         "511 Network Authentication Required"
     ]
    
-    server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
-   
-    headers = "Server: {0}\r\n".format(random.choice(server_variants)) + \
-              "Connection: keep-alive\r\n" + \
+    headers = "Connection: keep-alive\r\n" + \
               "Date: {0}\r\n".format(time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())) + \
               "Content-Type: text/html; charset=UTF-8\r\n" + \
               "Cache-Control: no-cache\r\n" + \
