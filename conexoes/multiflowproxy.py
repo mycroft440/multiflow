@@ -51,27 +51,27 @@ async def server_task(port, sock=None):
 
 async def handle_client(reader: StreamReader, writer: StreamWriter):
     port = writer.get_extra_info('sockname')[1]
-    status_101 = "Switching Protocols"
-    status_200 = "OK"
-    await writer.write(f"HTTP/1.1 101 {status_101}\r\n\r\n".encode())
+    status = port_to_status.get(port, "@MultiProtocolo")
+    await writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
     await writer.drain()
 
     buffer = await reader.read(1024)
-    await writer.write(f"HTTP/1.1 200 {status_200}\r\n\r\n".encode())
+    await writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
     await writer.drain()
 
-    addr_proxy = "127.0.0.1:22"
+    addr_proxy = "0.0.0.0:22"
     try:
         data = await asyncio.wait_for(peek_stream(reader), timeout=1.0)
         if "SSH" in data or not data:
-            addr_proxy = "127.0.0.1:22"
+            addr_proxy = "0.0.0.0:22"
         else:
-            addr_proxy = "127.0.0.1:1194"
+            addr_proxy = "0.0.0.0:1194"
     except asyncio.TimeoutError:
-        addr_proxy = "127.0.0.1:22"
+        addr_proxy = "0.0.0.0:22"
 
     try:
-        server_reader, server_writer = await asyncio.open_connection(*addr_proxy.split(':'))
+        host, port_str = addr_proxy.split(':')
+        server_reader, server_writer = await asyncio.open_connection(host, int(port_str))
     except Exception as e:
         print("erro ao iniciar conexão para o proxy")
         writer.close()
@@ -81,6 +81,12 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
     t1 = asyncio.create_task(transfer_data(reader, server_writer))
     t2 = asyncio.create_task(transfer_data(server_reader, writer))
     await asyncio.gather(t1, t2)
+
+    # Fechar conexões ao final
+    writer.close()
+    await writer.wait_closed()
+    server_writer.close()
+    await server_writer.wait_closed()
 
 async def transfer_data(source: StreamReader, dest: StreamWriter):
     while True:
@@ -94,7 +100,8 @@ async def peek_stream(reader: StreamReader):
     peek_buffer = bytearray(8192)
     sock = reader._transport.get_extra_info('socket')
     loop = asyncio.get_running_loop()
-    await loop.sock_recv(sock, 0)  # Poll for readability
+    # Poll for readability
+    await loop.sock_recv(sock, 0)
     n = await loop.sock_recv_into(sock, peek_buffer, 8192, socket.MSG_PEEK)
     return peek_buffer[:n].decode(errors='ignore')
 
