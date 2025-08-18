@@ -139,7 +139,7 @@ async def handle_client(reader, writer):
     writer.write("HTTP/1.1 101 " + status + "\r\n\r\n".encode())
     await writer.drain()
     buffer = await reader.read(1024)
-    writer.write("HTTP/1.1 200 Connection established\r\n\r\n".encode())
+    writer.write("HTTP/1.1 200 OK\r\n\r\n".encode())
     await writer.drain()
     try:
         data = await asyncio.wait_for(peek_stream(writer.transport), timeout=1.0)
@@ -200,7 +200,27 @@ def add_proxy_port(port):
     command = "/usr/bin/python3 " + PROXY_DIR + "/multiflowproxy.py --port " + str(port)
     service_name = "proxy" + str(port) + ".service"
     service_file = "/etc/systemd/system/" + service_name
-    service_content = "[Unit]\nDescription=MultiFlowProxy on port " + str(port) + "\nAfter=network.target\n\n[Service]\nLimitNOFILE=infinity\nLimitNPROC=infinity\nLimitMEMLOCK=infinity\nLimitSTACK=infinity\nLimitCORE=0\nLimitAS=infinity\nLimitRSS=infinity\nLimitCPU=infinity\nLimitFSIZE=infinity\nType=simple\nExecStart=" + command + "\nRestart=always\n\n[Install]\nWantedBy=multi-user.target\n"
+    service_content = """[Unit]
+Description=MultiFlowProxy on port """ + str(port) + """
+After=network.target
+
+[Service]
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitMEMLOCK=infinity
+LimitSTACK=infinity
+LimitCORE=0
+LimitAS=infinity
+LimitRSS=infinity
+LimitCPU=infinity
+LimitFSIZE=infinity
+Type=simple
+ExecStart=""" + command + """
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+"""
     with open(service_file, 'w') as f:
         f.write(service_content)
     subprocess.run(['systemctl', 'daemon-reload'])
