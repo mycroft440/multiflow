@@ -51,12 +51,13 @@ async def server_task(port, sock=None):
 
 async def handle_client(reader: StreamReader, writer: StreamWriter):
     port = writer.get_extra_info('sockname')[1]
-    status = port_to_status.get(port, "@MultiProtocolo")
-    await writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
+    status_101 = "Switching Protocols"
+    status_200 = "OK"
+    await writer.write(f"HTTP/1.1 101 {status_101}\r\n\r\n".encode())
     await writer.drain()
 
     buffer = await reader.read(1024)
-    await writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
+    await writer.write(f"HTTP/1.1 200 {status_200}\r\n\r\n".encode())
     await writer.drain()
 
     addr_proxy = "127.0.0.1:22"
@@ -88,11 +89,13 @@ async def transfer_data(source: StreamReader, dest: StreamWriter):
             break
         dest.write(data)
         await dest.drain()
-    # Removido close explícito para match original
 
 async def peek_stream(reader: StreamReader):
     peek_buffer = bytearray(8192)
-    n = await reader._transport._loop.sock_recv_into(reader._transport.get_extra_info('socket'), peek_buffer, 8192, socket.MSG_PEEK)
+    sock = reader._transport.get_extra_info('socket')
+    loop = asyncio.get_running_loop()
+    await loop.sock_recv(sock, 0)  # Poll for readability
+    n = await loop.sock_recv_into(sock, peek_buffer, 8192, socket.MSG_PEEK)
     return peek_buffer[:n].decode(errors='ignore')
 
 def get_status():
