@@ -280,14 +280,6 @@ def del_proxy_port(port):
 
     print(f"Porta {port} fechada com sucesso.")
 
-def restart_proxy_port(port):
-    try:
-        subprocess.run(['systemctl', 'restart', f"proxy{port}.service"], check=True)
-        print(f"Proxy na porta {port} reiniciado com sucesso.")
-    except subprocess.CalledProcessError as e:
-        print(f"Falha ao reiniciar o serviço: {e.stderr.decode() if e.stderr else str(e)}")
-        print(f"Dica: Rode 'systemctl status proxy{port}.service' ou 'journalctl -xeu proxy{port}.service' para detalhes.")
-
 def install_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
@@ -331,7 +323,14 @@ def install_proxy():
     if not os.path.exists(PORTS_FILE):
         open(PORTS_FILE, 'w').close()
 
-    print("Instalação concluída com sucesso. Digite 'multiflowproxy' para acessar o menu.")
+    print("Instalação concluída com sucesso.")
+
+    # Iniciar na porta desejada
+    port = input("Digite a porta para iniciar o proxy: ")
+    while not port.isdigit() or int(port) < 1 or int(port) > 65535:
+        print("Porta inválida. Tente novamente.")
+        port = input("Digite a porta: ")
+    add_proxy_port(int(port))
 
 def uninstall_proxy():
     if not is_root():
@@ -353,60 +352,43 @@ def uninstall_proxy():
 def show_menu():
     while True:
         os.system('clear')
-        print("------------------------------------------------")
-        print("|                  MULTIFLOW PROXY             |")
-        print("------------------------------------------------")
-
+        print("--- MULTIFLOW PROXY ---")
         active_ports = "nenhuma"
         if os.path.exists(PORTS_FILE) and os.path.getsize(PORTS_FILE) > 0:
             with open(PORTS_FILE, 'r') as f:
                 active_ports = " ".join(f.read().splitlines())
-
-        print(f"| Portas(s): {active_ports.ljust(34)}|")
-        print("------------------------------------------------")
-        print("| 1 - Instalar Proxy                           |")
-        print("| 2 - Abrir Porta                              |")
-        print("| 3 - Remover Porta                            |")
-        print("| 4 - Reiniciar Proxy                          |")
-        print("| 5 - Desinstalar Proxy                        |")
-        print("| 0 - Voltar                                   |")
-        print("------------------------------------------------")
-        print()
-
-        option = input(" --> Selecione uma opção: ")
-
+        print(f"Portas ativas: {active_ports}")
+        print("1 - Instalar Proxy")
+        print("2 - Abrir Porta")
+        print("3 - Remover Porta")
+        print("4 - Desinstalar Proxy")
+        print("0 - Sair")
+        option = input("Selecione: ")
         if option == '1':
             install_proxy()
-            input("> Pressione qualquer tecla para voltar ao menu.")
+            input("Pressione Enter para voltar.")
         elif option == '2':
-            port = input("Digite a porta: ")
+            port = input("Porta: ")
             while not port.isdigit():
-                print("Digite uma porta válida.")
-                port = input("Digite a porta: ")
+                print("Porta inválida.")
+                port = input("Porta: ")
             add_proxy_port(int(port))
-            input("> Porta ativada com sucesso. Pressione qualquer tecla para voltar ao menu.")
+            input("Pressione Enter para voltar.")
         elif option == '3':
-            port = input("Digite a porta: ")
+            port = input("Porta: ")
             while not port.isdigit():
-                print("Digite uma porta válida.")
-                port = input("Digite a porta: ")
+                print("Porta inválida.")
+                port = input("Porta: ")
             del_proxy_port(int(port))
-            input("> Porta desativada com sucesso. Pressione qualquer tecla para voltar ao menu.")
+            input("Pressione Enter para voltar.")
         elif option == '4':
-            port = input("Digite a porta para reiniciar: ")
-            while not port.isdigit():
-                print("Digite uma porta válida.")
-                port = input("Digite a porta: ")
-            restart_proxy_port(int(port))
-            input("> Proxy reiniciado com sucesso. Pressione qualquer tecla para voltar ao menu.")
-        elif option == '5':
             uninstall_proxy()
-            input("> Desinstalação concluída. Pressione qualquer tecla para voltar ao menu.")
+            input("Pressione Enter para voltar.")
         elif option == '0':
             sys.exit(0)
         else:
-            print("Opção inválida. Pressione qualquer tecla para voltar ao menu.")
-            input()
+            print("Opção inválida.")
+            input("Pressione Enter para voltar.")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and ("--port" in sys.argv):
