@@ -9,6 +9,9 @@ import random
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
 
+# Cache global para status que funcionaram por cliente (IP:porta)
+STATUS_CACHE = {}
+
 def is_root():
     return os.geteuid() == 0
 
@@ -35,14 +38,6 @@ def get_port_from_args():
             i += 1
     return port
 
-async def peek_stream(transport):
-    sock = transport.get_extra_info('socket')
-    if sock is None:
-        return ""
-    peek_buffer = sock.recv(8192, socket.MSG_PEEK)
-    data_str = peek_buffer.decode('utf-8', errors='replace')
-    return data_str
-
 async def transfer_data(source_reader, dest_writer):
     while True:
         data = await source_reader.read(8192)
@@ -53,6 +48,9 @@ async def transfer_data(source_reader, dest_writer):
     dest_writer.close()
 
 async def handle_client(reader, writer):
+    peername = writer.get_extra_info('peername')
+    cached_status = STATUS_CACHE.get(peername)
+    
     status_options = [
         "100 Continue",
         "101 Switching Protocols",
@@ -120,7 +118,6 @@ async def handle_client(reader, writer):
     server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
    
     headers = "Server: {0}\r\n".format(random.choice(server_variants)) + \
-              "Content-Length: 0\r\n" + \
               "Connection: keep-alive\r\n" + \
               "Date: {0}\r\n".format(time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())) + \
               "Content-Type: text/html; charset=UTF-8\r\n" + \
@@ -131,6 +128,10 @@ async def handle_client(reader, writer):
               "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" + \
               "Set-Cookie: sessionid={0}; Path=/; HttpOnly\r\n\r\n".format(random.randint(100000, 999999))
    
+    if cached_status:
+        status_options = [cached_status] + [s for s in status_options if s != cached_status]  # Prioriza o cached
+    
+    successful_status = None
     for status in status_options:
         response = "HTTP/1.1 {0}\r\n{1}".format(status, headers).encode()
         
@@ -140,14 +141,18 @@ async def handle_client(reader, writer):
         try:
             initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
             if initial_data:
+                successful_status = status
                 break
         except asyncio.TimeoutError:
             continue
    
-    else:
+    if not successful_status:
         writer.close()
         await writer.wait_closed()
         return
+   
+    # Cache o status que funcionou
+    STATUS_CACHE[peername] = successful_status
    
     data_str = initial_data.decode('utf-8', errors='replace')
     addr_proxy = "0.0.0.0:22"
