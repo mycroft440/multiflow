@@ -8,8 +8,11 @@ import json
 import time
 import random
 import ssl # Added for SSL support
-import gzip  # Added for compression
-import io    # Added for compression
+import logging # Added for logging
+LOG_FILE = "/opt/multiflowproxy/logs/proxy_log.txt"
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 PORTS_FILE = "/opt/multiflowproxy/ports"
 PROXY_DIR = "/opt/multiflowproxy"
 CONFIG_FILE = '/etc/proxy_config.json'
@@ -132,21 +135,27 @@ def is_port_active(port):
     except:
         return False
 async def transfer_data(source_reader, dest_writer, traffic_shaping):
-    while True:
-        data = await source_reader.read(8192)
-        if len(data) == 0:
-            break
-        if traffic_shaping['enabled']:
-            padding_size = random.randint(0, traffic_shaping['max_padding'])
-            delay = random.uniform(0, traffic_shaping['max_delay'])
-            data += bytes([0] * padding_size)
-            await asyncio.sleep(delay)
-        dest_writer.write(data)
-        await dest_writer.drain()
-    dest_writer.close()
+    try:
+        while True:
+            data = await source_reader.read(8192)
+            if len(data) == 0:
+                break
+            if traffic_shaping['enabled']:
+                padding_size = random.randint(0, traffic_shaping['max_padding'])
+                delay = random.uniform(0, traffic_shaping['max_delay'])
+                data += bytes([0] * padding_size)
+                await asyncio.sleep(delay)
+            dest_writer.write(data)
+            await dest_writer.drain()
+    except Exception as e:
+        logger.error(f"Error during data transfer: {e}")
+    finally:
+        dest_writer.close()
 async def handle_client(reader, writer):
     config_manager = ConfigManager()
     traffic_shaping = config_manager.config['traffic_shaping'].copy() # Copy to avoid mutable issues
+    peername = writer.get_extra_info('peername')
+    logger.info(f"New connection from {peername}")
    
     status_options = [
         "100 Continue",
@@ -227,21 +236,8 @@ async def handle_client(reader, writer):
               f"Set-Cookie: sessionid={random.randint(100000, 999999)}; Path=/; HttpOnly\r\n\r\n" # Adicione mais se necessário
    
     for status in status_options:
-        body = b""
-        if "200 OK" in status:
-            body = b"<html><body>OK</body></html>"
-            headers = headers.replace("Content-Length: 0", f"Content-Length: {len(body)}")
-        
-        # Compressão gzip para o body, se presente
-        if body:
-            out = io.BytesIO()
-            with gzip.GzipFile(fileobj=out, mode="w") as f:
-                f.write(body)
-            compressed_body = out.getvalue()
-            headers += "Content-Encoding: gzip\r\n"
-            response = f"HTTP/1.1 {status}\r\n{headers}".encode() + compressed_body
-        else:
-            response = f"HTTP/1.1 {status}\r\n{headers}".encode()
+        logger.debug(f"Sending status to {peername}: {status}")
+        response = f"HTTP/1.1 {status}\r\n{headers}".encode()
         
         writer.write(response)
         await writer.drain()
@@ -249,12 +245,16 @@ async def handle_client(reader, writer):
         try:
             initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
             if initial_data:
+                logger.info(f"Received initial data from {peername}")
+                logger.info(f"Successful status for {peername}: {status}")
                 break # Dados recebidos, prosseguir com este status
-        except (asyncio.TimeoutError, Exception):
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning(f"Timeout or error waiting for data from {peername} after {status}: {e}")
             continue # Tentar próximo status
    
     else:
         # Se nenhum status funcionar, fechar conexão
+        logger.warning(f"No successful status for connection from {peername}, closing")
         writer.close()
         await writer.wait_closed()
         return
@@ -265,12 +265,15 @@ async def handle_client(reader, writer):
         addr_proxy = "0.0.0.0:22"
     else:
         addr_proxy = "0.0.0.0:1194"
+    logger.info(f"Routing connection from {peername} to {addr_proxy}")
    
     try:
         server_reader, server_writer = await asyncio.open_connection(
             addr_proxy.split(':')[0], int(addr_proxy.split(':')[1])
         )
-    except Exception:
+        logger.info(f"Connected to backend {addr_proxy} for {peername}")
+    except Exception as e:
+        logger.error(f"Error connecting to backend {addr_proxy} for {peername}: {e}")
         print("erro ao iniciar conexão para o proxy")
         writer.close()
         await writer.wait_closed()
@@ -537,6 +540,38 @@ def remove_ssl(config_manager):
     for port in [80, 443]:
         if is_port_active(port):
             restart_proxy_port(port)
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+import threading
+import http.server
+import socketserver
+def start_temp_log_server():
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=os.path.dirname(LOG_FILE), **kwargs)
+    
+    try:
+        httpd = socketserver.TCPServer(("0.0.0.0", 8888), Handler)
+        server_thread = threading.Thread(target=httpd.serve_forever)
+        server_thread.daemon = True
+        server_thread.start()
+        server_ip = get_local_ip()
+        log_filename = os.path.basename(LOG_FILE)
+        print(f"Logs disponíveis temporariamente em http://{server_ip}:8888/{log_filename} por 2 minutos.")
+        time.sleep(120)
+        httpd.shutdown()
+        httpd.server_close()
+        server_thread.join()
+        print("Servidor de download temporário encerrado.")
+    except Exception as e:
+        print(f"Erro ao iniciar servidor de download: {e}")
 def show_menu():
     config_manager = ConfigManager()
     while True:
@@ -579,6 +614,7 @@ def show_menu():
             print("\033[1;33m[5]\033[0m Alternar Traffic Shaping")
             print("\033[1;33m[6]\033[0m Adicionar SSL")
             print("\033[1;33m[7]\033[0m Remover SSL")
+            print("\033[1;33m[8]\033[0m Download Logs Temporariamente")
             print("\033[1;33m[0]\033[0m Sair")
        
         print("\n\033[0;34m---------------------------\033[0m")
@@ -650,6 +686,10 @@ def show_menu():
           
         elif option == '7' and is_proxy_installed():
             remove_ssl(config_manager)
+            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
+          
+        elif option == '8' and is_proxy_installed():
+            start_temp_log_server()
             input("\n\033[1;33mPressione Enter para continuar...\033[0m")
           
         elif option == '0':
