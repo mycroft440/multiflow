@@ -136,10 +136,10 @@ async def transfer_data(source_reader, dest_writer):
 
 async def handle_client(reader, writer):
     status = "Switching Protocols"
-    writer.write("HTTP/1.1 101 " + status + "\r\n\r\n".encode())
+    writer.write(("HTTP/1.1 101 " + status + "\r\n\r\n").encode())
     await writer.drain()
     buffer = await reader.read(1024)
-    writer.write("HTTP/1.1 200 OK\r\n\r\n".encode())
+    writer.write(("HTTP/1.1 200 OK\r\n\r\n").encode())
     await writer.drain()
     try:
         data = await asyncio.wait_for(peek_stream(writer.transport), timeout=1.0)
