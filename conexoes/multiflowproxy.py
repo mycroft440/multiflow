@@ -6,6 +6,7 @@ import subprocess
 import shutil
 import time
 import random
+import re  # Adicionado para parsear request
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
 
@@ -51,51 +52,63 @@ async def handle_client(reader, writer):
     peername = writer.get_extra_info('peername')
     cached_status = STATUS_CACHE.get(peername)
     
-    status_options = [
-        "101 Switching Protocols",
-        "200 OK",
-        "204 No Content"
-    ]
-   
-    server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
-   
-    headers = f"Server: {random.choice(server_variants)}\r\n" \
-              f"Connection: keep-alive\r\n" \
-              f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n" \
-              f"Content-Type: text/html; charset=UTF-8\r\n" \
-              f"Cache-Control: no-cache\r\n" \
-              f"X-Content-Type-Options: nosniff\r\n" \
-              f"X-Frame-Options: DENY\r\n" \
-              f"X-XSS-Protection: 1; mode=block\r\n" \
-              f"Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" \
-              f"Set-Cookie: sessionid={random.randint(100000, 999999)}; Path=/; HttpOnly\r\n\r\n"
-   
-    if cached_status:
-        status_options = [cached_status] + [s for s in status_options if s != cached_status]  # Prioriza o cached
+    # Ler request inicial para parsear
+    request_data = await reader.read(1024)
+    request_str = request_data.decode('utf-8', errors='replace')
     
-    successful_status = None
-    for status in status_options:
-        response = f"HTTP/1.1 {status}\r\n{headers}".encode()
-        
+    # Verificar se é CONNECT method
+    if re.match(r'^CONNECT ', request_str, re.IGNORECASE):
+        # Responder 200 para CONNECT tunneling
+        response = "HTTP/1.1 200 Connection Established\r\n\r\n".encode()
         writer.write(response)
         await writer.drain()
-       
-        try:
-            initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
-            if initial_data:
-                successful_status = status
-                break
-        except asyncio.TimeoutError:
-            continue
-   
-    if not successful_status:
-        writer.close()
-        await writer.wait_closed()
-        return
-   
-    # Cache o status que funcionou
-    STATUS_CACHE[peername] = successful_status
-   
+        initial_data = await reader.read(1024)  # Ler data pós-response
+    else:
+        # Fallback para loop mínimo se não CONNECT
+        status_options = [
+            "101 Switching Protocols",
+            "200 OK",
+            "204 No Content"
+        ]
+        
+        server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
+        
+        headers = f"Server: {random.choice(server_variants)}\r\n" \
+                  f"Connection: keep-alive\r\n" \
+                  f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n" \
+                  f"Content-Type: text/html; charset=UTF-8\r\n" \
+                  f"Cache-Control: no-cache\r\n" \
+                  f"X-Content-Type-Options: nosniff\r\n" \
+                  f"X-Frame-Options: DENY\r\n" \
+                  f"X-XSS-Protection: 1; mode=block\r\n" \
+                  f"Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" \
+                  f"Set-Cookie: sessionid={random.randint(100000, 999999)}; Path=/; HttpOnly\r\n\r\n"
+        
+        if cached_status:
+            status_options = [cached_status] + [s for s in status_options if s != cached_status]
+        
+        successful_status = None
+        initial_data = b''
+        for status in status_options:
+            response = f"HTTP/1.1 {status}\r\n{headers}".encode()
+            writer.write(response)
+            await writer.drain()
+            
+            try:
+                initial_data = await asyncio.wait_for(reader.read(1024), timeout=3.0)  # Aumentado timeout
+                if initial_data:
+                    successful_status = status
+                    break
+            except asyncio.TimeoutError:
+                continue
+        
+        if not successful_status:
+            writer.close()
+            await writer.wait_closed()
+            return
+        
+        STATUS_CACHE[peername] = successful_status
+    
     data_str = initial_data.decode('utf-8', errors='replace')
     addr_proxy = "0.0.0.0:22"
     if "SSH" in data_str or not initial_data:
