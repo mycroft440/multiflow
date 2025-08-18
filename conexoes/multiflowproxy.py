@@ -59,15 +59,15 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
     await writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
     await writer.drain()
 
-    addr_proxy = "127.0.0.1:22"
+    addr_proxy = "0.0.0.0:22"
     try:
         data = await asyncio.wait_for(peek_stream(reader), timeout=1.0)
         if "SSH" in data or not data:
-            addr_proxy = "127.0.0.1:22"
+            addr_proxy = "0.0.0.0:22"
         else:
-            addr_proxy = "127.0.0.1:1194"
+            addr_proxy = "0.0.0.0:1194"
     except asyncio.TimeoutError:
-        addr_proxy = "127.0.0.1:22"
+        addr_proxy = "0.0.0.0:22"
 
     try:
         host, port_str = addr_proxy.split(':')
@@ -76,7 +76,7 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
         print("erro ao iniciar conexão para o proxy")
         writer.close()
         await writer.wait_closed()
-        return
+        return None  # Simula Ok(()) vazio do Rust
 
     t1 = asyncio.create_task(transfer_data(reader, server_writer))
     t2 = asyncio.create_task(transfer_data(server_reader, writer))
@@ -100,8 +100,6 @@ async def peek_stream(reader: StreamReader):
     peek_buffer = bytearray(8192)
     sock = reader._transport.get_extra_info('socket')
     loop = asyncio.get_running_loop()
-    # Poll for readability
-    await loop.sock_recv(sock, 0)
     n = await loop.sock_recv_into(sock, peek_buffer, 8192, socket.MSG_PEEK)
     return peek_buffer[:n].decode(errors='ignore')
 
@@ -252,3 +250,4 @@ if __name__ == "__main__":
         asyncio.run(main_single(port))
     else:
         asyncio.run(main_menu())
+        
