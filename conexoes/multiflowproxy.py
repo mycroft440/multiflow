@@ -6,16 +6,28 @@ import os
 
 PORTS_FILE = "/opt/multiprotocolo/ports"  # Caminho persistente; use /tmp para testes
 
+port_to_status = {}
+
 def load_ports():
     if os.path.exists(PORTS_FILE):
+        ports = {}
         with open(PORTS_FILE, 'r') as f:
-            return [int(line.strip()) for line in f if line.strip()]
-    return []
+            for line in f:
+                line = line.strip()
+                if line:
+                    if ':' in line:
+                        port_str, status = line.split(':', 1)
+                    else:
+                        port_str = line
+                        status = "@MultiProtocolo"
+                    ports[int(port_str)] = status
+        return ports
+    return {}
 
 def save_ports(ports):
     with open(PORTS_FILE, 'w') as f:
-        for port in ports:
-            f.write(f"{port}\n")
+        for port, status in ports.items():
+            f.write(f"{port}:{status}\n")
 
 def get_bound_socket(port):
     try:
@@ -38,7 +50,8 @@ async def server_task(port, sock=None):
             sock.close()
 
 async def handle_client(reader: StreamReader, writer: StreamWriter):
-    status = get_status()
+    port = writer.get_extra_info('sockname')[1]
+    status = port_to_status.get(port, "@MultiProtocolo")
     await writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
     await writer.drain()
 
@@ -75,8 +88,7 @@ async def transfer_data(source: StreamReader, dest: StreamWriter):
             break
         dest.write(data)
         await dest.drain()
-    dest.close()
-    await dest.wait_closed()
+    # Removido close explícito para match original
 
 async def peek_stream(reader: StreamReader):
     peek_buffer = bytearray(8192)
@@ -84,14 +96,20 @@ async def peek_stream(reader: StreamReader):
     return peek_buffer[:n].decode(errors='ignore')
 
 def get_status():
-    return "@MultiProtocolo"  # Pode customizar via args se precisar
+    args = sys.argv[1:]
+    status = "@MultiProtocolo"
+    for i in range(len(args)):
+        if args[i] == "--status":
+            if i + 1 < len(args):
+                status = args[i + 1]
+    return status
 
 def show_menu(ports):
     os.system('clear')
     print("                              Menu MultiProtocolo")
     print()
     status = "Ativo" if ports else "Parado"
-    portas_str = ", ".join(map(str, ports)) if ports else "Sem portas ativas"
+    portas_str = ", ".join(f"{port} ({status})" for port, status in ports.items()) if ports else "Sem portas ativas"
     print(f"Proxy: {status}")
     print(f"Portas: {portas_str}")
     print()
@@ -102,6 +120,7 @@ def show_menu(ports):
     print()
 
 async def main_menu():
+    global port_to_status
     dir_path = os.path.dirname(PORTS_FILE)
     if not os.path.exists(dir_path):
         try:
@@ -114,16 +133,17 @@ async def main_menu():
             return
     ports = load_ports()
     tasks = {}
-    valid_ports = []
-    for port in ports:
+    valid_ports = {}
+    for port, status in ports.items():
         s = get_bound_socket(port)
         if s is not None:
             task = asyncio.create_task(server_task(port, sock=s))
             tasks[port] = task
-            valid_ports.append(port)
+            valid_ports[port] = status
         else:
             print(f"Porta {port} não disponível, removendo.")
     ports = valid_ports
+    port_to_status = ports
     save_ports(ports)
 
     while True:
@@ -149,9 +169,12 @@ async def main_menu():
                     print("Porta já em uso ou erro ao bind.")
                     await asyncio.sleep(2)
                     continue
+                status_str = input("Digite o status de conexão (deixe vazio para @MultiProtocolo): ").strip()
+                status = status_str if status_str else "@MultiProtocolo"
                 task = asyncio.create_task(server_task(port, sock=s))
                 tasks[port] = task
-                ports.append(port)
+                ports[port] = status
+                port_to_status[port] = status
                 save_ports(ports)
                 print("Porta adicionada e iniciada.")
             except ValueError:
@@ -168,7 +191,8 @@ async def main_menu():
                 if port in ports:
                     tasks[port].cancel()
                     del tasks[port]
-                    ports.remove(port)
+                    del ports[port]
+                    del port_to_status[port]
                     save_ports(ports)
                     print("Porta removida.")
                 else:
@@ -180,6 +204,7 @@ async def main_menu():
             for task in tasks.values():
                 task.cancel()
             ports.clear()
+            port_to_status.clear()
             save_ports(ports)
             print("Proxy removido.")
             await asyncio.sleep(2)
@@ -191,5 +216,29 @@ async def main_menu():
             print("Opção inválida.")
             await asyncio.sleep(2)
 
+async def main_single(port):
+    global port_to_status
+    port_to_status[port] = get_status()
+    server = await asyncio.start_server(handle_client, '::', port)
+    print(f"Iniciando serviço na porta {port}")
+    async with server:
+        await server.serve_forever()
+
+def get_port():
+    args = sys.argv[1:]
+    port = None
+    for i in range(len(args)):
+        if args[i] == "--port":
+            if i + 1 < len(args):
+                try:
+                    port = int(args[i + 1])
+                except ValueError:
+                    port = None
+    return port
+
 if __name__ == "__main__":
-    asyncio.run(main_menu())
+    port = get_port()
+    if port is not None:
+        asyncio.run(main_single(port))
+    else:
+        asyncio.run(main_menu())
