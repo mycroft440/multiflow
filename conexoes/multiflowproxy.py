@@ -14,7 +14,7 @@ import http.server
 import socketserver
 LOG_FILE = "/opt/multiflowproxy/logs/proxy_log.txt"
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 PORTS_FILE = "/opt/multiflowproxy/ports"
 PROXY_DIR = "/opt/multiflowproxy"
@@ -248,6 +248,8 @@ async def handle_client(reader, writer):
         try:
             initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
             if initial_data:
+                logger.debug(f"Initial data (hex): {initial_data.hex()}")
+                logger.debug(f"Initial data (decoded with replace): {initial_data.decode('utf-8', errors='replace')}")
                 logger.info(f"Received initial data from {peername}")
                 logger.info(f"Successful status for {peername}: {status}")
                 break # Dados recebidos, prosseguir com este status
@@ -263,11 +265,10 @@ async def handle_client(reader, writer):
         return
    
     data_str = initial_data.decode('utf-8', errors='replace')
-    addr_proxy = "0.0.0.0:22"
-    if "SSH" in data_str or not initial_data:
+    addr_proxy = "0.0.0.0:1194"  # Default to OpenVPN
+    if data_str.startswith('SSH-'):
         addr_proxy = "0.0.0.0:22"
-    else:
-        addr_proxy = "0.0.0.0:1194"
+    logger.info(f"Detected protocol: {'SSH' if addr_proxy == '0.0.0.0:22' else 'OpenVPN'}")
     logger.info(f"Routing connection from {peername} to {addr_proxy}")
    
     try:
