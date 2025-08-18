@@ -67,8 +67,7 @@ async def handle_client(reader, writer):
         # Fallback para loop mínimo se não CONNECT
         status_options = [
             "101 Switching Protocols",
-            "200 OK",
-            "204 No Content"
+            "200 OK"
         ]
         
         server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
