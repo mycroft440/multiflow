@@ -17,11 +17,22 @@ def save_ports(ports):
         for port in ports:
             f.write(f"{port}\n")
 
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(('::', port))
+            return False
+        except OSError:
+            return True
+
 async def server_task(port):
-    server = await asyncio.start_server(handle_client, '::', port)
-    print(f"Server iniciado na porta {port}")
-    async with server:
-        await server.serve_forever()
+    try:
+        server = await asyncio.start_server(handle_client, '::', port)
+        print(f"Server iniciado na porta {port}")
+        async with server:
+            await server.serve_forever()
+    except OSError as e:
+        print(f"Erro ao iniciar server na porta {port}: {e}")
 
 async def handle_client(reader: StreamReader, writer: StreamWriter):
     status = get_status()
@@ -105,6 +116,10 @@ async def main_menu():
                 port = int(port_str)
                 if port in ports:
                     print("Porta já ativa.")
+                    await asyncio.sleep(2)
+                    continue
+                if is_port_in_use(port):
+                    print("Porta já em uso.")
                     await asyncio.sleep(2)
                     continue
                 task = asyncio.create_task(server_task(port))
