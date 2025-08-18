@@ -17,22 +17,24 @@ def save_ports(ports):
         for port in ports:
             f.write(f"{port}\n")
 
-def is_port_in_use(port):
-    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(('::', port))
-            return False
-        except OSError:
-            return True
-
-async def server_task(port):
+def get_bound_socket(port):
     try:
-        server = await asyncio.start_server(handle_client, '::', port)
+        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        s.bind(('::', port))
+        return s
+    except OSError:
+        return None
+
+async def server_task(port, sock=None):
+    try:
+        server = await asyncio.start_server(handle_client, '::', port, sock=sock)
         print(f"Server iniciado na porta {port}")
         async with server:
             await server.serve_forever()
     except OSError as e:
         print(f"Erro ao iniciar server na porta {port}: {e}")
+        if sock:
+            sock.close()
 
 async def handle_client(reader: StreamReader, writer: StreamWriter):
     status = get_status()
@@ -118,11 +120,16 @@ async def main_menu():
                     print("Porta já ativa.")
                     await asyncio.sleep(2)
                     continue
-                if is_port_in_use(port):
-                    print("Porta já em uso.")
+                if port < 1024 and os.getuid() != 0:
+                    print("Portas abaixo de 1024 requerem privilégios de root (execute com sudo).")
                     await asyncio.sleep(2)
                     continue
-                task = asyncio.create_task(server_task(port))
+                s = get_bound_socket(port)
+                if s is None:
+                    print("Porta já em uso ou erro ao bind.")
+                    await asyncio.sleep(2)
+                    continue
+                task = asyncio.create_task(server_task(port, sock=s))
                 tasks[port] = task
                 ports.append(port)
                 save_ports(ports)
