@@ -50,19 +50,25 @@ def check_root():
     if os.geteuid() != 0:
         print_error("Este script precisa ser executado como root. Por favor, use 'sudo'.")
 
-def run_command(command, check=True):
-    """Executa um comando no shell, capturando a saída."""
+def run_command(command, check=True, timeout=60):
+    """
+    Executa um comando no shell com mais segurança e timeout.
+    """
     try:
         result = subprocess.run(
             command, shell=True, check=check, 
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=timeout
         )
         return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        print_warning(f"Comando excedeu o tempo limite de {timeout}s: {command}")
+        return None
     except subprocess.CalledProcessError as e:
-        if check:
-            # Não imprime o aviso se o comando for de remoção e o recurso não existir
-            if not ("No such file or directory" in e.stderr or "not found" in e.stderr):
-                 print_warning(f"Comando falhou (pode ser normal se o recurso não existir): {e.cmd}\n  {e.stderr.strip()}")
+        # Não imprime aviso para erros comuns de "não encontrado" durante a limpeza
+        error_msg = e.stderr.strip()
+        if check and not ("No such file or directory" in error_msg or "not found" in error_msg or "Failed to disable" in error_msg):
+             print_warning(f"Comando falhou (pode ser normal se o recurso não existir): {e.cmd}\n  {error_msg}")
         return None
 
 # --- Funções de Limpeza Aprimoradas ---
@@ -74,7 +80,8 @@ def stop_and_disable_services():
         "multiflow.service",
         "badvpn.service",
         "openvpn-server@server.service",
-        "openvpn.service" # Adicionado para cobrir instalações genéricas
+        "openvpn.service",
+        "openvpn@.service" # Adicionado para cobrir mais casos
     ]
     for service in services:
         print(f"  - Parando e desabilitando {service}...")
@@ -92,12 +99,12 @@ def remove_project_files():
         INSTALL_DIR,
         "/usr/local/bin/multiflow",
         "/usr/local/bin/badvpn-udpgw",
-        "/etc/easy-rsa", # Diretório de certificados do OpenVPN
+        "/etc/easy-rsa",
         TMP_INSTALL_SCRIPT
     ]
     for path in paths_to_remove:
         try:
-            if os.path.lexists(path): # Usa lexists para funcionar com links simbólicos
+            if os.path.lexists(path):
                 if os.path.isdir(path) and not os.path.islink(path):
                     shutil.rmtree(path)
                     print(f"  - Diretório removido: {path}")
@@ -111,16 +118,18 @@ def remove_project_files():
 def remove_service_files():
     """Remove os arquivos de serviço do systemd."""
     print_step("Removendo arquivos de serviço do Systemd")
-    # Usa um glob para encontrar todos os serviços relacionados ao openvpn
-    service_files = [
+    service_paths = [
         "/etc/systemd/system/multiflow.service",
-        "/etc/systemd/system/badvpn.service"
+        "/etc/systemd/system/badvpn.service",
+        "/lib/systemd/system/openvpn-server@.service" # Caminho comum em algumas distros
     ]
-    openvpn_services = run_command("ls /etc/systemd/system/openvpn* 2>/dev/null", check=False)
+    # Busca por arquivos de serviço do openvpn de forma mais segura
+    openvpn_services = run_command("find /etc/systemd/system /lib/systemd/system -name 'openvpn*.service' 2>/dev/null", check=False)
     if openvpn_services:
-        service_files.extend(openvpn_services.split('\n'))
+        service_paths.extend(openvpn_services.split('\n'))
 
-    for service_file in service_files:
+    # Remove duplicatas
+    for service_file in sorted(list(set(service_paths))):
         if service_file and os.path.exists(service_file):
             try:
                 os.remove(service_file)
@@ -136,35 +145,30 @@ def remove_configs_and_logs():
     """Remove arquivos de configuração, logs e reverte alterações no sistema."""
     print_step("Removendo configurações, logs e revertendo alterações")
 
-    # Remove diretório de configuração do OpenVPN
-    openvpn_dir = "/etc/openvpn"
-    if os.path.isdir(openvpn_dir):
+    paths_to_remove = [
+        "/etc/openvpn",
+        "/var/log/openvpn.log",
+        "/var/log/openvpn-status.log"
+    ]
+    for path in paths_to_remove:
         try:
-            shutil.rmtree(openvpn_dir)
-            print(f"  - Diretório de configuração do OpenVPN removido: {openvpn_dir}")
+            if os.path.exists(path):
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                    print(f"  - Diretório de configuração removido: {path}")
+                else:
+                    os.remove(path)
+                    print(f"  - Arquivo de log removido: {path}")
         except Exception as e:
-            print_warning(f"Não foi possível remover {openvpn_dir}: {e}")
+            print_warning(f"Não foi possível remover {path}: {e}")
 
-    # Remove logs do OpenVPN
-    openvpn_logs = ["/var/log/openvpn.log", "/var/log/openvpn-status.log"]
-    for log in openvpn_logs:
-        if os.path.isfile(log):
-            try:
-                os.remove(log)
-                print(f"  - Log do OpenVPN removido: {log}")
-            except Exception as e:
-                print_warning(f"Não foi possível remover o log {log}: {e}")
-
-    # Limpa o arquivo /etc/hosts de entradas do bloqueador
+    # Limpa o arquivo /etc/hosts de forma segura
     hosts_file = "/etc/hosts"
     try:
         with open(hosts_file, 'r') as f:
             content = f.read()
-        
-        # Usa regex para encontrar e remover o bloco de forma segura
-        pattern = re.compile(r"\n# MULTIFLOW BLOCK START.*# MULTIFLOW BLOCK END\n?", re.DOTALL)
+        pattern = re.compile(r"\n?# MULTIFLOW BLOCK START.*# MULTIFLOW BLOCK END\n?", re.DOTALL)
         new_content, count = re.subn(pattern, "", content)
-
         if count > 0:
             with open(hosts_file, 'w') as f:
                 f.write(new_content)
@@ -172,24 +176,30 @@ def remove_configs_and_logs():
     except Exception as e:
         print_warning(f"Não foi possível limpar o arquivo /etc/hosts: {e}")
 
-    # Restaura backup do sysctl.conf se existir
+    # Restaura backup do sysctl.conf
     sysctl_conf = "/etc/sysctl.conf"
     sysctl_backup = f"{sysctl_conf}.multiflow_backup"
     if os.path.isfile(sysctl_backup):
         try:
             shutil.move(sysctl_backup, sysctl_conf)
-            print(f"  - Backup do sysctl.conf restaurado de {sysctl_backup}")
+            print(f"  - Backup do sysctl.conf restaurado")
         except Exception as e:
             print_warning(f"Falha ao restaurar backup do sysctl.conf: {e}")
             
-    # Remove cron jobs relacionados
+    # Remove cron jobs de forma segura
     print("  - Verificando e removendo cron jobs...")
     try:
         current_crontab = run_command("crontab -l", check=False)
         if current_crontab and "multiflow" in current_crontab.lower():
-            new_crontab = "\n".join([line for line in current_crontab.split('\n') if "multiflow" not in line.lower()])
-            run_command(f'echo "{new_crontab}" | crontab -', check=True)
-            print("  - Cron job do Multiflow removido.")
+            # Filtra as linhas que não contêm 'multiflow'
+            new_crontab_lines = [line for line in current_crontab.split('\n') if "multiflow" not in line.lower()]
+            # Cria um arquivo temporário com o novo conteúdo
+            with open("/tmp/multiflow_crontab", "w") as f:
+                f.write("\n".join(new_crontab_lines) + "\n")
+            # Carrega o novo crontab a partir do arquivo, o que é mais seguro
+            run_command("crontab /tmp/multiflow_crontab", check=True)
+            os.remove("/tmp/multiflow_crontab")
+            print("  - Cron job do Multiflow removido com segurança.")
     except Exception as e:
         print_warning(f"Não foi possível verificar/remover cron jobs: {e}")
 
@@ -201,14 +211,14 @@ def full_cleanup():
     stop_and_disable_services()
     remove_project_files()
     remove_configs_and_logs()
-    remove_service_files() # Por último, antes do reload final
+    remove_service_files()
     print_success("Sistema limpo e pronto para reinstalação.")
 
 def reinstall():
     """Baixa e executa o script de instalação mais recente."""
     print_step("Baixando e Reinstalando o Multiflow")
     try:
-        print(f"  - Baixando script de instalação de {INSTALL_SCRIPT_URL}...")
+        print(f"  - Baixando script de instalação...")
         response = requests.get(INSTALL_SCRIPT_URL, timeout=15)
         response.raise_for_status()
         
@@ -251,7 +261,7 @@ def main():
     print(f"\n{Colors.GREEN}O QUE NÃO SERÁ REMOVIDO:{Colors.NC}")
     print(f"  - Contas de {Colors.GREEN}usuários do sistema{Colors.NC} criadas pelo script.")
     print(f"  - Configurações de {Colors.GREEN}ZRAM e SWAP{Colors.NC}.")
-    print(f"  - Pacotes instalados via APT ({Colors.GREEN}openvpn, python3, etc.{Colors.NC}) pois podem ser dependências de outros programas.")
+    print(f"  - Pacotes instalados via APT ({Colors.GREEN}openvpn, python3, etc.{Colors.NC}).")
 
     try:
         confirm = input(f"\n{Colors.CYAN}Você tem certeza que deseja continuar? [s/N]: {Colors.NC}").strip().lower()
@@ -266,7 +276,7 @@ def main():
 
         print_step("Processo Finalizado")
         print(f"{Colors.GREEN}O Multiflow foi reinstalado com sucesso!{Colors.NC}")
-        print(f"Para iniciar, pode ser necessário sair e entrar novamente no seu terminal.")
+        print(f"Pode ser necessário sair e entrar novamente no seu terminal para usar o comando.")
         print(f"Use o comando: {Colors.YELLOW}multiflow{Colors.NC}")
     else:
         print("Operação abortada.")
