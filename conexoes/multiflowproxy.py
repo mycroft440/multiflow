@@ -160,73 +160,24 @@ async def handle_client(reader, writer):
     peername = writer.get_extra_info('peername')
     logger.info(f"New connection from {peername}")
    
-    status_options = [
-        "101 Switching Protocols",
-        "102 Processing",
-        "103 Early Hints",
-        "200 OK",
-        "201 Created",
-        "202 Accepted",
-        "203 Non-Authoritative Information",
-        "204 No Content",
-        "205 Reset Content",
-        "206 Partial Content",
-        "207 Multi-Status",
-        "208 Already Reported",
-        "226 IM Used",
-        "300 Multiple Choices",
-        "301 Moved Permanently",
-        "302 Found",
-        "303 See Other",
-        "304 Not Modified",
-        "307 Temporary Redirect",
-        "308 Permanent Redirect",
-        "400 Bad Request",
-        "401 Unauthorized",
-        "402 Payment Required",
-        "403 Forbidden",
-        "404 Not Found",
-        "405 Method Not Allowed",
-        "406 Not Acceptable",
-        "407 Proxy Authentication Required",
-        "408 Request Timeout",
-        "409 Conflict",
-        "410 Gone",
-        "411 Length Required",
-        "412 Precondition Failed",
-        "413 Payload Too Large",
-        "414 URI Too Long",
-        "415 Unsupported Media Type",
-        "416 Range Not Satisfiable",
-        "417 Expectation Failed",
-        "418 I'm a teapot",
-        "421 Misdirected Request",
-        "422 Unprocessable Content",
-        "423 Locked",
-        "424 Failed Dependency",
-        "425 Too Early",
-        "426 Upgrade Required",
-        "428 Precondition Required",
-        "429 Too Many Requests",
-        "431 Request Header Fields Too Large",
-        "451 Unavailable For Legal Reasons",
-        "500 Internal Server Error",
-        "501 Not Implemented",
-        "502 Bad Gateway",
-        "503 Service Unavailable",
-        "504 Gateway Timeout",
-        "505 HTTP Version Not Supported",
-        "506 Variant Also Negotiates",
-        "507 Insufficient Storage",
-        "508 Loop Detected",
-        "510 Not Extended",
-        "511 Network Authentication Required"
-    ]
+    try:
+        initial_data = await asyncio.wait_for(reader.read(1024), timeout=5.0)
+        if not initial_data:
+            logger.warning(f"No initial data from {peername}, closing")
+            writer.close()
+            await writer.wait_closed()
+            return
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning(f"Timeout or error waiting for initial data from {peername}: {e}")
+        writer.close()
+        await writer.wait_closed()
+        return
+   
+    logger.info(f"Received initial data from {peername}")
    
     server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"] # Rotacionar para ofuscação
    
     headers = f"Server: {random.choice(server_variants)}\r\n" \
-              f"Content-Length: 0\r\n" \
               f"Connection: keep-alive\r\n" \
               f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n" \
               f"Content-Type: text/html; charset=UTF-8\r\n" \
@@ -235,31 +186,12 @@ async def handle_client(reader, writer):
               f"X-Frame-Options: DENY\r\n" \
               f"X-XSS-Protection: 1; mode=block\r\n" \
               f"Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" \
-              f"Set-Cookie: sessionid={random.randint(100000, 999999)}; Path=/; HttpOnly\r\n\r\n" # Adicione mais se necessário
+              f"Set-Cookie: sessionid={random.randint(100000, 999999)}; Path=/; HttpOnly\r\n\r\n"
    
-    for status in status_options:
-        logger.debug(f"Sending status to {peername}: {status}")
-        response = f"HTTP/1.1 {status}\r\n{headers}".encode()
-        
-        writer.write(response)
-        await writer.drain()
-       
-        try:
-            initial_data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
-            if initial_data:
-                logger.info(f"Received initial data from {peername}")
-                logger.info(f"Successful status for {peername}: {status}")
-                break # Dados recebidos, prosseguir com este status
-        except (asyncio.TimeoutError, Exception) as e:
-            logger.warning(f"Timeout or error waiting for data from {peername} after {status}: {e}")
-            continue # Tentar próximo status
-   
-    else:
-        # Se nenhum status funcionar, fechar conexão
-        logger.warning(f"No successful status for connection from {peername}, closing")
-        writer.close()
-        await writer.wait_closed()
-        return
+    response = f"HTTP/1.1 200 OK\r\n{headers}".encode()
+    writer.write(response)
+    await writer.drain()
+    logger.info(f"Sent 200 OK to {peername}")
    
     data_str = initial_data.decode('utf-8', errors='replace')
     addr_proxy = "0.0.0.0:22"
@@ -281,13 +213,13 @@ async def handle_client(reader, writer):
         await writer.wait_closed()
         return
    
-    if initial_data:
-        server_writer.write(initial_data)
-        await server_writer.drain()
+    server_writer.write(initial_data)
+    await server_writer.drain()
    
     client_to_server = asyncio.create_task(transfer_data(reader, server_writer, traffic_shaping))
     server_to_client = asyncio.create_task(transfer_data(server_reader, writer, traffic_shaping))
     await asyncio.gather(client_to_server, server_to_client)
+    logger.info(f"Tunnel closed for {peername}")
 async def start_http(server):
     async with server:
         await server.serve_forever()
