@@ -6,13 +6,11 @@ import sys
 import subprocess
 import shutil
 import time
-import signal
 import requests
+import re
 
 # --- Configurações ---
-# Repositório do projeto no GitHub
-GITHUB_REPO_URL = "https://github.com/mycroft440/multiflow"
-# Script de instalação no repositório
+# URL do script de instalação no repositório
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/mycroft440/multiflow/main/install.sh"
 # Diretório de instalação padrão do projeto
 INSTALL_DIR = "/opt/multiflow"
@@ -40,172 +38,196 @@ def print_success(message):
 
 def print_warning(message):
     """Imprime uma mensagem de aviso."""
-    print(f"{Colors.YELLOW}⚠️ {message}{Colors.NC}")
+    print(f"{Colors.YELLOW}⚠ {message}{Colors.NC}")
 
 def print_error(message):
-    """Imprime uma mensagem de erro."""
-    print(f"{Colors.RED}✗ {message}{Colors.NC}", file=sys.stderr)
+    """Imprime uma mensagem de erro e sai."""
+    print(f"{Colors.RED}✗ {message}{Colors.NC}")
+    sys.exit(1)
 
 def check_root():
     """Verifica se o script está sendo executado como root."""
     if os.geteuid() != 0:
-        print_error("Este script precisa ser executado com privilégios de superusuário (root).")
-        sys.exit(1)
+        print_error("Este script precisa ser executado como root. Por favor, use 'sudo'.")
 
-def run_command(command, description):
-    """Executa um comando no shell, tratando erros de forma segura."""
-    print(f"  - {description}...")
+def run_command(command, check=True):
+    """Executa um comando no shell."""
     try:
-        # Usamos DEVNULL para silenciar a saída, pois o objetivo é limpar
-        subprocess.run(
-            command,
-            shell=True,
-            check=False, # Não para o script se o comando falhar (ex: serviço já parado)
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        print_success(f"  {description}: Concluído.")
-    except Exception as e:
-        print_warning(f"  Ocorreu um erro não crítico ao executar '{description}': {e}")
+        subprocess.run(command, shell=True, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except subprocess.CalledProcessError as e:
+        if check:
+            print_warning(f"Comando falhou (pode ser normal se o recurso não existir): {e.cmd}")
 
-# --- Lógica Principal ---
+# --- Funções de Limpeza Aprimoradas ---
+
+def stop_and_disable_services():
+    """Para e desabilita todos os serviços relacionados ao Multiflow."""
+    print_step("Parando e desabilitando serviços")
+    services = [
+        "multiflow.service",
+        "badvpn.service",
+        "openvpn-server@server.service"
+    ]
+    for service in services:
+        print(f"  - Parando {service}...")
+        run_command(f"systemctl stop {service}", check=False)
+        print(f"  - Desabilitando {service}...")
+        run_command(f"systemctl disable {service}", check=False)
+    print_success("Serviços parados e desabilitados.")
+
+def remove_project_files():
+    """Remove o diretório do projeto e todos os binários/scripts relacionados."""
+    print_step("Removendo arquivos do projeto e binários")
+    paths_to_remove = [
+        INSTALL_DIR,
+        "/usr/local/bin/multiflow",
+        "/usr/local/bin/badvpn-udpgw",
+        TMP_INSTALL_SCRIPT
+    ]
+    for path in paths_to_remove:
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+                print(f"  - Diretório removido: {path}")
+            elif os.path.isfile(path):
+                os.remove(path)
+                print(f"  - Arquivo removido: {path}")
+        except FileNotFoundError:
+            print_warning(f"Caminho não encontrado (já removido?): {path}")
+        except Exception as e:
+            print_warning(f"Não foi possível remover {path}: {e}")
+    print_success("Arquivos do projeto removidos.")
+
+def remove_service_files():
+    """Remove os arquivos de serviço do systemd."""
+    print_step("Removendo arquivos de serviço do Systemd")
+    service_files = [
+        "/etc/systemd/system/multiflow.service",
+        "/etc/systemd/system/badvpn.service",
+        "/etc/systemd/system/openvpn-server@server.service"
+    ]
+    for service_file in service_files:
+        try:
+            if os.path.isfile(service_file):
+                os.remove(service_file)
+                print(f"  - Arquivo de serviço removido: {service_file}")
+        except FileNotFoundError:
+            pass
+    print("  - Recarregando o daemon do systemd...")
+    run_command("systemctl daemon-reload")
+    print_success("Arquivos de serviço removidos.")
+
+def remove_configs_and_logs():
+    """Remove arquivos de configuração, logs e reverte alterações no sistema."""
+    print_step("Removendo configurações, logs e revertendo alterações")
+
+    # Remove diretório de configuração do OpenVPN
+    openvpn_dir = "/etc/openvpn"
+    if os.path.isdir(openvpn_dir):
+        try:
+            shutil.rmtree(openvpn_dir)
+            print(f"  - Diretório de configuração do OpenVPN removido: {openvpn_dir}")
+        except Exception as e:
+            print_warning(f"Não foi possível remover {openvpn_dir}: {e}")
+
+    # Remove logs do OpenVPN
+    openvpn_logs = ["/var/log/openvpn.log", "/var/log/openvpn-status.log"]
+    for log in openvpn_logs:
+        if os.path.isfile(log):
+            try:
+                os.remove(log)
+                print(f"  - Log do OpenVPN removido: {log}")
+            except Exception as e:
+                print_warning(f"Não foi possível remover o log {log}: {e}")
+
+    # Limpa o arquivo /etc/hosts de entradas do bloqueador
+    hosts_file = "/etc/hosts"
+    try:
+        with open(hosts_file, 'r') as f:
+            lines = f.readlines()
+        
+        # Usa regex para encontrar o bloco a ser removido
+        pattern = re.compile(r"# MULTIFLOW BLOCK START.*# MULTIFLOW BLOCK END", re.DOTALL)
+        content = "".join(lines)
+        new_content = re.sub(pattern, "", content)
+
+        if new_content != content:
+            with open(hosts_file, 'w') as f:
+                f.write(new_content.strip() + "\n")
+            print("  - Entradas do bloqueador de sites removidas do /etc/hosts")
+    except Exception as e:
+        print_warning(f"Não foi possível limpar o arquivo /etc/hosts: {e}")
+
+    # Restaura backup do sysctl.conf se existir
+    sysctl_conf = "/etc/sysctl.conf"
+    sysctl_backup = f"{sysctl_conf}.multiflow_backup"
+    if os.path.isfile(sysctl_backup):
+        try:
+            shutil.move(sysctl_backup, sysctl_conf)
+            print(f"  - Backup do sysctl.conf restaurado de {sysctl_backup}")
+        except Exception as e:
+            print_warning(f"Falha ao restaurar backup do sysctl.conf: {e}")
+
+    print_success("Limpeza de configurações finalizada.")
 
 def full_cleanup():
-    """
-    Executa uma limpeza completa dos componentes do Multiflow, preservando ZRAM e SWAP.
-    """
-    print_step("Iniciando Limpeza Completa do Multiflow (Preservando ZRAM/SWAP)")
-
-    # 1. Parar e desabilitar serviços (exceto zram)
-    print("\n--- Desativando Serviços ---")
-    services_to_manage = [
-        "badvpn-udpgw.service",
-        "openvpn@server.service",
-        # "zram.service" é intencionalmente omitido para preservar a configuração
-    ]
-    for service in services_to_manage:
-        run_command(f"systemctl stop {service}", f"Parando {service}")
-        run_command(f"systemctl disable {service}", f"Desabilitando {service}")
-
-    # Parar servidores Python (ProxySocks, Servidor de Download)
-    pid_files = ["/tmp/proxy.state", "/tmp/download_server.state"]
-    for pid_file in pid_files:
-        if os.path.exists(pid_file):
-            try:
-                with open(pid_file, 'r') as f:
-                    pid = int(f.read().strip().split(':')[0])
-                os.kill(pid, signal.SIGTERM)
-                print_success(f"  Processo do arquivo {pid_file} (PID: {pid}) finalizado.")
-            except (ValueError, OSError, IOError):
-                pass # Ignora se o arquivo estiver mal formatado ou o processo não existir
-            os.remove(pid_file)
-
-
-    # 2. Remover arquivos de configuração e do sistema (exceto zram)
-    print("\n--- Removendo Arquivos de Configuração ---")
-    files_to_remove = [
-        "/etc/systemd/system/badvpn-udpgw.service",
-        # "/etc/systemd/system/zram.service" é omitido para não ser removido
-        "/etc/cron.d/vps_optimizer_tasks"
-    ]
-    dirs_to_remove = [
-        "/etc/openvpn",
-        "~/ovpn-clients" # Diretório do usuário root
-    ]
-
-    for f in files_to_remove:
-        if os.path.exists(f):
-            os.remove(f)
-            print_success(f"  Arquivo removido: {f}")
-
-    for d in dirs_to_remove:
-        expanded_d = os.path.expanduser(d)
-        if os.path.isdir(expanded_d):
-            shutil.rmtree(expanded_d, ignore_errors=True)
-            print_success(f"  Diretório removido: {expanded_d}")
-
-    # Recarregar systemd após remover arquivos de serviço
-    run_command("systemctl daemon-reload", "Recarregando daemons do systemd")
-
-    # 3. Remover links simbólicos
-    print("\n--- Removendo Links Simbólicos ---")
-    symlinks = ["/usr/local/bin/multiflow", "/usr/local/bin/h", "/usr/local/bin/menu"]
-    for link in symlinks:
-        if os.path.islink(link):
-            os.remove(link)
-            print_success(f"  Link simbólico removido: {link}")
-
-    # 4. Limpar arquivos residuais e o diretório de instalação
-    print("\n--- Removendo Arquivos Residuais e Projeto ---")
-    if os.path.isdir(INSTALL_DIR):
-        shutil.rmtree(INSTALL_DIR, ignore_errors=True)
-        print_success(f"  Diretório principal do projeto removido: {INSTALL_DIR}")
-
-    # Limpar banco de dados de usuários SSH, se existir
-    ssh_db = "/root/ssh_users.db"
-    if os.path.exists(ssh_db):
-        os.remove(ssh_db)
-        print_success(f"  Banco de dados de usuários SSH removido: {ssh_db}")
-
-    print_success("Fase de limpeza concluída!")
-
+    """Executa todas as rotinas de limpeza."""
+    print_step("Iniciando Limpeza Completa")
+    stop_and_disable_services()
+    remove_project_files()
+    remove_service_files()
+    remove_configs_and_logs()
+    print_success("Sistema limpo e pronto para reinstalação.")
 
 def reinstall():
-    """
-    Baixa e executa o script de instalação mais recente.
-    """
-    print_step("Reinstalando o Multiflow a partir do GitHub")
-
-    # 1. Baixar o script de instalação
-    print(f"  - Baixando install.sh de {GITHUB_REPO_URL}...")
+    """Baixa e executa o script de instalação mais recente."""
+    print_step("Baixando e Reinstalando o Multiflow")
     try:
-        response = requests.get(INSTALL_SCRIPT_URL, timeout=30)
+        print(f"  - Baixando script de instalação de {INSTALL_SCRIPT_URL}...")
+        response = requests.get(INSTALL_SCRIPT_URL, timeout=10)
         response.raise_for_status()
+        
         with open(TMP_INSTALL_SCRIPT, 'w') as f:
             f.write(response.text)
-        os.chmod(TMP_INSTALL_SCRIPT, 0o755) # Tornar o script executável
-        print_success("  Download do instalador concluído.")
-    except requests.exceptions.RequestException as e:
-        print_error(f"Falha ao baixar o script de instalação: {e}")
-        sys.exit(1)
+        
+        # Dá permissão de execução ao script
+        os.chmod(TMP_INSTALL_SCRIPT, 0o755)
+        print_success("Download do script de instalação concluído.")
 
-    # 2. Executar o script de instalação
-    print("  - Executando o instalador (isso pode levar alguns minutos)...")
-    print_warning("  O instalador tentará configurar ZRAM/SWAP, mas deve pular se já estiverem ativos.")
-    try:
-        # Executa o script de forma interativa para que o usuário veja a saída
-        subprocess.run(["bash", TMP_INSTALL_SCRIPT], check=True)
-        print_success("Instalação concluída com sucesso!")
+        print("\n  - Executando o instalador...")
+        # Executa o script de instalação
+        subprocess.run(TMP_INSTALL_SCRIPT, shell=True, check=True)
+
+    except requests.exceptions.RequestException as e:
+        print_error(f"Erro ao baixar o script de instalação: {e}")
     except subprocess.CalledProcessError as e:
-        print_error(f"O script de instalação falhou com o código de saída {e.returncode}.")
-        print_error("Verifique a saída acima para mais detalhes.")
-        sys.exit(1)
+        print_error(f"O script de instalação falhou com o código de erro {e.returncode}.")
     except Exception as e:
-        print_error(f"Ocorreu um erro inesperado ao executar o instalador: {e}")
-        sys.exit(1)
+        print_error(f"Ocorreu um erro inesperado durante a reinstalação: {e}")
     finally:
         # Limpa o script de instalação temporário
         if os.path.exists(TMP_INSTALL_SCRIPT):
             os.remove(TMP_INSTALL_SCRIPT)
 
-
 def main():
-    """
-    Ponto de entrada do script.
-    """
-    os.system('clear')
+    """Função principal do script."""
     check_root()
-
+    os.system('clear')
+    
+    # Exibe o aviso detalhado
     print(f"{Colors.YELLOW}====================================================={Colors.NC}")
     print(f"{Colors.YELLOW}      ATUALIZADOR E REINSTALADOR - MULTIFLOW         {Colors.NC}")
     print(f"{Colors.YELLOW}====================================================={Colors.NC}")
     print(f"\n{Colors.RED}{Colors.YELLOW}AVISO IMPORTANTE:{Colors.NC}")
     print(f"Este script irá {Colors.RED}REMOVER COMPLETAMENTE{Colors.NC} a instalação atual do Multiflow e todas as suas configurações, incluindo:")
-    print("  - Serviços (BadVPN, OpenVPN, etc.)")
-    print("  - Arquivos de configuração e logs")
-    print("  - O diretório do projeto em /opt/multiflow")
+    print(f"  - O diretório principal {Colors.CYAN}{INSTALL_DIR}{Colors.NC}")
+    print(f"  - Serviços do systemd ({Colors.CYAN}multiflow, badvpn, openvpn{Colors.NC})")
+    print(f"  - Binários e scripts ({Colors.CYAN}/usr/local/bin/multiflow, /usr/local/bin/badvpn-udpgw{Colors.NC})")
+    print(f"  - Configurações do OpenVPN ({Colors.CYAN}/etc/openvpn{Colors.NC})")
+    print(f"  - Regras de bloqueio no arquivo {Colors.CYAN}/etc/hosts{Colors.NC}")
     print("\nEm seguida, ele baixará e reinstalará a versão mais recente do GitHub.")
-    print(f"As configurações de {Colors.GREEN}ZRAM e SWAP{Colors.NC}, se existirem, {Colors.GREEN}NÃO{Colors.NC} serão removidas durante a limpeza.")
+    print(f"As configurações de {Colors.GREEN}ZRAM e SWAP{Colors.NC}, se existirem, {Colors.GREEN}NÃO{Colors.NC} serão removidas.")
+    print(f"Contas de {Colors.GREEN}usuários do sistema{Colors.NC} criadas pelo script {Colors.GREEN}NÃO{Colors.NC} serão removidas.")
 
     try:
         confirm = input(f"\n{Colors.CYAN}Você tem certeza que deseja continuar? [s/N]: {Colors.NC}").strip().lower()
@@ -220,9 +242,9 @@ def main():
 
         print_step("Processo Finalizado")
         print(f"{Colors.GREEN}O Multiflow foi reinstalado com sucesso!{Colors.NC}")
-        print(f"Para iniciar, execute o comando: {Colors.CYAN}multiflow{Colors.NC}")
+        print(f"Para iniciar, use o comando: {Colors.YELLOW}multiflow{Colors.NC}")
     else:
-        print("\nOperação cancelada. Nenhuma alteração foi feita.")
+        print("Operação abortada.")
 
 if __name__ == "__main__":
     main()
