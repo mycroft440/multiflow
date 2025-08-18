@@ -4,54 +4,18 @@ import socket
 import os
 import subprocess
 import shutil
-import json
-import time
-import random
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
 PROXY_DIR = "/opt/multiflowproxy"
-CONFIG_FILE = '/etc/proxy_config.json'
-
-DEFAULT_CONFIG = {
-    'installed': False,
-    'active': False,
-    'ports': [80],
-    'ip': '0.0.0.0',
-    'password': '',
-    'default_host': '0.0.0.0:22',
-}
-
-class ConfigManager:
-    def __init__(self):
-        self.config_file = CONFIG_FILE
-        self.load_config()
-    
-    def load_config(self):
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    self.config = json.load(f)
-            else:
-                self.config = DEFAULT_CONFIG.copy()
-                self.save_config()
-        except:
-            self.config = DEFAULT_CONFIG.copy()
-    
-    def save_config(self):
-        try:
-            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
-            with open(self.config_file, 'w') as f:
-                json.dump(self.config, f, indent=4)
-            return True
-        except Exception as e:
-            print("Erro ao salvar configuracao: " + str(e))
-            return False
 
 def is_root():
     return os.geteuid() == 0
 
+def show_progress(message):
+    print(f"Progresso: - {message}")
+
 def error_exit(message):
-    print("\nErro: " + message)
+    print(f"\nErro: {message}")
     sys.exit(1)
 
 def get_port_from_args():
@@ -75,7 +39,7 @@ def is_proxy_installed():
 
 def get_proxy_status():
     if not is_proxy_installed():
-        return "NAO INSTALADO"
+        return "NÃO INSTALADO"
    
     if not os.path.exists(PORTS_FILE):
         return "INSTALADO - INATIVO"
@@ -89,7 +53,7 @@ def get_proxy_status():
     active_count = 0
     for port in ports:
         try:
-            result = subprocess.run(['systemctl', 'is-active', "proxy" + port + ".service"],
+            result = subprocess.run(['systemctl', 'is-active', f'proxy{port}.service'],
                                   capture_output=True, text=True)
             if result.stdout.strip() == 'active':
                 active_count += 1
@@ -97,20 +61,20 @@ def get_proxy_status():
             pass
    
     if active_count > 0:
-        return "ATIVO (" + str(active_count) + " porta" + ('s' if active_count > 1 else '') + ")"
+        return f"ATIVO ({active_count} porta{'s' if active_count > 1 else ''})"
     else:
         return "INSTALADO - INATIVO"
 
 def get_port_status(port):
     try:
-        result = subprocess.run(['systemctl', 'is-active', "proxy" + str(port) + ".service"],
+        result = subprocess.run(['systemctl', 'is-active', f'proxy{port}.service'],
                               capture_output=True, text=True)
         if result.stdout.strip() == 'active':
-            return "Ativo"
+            return "✓ Ativo"
         else:
-            return "Inativo"
+            return "✗ Inativo"
     except:
-        return "Erro"
+        return "✗ Erro"
 
 async def peek_stream(transport):
     sock = transport.get_extra_info('socket')
@@ -136,10 +100,10 @@ async def transfer_data(source_reader, dest_writer):
 
 async def handle_client(reader, writer):
     status = "Switching Protocols"
-    writer.write(("HTTP/1.1 101 " + status + "\r\n\r\n").encode())
+    writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
     await writer.drain()
     buffer = await reader.read(1024)
-    writer.write(("HTTP/1.1 200 OK\r\n\r\n").encode())
+    writer.write(f"HTTP/1.1 200 OK\r\n\r\n".encode())
     await writer.drain()
     try:
         data = await asyncio.wait_for(peek_stream(writer.transport), timeout=1.0)
@@ -155,7 +119,7 @@ async def handle_client(reader, writer):
             addr_proxy.split(':')[0], int(addr_proxy.split(':')[1])
         )
     except Exception:
-        print("erro ao iniciar conexao para o proxy")
+        print("erro ao iniciar conexão para o proxy")
         writer.close()
         await writer.wait_closed()
         return
@@ -175,19 +139,19 @@ async def run_proxy():
         sock.bind(('::', port))
         sock.listen(100)
         server = await asyncio.start_server(handle_client, sock=sock)
-        print("Iniciando servico na porta: " + str(port))
+        print(f"Iniciando serviço na porta: {port}")
         await start_http(server)
     except Exception as e:
-        print("Erro ao iniciar o proxy: " + str(e))
+        print(f"Erro ao iniciar o proxy: {str(e)}")
         sys.exit(1)
 
 def is_port_in_use(port):
     try:
         result = subprocess.run(['netstat', '-tuln'], capture_output=True, text=True)
-        if ":" + str(port) in result.stdout:
+        if f":{port}" in result.stdout:
             return True
         result = subprocess.run(['ss', '-tuln'], capture_output=True, text=True)
-        if ":" + str(port) in result.stdout:
+        if f":{port}" in result.stdout:
             return True
         return False
     except:
@@ -195,11 +159,11 @@ def is_port_in_use(port):
 
 def add_proxy_port(port):
     if is_port_in_use(port):
-        print("A porta " + str(port) + " ja esta em uso.")
+        print(f"A porta {port} já está em uso.")
         return
-    command = "/usr/bin/python3 " + PROXY_DIR + "/multiflowproxy.py --port " + str(port)
-    service_name = "proxy" + str(port) + ".service"
-    service_file = "/etc/systemd/system/" + service_name
+    command = f"/usr/bin/python3 {PROXY_DIR}/multiflowproxy.py --port {port}"
+    service_name = f"proxy{port}.service"
+    service_file = f"/etc/systemd/system/{service_name}"
     service_content = f"""[Unit]
 Description=MultiFlowProxy on port {port}
 After=network.target
@@ -227,14 +191,14 @@ WantedBy=multi-user.target
     subprocess.run(['systemctl', 'enable', service_name])
     subprocess.run(['systemctl', 'start', service_name])
     with open(PORTS_FILE, 'a') as f:
-        f.write(str(port) + "\n")
-    print("Porta " + str(port) + " adicionada com sucesso.")
+        f.write(f"{port}\n")
+    print(f"Porta {port} adicionada com sucesso.")
 
 def del_proxy_port(port):
-    service_name = "proxy" + str(port) + ".service"
+    service_name = f"proxy{port}.service"
     subprocess.run(['systemctl', 'disable', service_name])
     subprocess.run(['systemctl', 'stop', service_name])
-    os.remove("/etc/systemd/system/" + service_name)
+    os.remove(f"/etc/systemd/system/{service_name}")
     subprocess.run(['systemctl', 'daemon-reload'])
     if os.path.exists(PORTS_FILE):
         with open(PORTS_FILE, 'r') as f:
@@ -243,12 +207,12 @@ def del_proxy_port(port):
             for line in lines:
                 if line.strip() != str(port):
                     f.write(line)
-    print("Porta " + str(port) + " removida com sucesso.")
+    print(f"Porta {port} removida com sucesso.")
 
 def restart_proxy_port(port):
-    service_name = "proxy" + str(port) + ".service"
+    service_name = f"proxy{port}.service"
     subprocess.run(['systemctl', 'restart', service_name])
-    print("Porta " + str(port) + " reiniciada com sucesso.")
+    print(f"Porta {port} reiniciada com sucesso.")
 
 def list_active_ports():
     if not os.path.exists(PORTS_FILE):
@@ -261,49 +225,70 @@ def install_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
     
+    TOTAL_STEPS = 8
+    CURRENT_STEP = 0
+    
+    def increment_step():
+        nonlocal CURRENT_STEP
+        CURRENT_STEP += 1
+        show_progress(f"[{CURRENT_STEP}/{TOTAL_STEPS}]")
+
     os.system('clear')
+    show_progress("Atualizando repositórios...")
     os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
     try:
         subprocess.run(['apt', 'update', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except:
-        error_exit("Falha ao atualizar os repositorios")
-    
+        error_exit("Falha ao atualizar os repositórios")
+    increment_step()
+
+    show_progress("Verificando o sistema...")
     try:
         subprocess.run(['apt', 'install', 'lsb-release', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except:
         error_exit("Falha ao instalar lsb-release")
+    increment_step()
 
     os_name = subprocess.run(['lsb_release', '-is'], capture_output=True, text=True).stdout.strip()
     version = subprocess.run(['lsb_release', '-rs'], capture_output=True, text=True).stdout.strip()
 
     if os_name == 'Ubuntu':
         if not version.startswith(('24.', '22.', '20.', '18.')):
-            error_exit("Versao do Ubuntu nao suportada. Use 18, 20, 22 ou 24.")
+            error_exit("Versão do Ubuntu não suportada. Use 18, 20, 22 ou 24.")
     elif os_name == 'Debian':
         if not version.startswith(('12', '11', '10', '9')):
-            error_exit("Versao do Debian nao suportada. Use 9, 10, 11 ou 12.")
+            error_exit("Versão do Debian não suportada. Use 9, 10, 11 ou 12.")
     else:
-        error_exit("Sistema nao suportado. Use Ubuntu ou Debian.")
-    
+        error_exit("Sistema não suportado. Use Ubuntu ou Debian.")
+    show_progress("Sistema suportado, continuando...")
+    increment_step()
+
+    show_progress("Atualizando o sistema e instalando pacotes...")
     try:
         subprocess.run(['apt', 'upgrade', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['apt-get', 'install', 'curl', 'build-essential', 'git', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except:
-        error_exit("Falha ao atualizar o sistema")
+        error_exit("Falha ao atualizar o sistema ou instalar pacotes")
+    increment_step()
 
-    try:
-        subprocess.run(['apt', 'install', 'curl', 'build-essential', 'git', '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except:
-        error_exit("Falha ao instalar pacotes adicionais")
-    
+    show_progress("Criando diretório /opt/multiflowproxy...")
     os.makedirs('/opt/multiflowproxy', exist_ok=True)
+    increment_step()
 
+    show_progress("Copiando script...")
     current_script = os.path.abspath(sys.argv[0])
     shutil.copy(current_script, '/opt/multiflowproxy/multiflowproxy.py')
-    
+    increment_step()
+
+    show_progress("Configurando permissões...")
     os.chmod('/opt/multiflowproxy/multiflowproxy.py', 0o755)
     os.symlink('/opt/multiflowproxy/multiflowproxy.py', '/usr/local/bin/multiflowproxy')
+    increment_step()
 
-    print("Instalacao concluida com sucesso. Digite 'multiflowproxy' para acessar o menu.")
+    show_progress("Limpando temporários...")
+    increment_step()
+
+    print("Instalação concluída com sucesso. Digite 'multiflowproxy' para acessar o menu.")
 
 def uninstall_proxy():
     if not is_root():
@@ -316,69 +301,106 @@ def uninstall_proxy():
     if os.path.exists(PROXY_DIR):
         shutil.rmtree(PROXY_DIR)
     os.remove('/usr/local/bin/multiflowproxy')
-    print("\nDesinstalacao concluida com sucesso.")
+    print("\n✓ Desinstalação concluída com sucesso.")
 
 def show_menu():
-    config_manager = ConfigManager()
     while True:
+        os.system('clear')
+        print("\033[0;34m━"*8, "\033[1;32m MULTIFLOW PROXY \033[0m", "\033[0;34m━"*8, "\n")
+        
         proxy_status = get_proxy_status()
+        if "ATIVO" in proxy_status:
+            status_color = "\033[1;32m"
+        elif "INATIVO" in proxy_status:
+            status_color = "\033[1;33m"
+        else:
+            status_color = "\033[1;31m"
+        print(f"\033[1;33mStatus:\033[0m {status_color}{proxy_status}\033[0m")
+        
         active_ports = "Nenhuma porta configurada"
         if os.path.exists(PORTS_FILE) and os.path.getsize(PORTS_FILE) > 0:
             with open(PORTS_FILE, 'r') as f:
                 ports = f.read().splitlines()
                 if ports:
                     active_ports = ", ".join(ports)
-        print("Status: " + proxy_status)
-        print("Portas: " + active_ports + "\n")
+        print(f"\033[1;33mPortas:\033[0m \033[1;32m{active_ports}\033[0m\n")
         
-        print("1. Abrir porta")
-        print("2. Remover Porta")
-        print("0. Voltar")
+        print("\033[0;34m━"*10, "\033[1;32m MENU \033[0m", "\033[0;34m━"*10, "\n")
         
-        option = input(" ➜ ")
+        if not is_proxy_installed():
+            print("\033[1;33m[1]\033[0m Instalar Proxy")
+            print("\033[1;33m[0]\033[0m Sair")
+        else:
+            print("\033[1;33m[1]\033[0m Adicionar Porta")
+            print("\033[1;33m[2]\033[0m Remover Porta")
+            print("\033[1;33m[3]\033[0m Reiniciar Porta")
+            print("\033[1;33m[4]\033[0m Desinstalar Proxy")
+            print("\033[1;33m[0]\033[0m Sair")
+        
+        print("\n\033[0;34m━"*10, "\033[1;32m ESCOLHA \033[0m", "\033[0;34m━"*10, "\n")
+        option = input("\033[1;33m ➜ \033[0m")
         
         if option == '1':
             if not is_proxy_installed():
                 install_proxy()
-                port_input = input("Deseja iniciar proxy em qual porta? ")
+                port_input = input("\n\033[1;33mDeseja iniciar proxy em qual porta? \033[0m")
                 while not port_input.isdigit() or int(port_input) < 1 or int(port_input) > 65535:
-                    print("Digite uma porta valida (1-65535).")
-                    port_input = input("Deseja iniciar proxy em qual porta? ")
+                    print("\033[1;31m✗ Digite uma porta válida (1-65535).\033[0m")
+                    port_input = input("\033[1;33mDeseja iniciar proxy em qual porta? \033[0m")
                 add_proxy_port(int(port_input))
             else:
-                port = input("Digite a porta para adicionar: ")
+                port = input("\n\033[1;33m➜ Digite a porta para adicionar: \033[0m")
                 while not port.isdigit() or int(port) < 1 or int(port) > 65535:
-                    print("Digite uma porta valida (1-65535).")
-                    port = input("Digite a porta: ")
+                    print("\033[1;31m✗ Digite uma porta válida (1-65535).\033[0m")
+                    port = input("\033[1;33m➜ Digite a porta: \033[0m")
                 add_proxy_port(int(port))
-            input("Pressione Enter para continuar...")
+            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
            
-        elif option == '2':
-            if is_proxy_installed():
-                port_info = list_active_ports()
-                if port_info:
-                    print("Portas ativas:")
-                    for port, status in port_info:
-                        print(" " + str(port) + " - " + status)
-                    port = input("Digite a porta para remover: ")
-                    while not port.isdigit():
-                        print("Digite uma porta valida.")
-                        port = input("Digite a porta: ")
-                    del_proxy_port(int(port))
-                else:
-                    print("Nenhuma porta ativa para remover.")
-                input("Pressione Enter para continuar...")
+        elif option == '2' and is_proxy_installed():
+            port_info = list_active_ports()
+            if port_info:
+                print("\n\033[1;33mPortas ativas:\033[0m")
+                for port, status in port_info:
+                    print(f" \033[1;32m{port}\033[0m - {status}")
+                port = input("\n\033[1;33m➜ Digite a porta para remover: \033[0m")
+                while not port.isdigit():
+                    print("\033[1;31m✗ Digite uma porta válida.\033[0m")
+                    port = input("\033[1;33m➜ Digite a porta: \033[0m")
+                del_proxy_port(int(port))
             else:
-                print("Proxy nao instalado.")
-                input("Pressione Enter para continuar...")
+                print("\033[1;31m✗ Nenhuma porta ativa para remover.\033[0m")
+            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
+           
+        elif option == '3' and is_proxy_installed():
+            port_info = list_active_ports()
+            if port_info:
+                print("\n\033[1;33mPortas disponíveis para reiniciar:\033[0m")
+                for port, status in port_info:
+                    print(f" \033[1;32m{port}\033[0m - {status}")
+                port = input("\n\033[1;33m➜ Digite a porta para reiniciar (ou 'all' para todas): \033[0m")
+               
+                if port.lower() == 'all':
+                    for p, _ in port_info:
+                        restart_proxy_port(int(p))
+                elif port.isdigit():
+                    restart_proxy_port(int(port))
+                else:
+                    print("\033[1;31m✗ Opção inválida.\033[0m")
+            else:
+                print("\033[1;31m✗ Nenhuma porta ativa para reiniciar.\033[0m")
+            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
+           
+        elif option == '4' and is_proxy_installed():
+            uninstall_proxy()
+            input("\n\033[1;33mPressione Enter para continuar...\033[0m")
            
         elif option == '0':
-            print("Saindo...")
+            print("\nSaindo...")
             sys.exit(0)
            
         else:
-            print("Opcao invalida.")
-            input("Pressione Enter para continuar...")
+            print("\n\033[1;31m✗ Opção inválida.\033[0m")
+            input("\033[1;33mPressione Enter para continuar...\033[0m")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and ("--port" in sys.argv):
