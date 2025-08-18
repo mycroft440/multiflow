@@ -9,6 +9,9 @@ import time
 import random
 import ssl # Added for SSL support
 import logging # Added for logging
+import threading
+import http.server
+import socketserver
 LOG_FILE = "/opt/multiflowproxy/logs/proxy_log.txt"
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -158,7 +161,6 @@ async def handle_client(reader, writer):
     logger.info(f"New connection from {peername}")
    
     status_options = [
-        "100 Continue",
         "101 Switching Protocols",
         "102 Processing",
         "103 Early Hints",
@@ -549,29 +551,36 @@ def get_local_ip():
         return ip
     except Exception:
         return "localhost"
-import threading
-import http.server
-import socketserver
 def start_temp_log_server():
+    log_port = 8888
+    if is_port_in_use(log_port):
+        print(f"\033[1;31mPorta {log_port} já em uso. Tente novamente mais tarde.\033[0m")
+        return
+    
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=os.path.dirname(LOG_FILE), **kwargs)
     
     try:
-        httpd = socketserver.TCPServer(("0.0.0.0", 8888), Handler)
+        httpd = socketserver.TCPServer(("0.0.0.0", log_port), Handler)
         server_thread = threading.Thread(target=httpd.serve_forever)
         server_thread.daemon = True
         server_thread.start()
+        
+        def shutdown_server():
+            httpd.shutdown()
+            httpd.server_close()
+            server_thread.join()
+            print("Servidor de download temporário encerrado.")
+        
+        timer = threading.Timer(120, shutdown_server)
+        timer.start()
+        
         server_ip = get_local_ip()
         log_filename = os.path.basename(LOG_FILE)
-        print(f"Logs disponíveis temporariamente em http://{server_ip}:8888/{log_filename} por 2 minutos.")
-        time.sleep(120)
-        httpd.shutdown()
-        httpd.server_close()
-        server_thread.join()
-        print("Servidor de download temporário encerrado.")
+        print(f"Logs disponíveis temporariamente em http://{server_ip}:{log_port}/{log_filename} por 2 minutos.")
     except Exception as e:
-        print(f"Erro ao iniciar servidor de download: {e}")
+        print(f"\033[1;31mErro ao iniciar servidor de download: {e}\033[0m")
 def show_menu():
     config_manager = ConfigManager()
     while True:
