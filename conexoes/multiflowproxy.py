@@ -44,14 +44,14 @@ class ConfigManager:
                 json.dump(self.config, f, indent=4)
             return True
         except Exception as e:
-            print("Erro ao salvar configuracao: " + str(e))
+            print(f"Erro ao salvar configuracao: {e}")
             return False
 
 def is_root():
     return os.geteuid() == 0
 
 def error_exit(message):
-    print("\nErro: " + message)
+    print(f"\nErro: {message}")
     sys.exit(1)
 
 def get_port_from_args():
@@ -89,7 +89,7 @@ def get_proxy_status():
     active_count = 0
     for port in ports:
         try:
-            result = subprocess.run(['systemctl', 'is-active', "proxy" + port + ".service"],
+            result = subprocess.run(['systemctl', 'is-active', f"proxy{port}.service"],
                                   capture_output=True, text=True)
             if result.stdout.strip() == 'active':
                 active_count += 1
@@ -97,13 +97,13 @@ def get_proxy_status():
             pass
    
     if active_count > 0:
-        return "ATIVO (" + str(active_count) + " porta" + ('s' if active_count > 1 else '') + ")"
+        return f"ATIVO ({active_count} porta{'s' if active_count > 1 else ''})"
     else:
         return "INSTALADO - INATIVO"
 
 def get_port_status(port):
     try:
-        result = subprocess.run(['systemctl', 'is-active', "proxy" + str(port) + ".service"],
+        result = subprocess.run(['systemctl', 'is-active', f"proxy{port}.service"],
                               capture_output=True, text=True)
         if result.stdout.strip() == 'active':
             return "Ativo"
@@ -136,10 +136,10 @@ async def transfer_data(source_reader, dest_writer):
 
 async def handle_client(reader, writer):
     status = "Switching Protocols"
-    writer.write("HTTP/1.1 101 " + status + "\r\n\r\n".encode())
+    writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
     await writer.drain()
     buffer = await reader.read(1024)
-    writer.write("HTTP/1.1 200 Connection Established\r\n\r\n".encode())
+    writer.write("HTTP/1.1 200 Connection established\r\n\r\n".encode())
     await writer.drain()
     try:
         data = await asyncio.wait_for(peek_stream(writer.transport), timeout=1.0)
@@ -175,19 +175,19 @@ async def run_proxy():
         sock.bind(('::', port))
         sock.listen(100)
         server = await asyncio.start_server(handle_client, sock=sock)
-        print("Iniciando servico na porta: " + str(port))
+        print(f"Iniciando servico na porta: {port}")
         await start_http(server)
     except Exception as e:
-        print("Erro ao iniciar o proxy: " + str(e))
+        print(f"Erro ao iniciar o proxy: {e}")
         sys.exit(1)
 
 def is_port_in_use(port):
     try:
         result = subprocess.run(['netstat', '-tuln'], capture_output=True, text=True)
-        if ":" + str(port) in result.stdout:
+        if f":{port}" in result.stdout:
             return True
         result = subprocess.run(['ss', '-tuln'], capture_output=True, text=True)
-        if ":" + str(port) in result.stdout:
+        if f":{port}" in result.stdout:
             return True
         return False
     except:
@@ -195,26 +195,46 @@ def is_port_in_use(port):
 
 def add_proxy_port(port):
     if is_port_in_use(port):
-        print("A porta " + str(port) + " ja esta em uso.")
+        print(f"A porta {port} ja esta em uso.")
         return
-    command = "/usr/bin/python3 " + PROXY_DIR + "/multiflowproxy.py --port " + str(port)
-    service_name = "proxy" + str(port) + ".service"
-    service_file = "/etc/systemd/system/" + service_name
-    service_content = "[Unit]\nDescription=MultiFlowProxy on port " + str(port) + "\nAfter=network.target\n\n[Service]\nLimitNOFILE=infinity\nLimitNPROC=infinity\nLimitMEMLOCK=infinity\nLimitSTACK=infinity\nLimitCORE=0\nLimitAS=infinity\nLimitRSS=infinity\nLimitCPU=infinity\nLimitFSIZE=infinity\nType=simple\nExecStart=" + command + "\nRestart=always\n\n[Install]\nWantedBy=multi-user.target\n"
+    command = f"/usr/bin/python3 {PROXY_DIR}/multiflowproxy.py --port {port}"
+    service_name = f"proxy{port}.service"
+    service_file = f"/etc/systemd/system/{service_name}"
+    service_content = f"""[Unit]
+Description=MultiFlowProxy on port {port}
+After=network.target
+
+[Service]
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitMEMLOCK=infinity
+LimitSTACK=infinity
+LimitCORE=0
+LimitAS=infinity
+LimitRSS=infinity
+LimitCPU=infinity
+LimitFSIZE=infinity
+Type=simple
+ExecStart={command}
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+"""
     with open(service_file, 'w') as f:
         f.write(service_content)
     subprocess.run(['systemctl', 'daemon-reload'])
     subprocess.run(['systemctl', 'enable', service_name])
     subprocess.run(['systemctl', 'start', service_name])
     with open(PORTS_FILE, 'a') as f:
-        f.write(str(port) + "\n")
-    print("Porta " + str(port) + " adicionada com sucesso.")
+        f.write(f"{port}\n")
+    print(f"Porta {port} adicionada com sucesso.")
 
 def del_proxy_port(port):
-    service_name = "proxy" + str(port) + ".service"
+    service_name = f"proxy{port}.service"
     subprocess.run(['systemctl', 'disable', service_name])
     subprocess.run(['systemctl', 'stop', service_name])
-    os.remove("/etc/systemd/system/" + service_name)
+    os.remove(f"/etc/systemd/system/{service_name}")
     subprocess.run(['systemctl', 'daemon-reload'])
     if os.path.exists(PORTS_FILE):
         with open(PORTS_FILE, 'r') as f:
@@ -223,12 +243,12 @@ def del_proxy_port(port):
             for line in lines:
                 if line.strip() != str(port):
                     f.write(line)
-    print("Porta " + str(port) + " removida com sucesso.")
+    print(f"Porta {port} removida com sucesso.")
 
 def restart_proxy_port(port):
-    service_name = "proxy" + str(port) + ".service"
+    service_name = f"proxy{port}.service"
     subprocess.run(['systemctl', 'restart', service_name])
-    print("Porta " + str(port) + " reiniciada com sucesso.")
+    print(f"Porta {port} reiniciada com sucesso.")
 
 def list_active_ports():
     if not os.path.exists(PORTS_FILE):
@@ -334,7 +354,7 @@ def show_menu():
                 if port_info:
                     print("Portas ativas:")
                     for port, status in port_info:
-                        print(" " + str(port) + " - " + status)
+                        print(f" {port} - {status}")
                     port = input("Digite a porta para remover: ")
                     while not port.isdigit():
                         print("Digite uma porta valida.")
