@@ -46,15 +46,15 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
     await writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
     await writer.drain()
 
-    addr_proxy = "0.0.0.0:22"
+    addr_proxy = "127.0.0.1:22"
     try:
         data = await asyncio.wait_for(peek_stream(reader), timeout=1.0)
         if "SSH" in data or not data:
-            addr_proxy = "0.0.0.0:22"
+            addr_proxy = "127.0.0.1:22"
         else:
-            addr_proxy = "0.0.0.0:1194"
+            addr_proxy = "127.0.0.1:1194"
     except asyncio.TimeoutError:
-        addr_proxy = "0.0.0.0:22"
+        addr_proxy = "127.0.0.1:22"
 
     try:
         server_reader, server_writer = await asyncio.open_connection(*addr_proxy.split(':'))
