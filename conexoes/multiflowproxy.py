@@ -4,7 +4,7 @@ import socket
 from asyncio import StreamReader, StreamWriter
 import os
 
-PORTS_FILE = "/opt/rustyproxy/ports"  # Caminho persistente; use /tmp para testes
+PORTS_FILE = "/opt/multiprotocolo/ports"  # Caminho persistente; use /tmp para testes
 
 def load_ports():
     if os.path.exists(PORTS_FILE):
@@ -21,6 +21,7 @@ def get_bound_socket(port):
     try:
         s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         s.bind(('::', port))
+        s.listen(1)  # Reserva a porta
         return s
     except OSError:
         return None
@@ -82,11 +83,11 @@ async def peek_stream(reader: StreamReader):
     return peek_buffer[:n].decode(errors='ignore')
 
 def get_status():
-    return "@RustyManager"  # Pode customizar via args se precisar
+    return "@MultiProtocolo"  # Pode customizar via args se precisar
 
 def show_menu(ports):
     os.system('clear')
-    print("                              Menu Multiflow Proxy")
+    print("                              Menu MultiProtocolo")
     print()
     status = "Ativo" if ports else "Parado"
     portas_str = ", ".join(map(str, ports)) if ports else "Sem portas ativas"
@@ -100,11 +101,29 @@ def show_menu(ports):
     print()
 
 async def main_menu():
+    dir_path = os.path.dirname(PORTS_FILE)
+    if not os.path.exists(dir_path):
+        try:
+            os.makedirs(dir_path)
+            with open(PORTS_FILE, 'w') as f:
+                pass
+            print("Instalação inicial realizada: Diretório e arquivo de portas criados.")
+        except PermissionError:
+            print("Erro de permissão ao criar diretório (execute com sudo).")
+            return
     ports = load_ports()
     tasks = {}
+    valid_ports = []
     for port in ports:
-        task = asyncio.create_task(server_task(port))
-        tasks[port] = task
+        s = get_bound_socket(port)
+        if s is not None:
+            task = asyncio.create_task(server_task(port, sock=s))
+            tasks[port] = task
+            valid_ports.append(port)
+        else:
+            print(f"Porta {port} não disponível, removendo.")
+    ports = valid_ports
+    save_ports(ports)
 
     while True:
         show_menu(ports)
