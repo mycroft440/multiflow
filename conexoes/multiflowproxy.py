@@ -4,6 +4,8 @@ import socket
 import os
 import subprocess
 import shutil
+import time
+import random
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
 
@@ -50,77 +52,30 @@ async def handle_client(reader, writer):
     cached_status = STATUS_CACHE.get(peername)
     
     status_options = [
-        "100 Continue",
         "101 Switching Protocols",
-        "102 Processing",
-        "103 Early Hints",
         "200 OK",
-        "201 Created",
-        "202 Accepted",
-        "203 Non-Authoritative Information",
-        "204 No Content",
-        "205 Reset Content",
-        "206 Partial Content",
-        "207 Multi-Status",
-        "208 Already Reported",
-        "226 IM Used",
-        "300 Multiple Choices",
-        "301 Moved Permanently",
-        "302 Found",
-        "303 See Other",
-        "304 Not Modified",
-        "307 Temporary Redirect",
-        "308 Permanent Redirect",
-        "400 Bad Request",
-        "401 Unauthorized",
-        "402 Payment Required",
-        "403 Forbidden",
-        "404 Not Found",
-        "405 Method Not Allowed",
-        "406 Not Acceptable",
-        "407 Proxy Authentication Required",
-        "408 Request Timeout",
-        "409 Conflict",
-        "410 Gone",
-        "411 Length Required",
-        "412 Precondition Failed",
-        "413 Payload Too Large",
-        "414 URI Too Long",
-        "415 Unsupported Media Type",
-        "416 Range Not Satisfiable",
-        "417 Expectation Failed",
-        "418 I'm a teapot",
-        "421 Misdirected Request",
-        "422 Unprocessable Content",
-        "423 Locked",
-        "424 Failed Dependency",
-        "425 Too Early",
-        "426 Upgrade Required",
-        "428 Precondition Required",
-        "429 Too Many Requests",
-        "431 Request Header Fields Too Large",
-        "451 Unavailable For Legal Reasons",
-        "500 Internal Server Error",
-        "501 Not Implemented",
-        "502 Bad Gateway",
-        "503 Service Unavailable",
-        "504 Gateway Timeout",
-        "505 HTTP Version Not Supported",
-        "506 Variant Also Negotiates",
-        "507 Insufficient Storage",
-        "508 Loop Detected",
-        "510 Not Extended",
-        "511 Network Authentication Required"
+        "204 No Content"
     ]
    
-    headers = "\r\n"  # Sem headers extras
+    server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
+   
+    headers = "Server: {0}\r\n".format(random.choice(server_variants)) + \
+              "Connection: keep-alive\r\n" + \
+              "Date: {0}\r\n".format(time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())) + \
+              "Content-Type: text/html; charset=UTF-8\r\n" + \
+              "Cache-Control: no-cache\r\n" + \
+              "X-Content-Type-Options: nosniff\r\n" + \
+              "X-Frame-Options: DENY\r\n" + \
+              "X-XSS-Protection: 1; mode=block\r\n" + \
+              "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" + \
+              "Set-Cookie: sessionid={0}; Path=/; HttpOnly\r\n\r\n".format(random.randint(100000, 999999))
    
     if cached_status:
         status_options = [cached_status] + [s for s in status_options if s != cached_status]  # Prioriza o cached
     
     successful_status = None
     for status in status_options:
-        response = f"HTTP/1.1 {status}\r\n\r\n".encode()
+        response = "HTTP/1.1 {0}\r\n{1}".format(status, headers).encode()
         
         writer.write(response)
         await writer.drain()
@@ -204,8 +159,8 @@ def add_proxy_port(port):
 
     command = f"/usr/bin/python3 /opt/multiflowproxy/proxy.py --port {port}"
     service_file_path = f"/etc/systemd/system/proxy{port}.service"
-    service_content = f"""[Unit]
-Description=MultiflowProxy{port}
+    service_content = """[Unit]
+Description=MultiflowProxy{0}
 After=network.target
 
 [Service]
@@ -219,14 +174,14 @@ LimitRSS=infinity
 LimitCPU=infinity
 LimitFSIZE=infinity
 Type=simple
-ExecStart={command}
+ExecStart={1}
 Restart=always
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-"""
+""".format(port, command)
 
     with open(service_file_path, 'w') as f:
         f.write(service_content)
@@ -376,11 +331,3 @@ def show_menu():
         else:
             print("Opção inválida.")
             input("Pressione Enter para voltar.")
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and ("--port" in sys.argv):
-        asyncio.run(run_proxy())
-    else:
-        if not is_root():
-            error_exit("EXECUTE COMO ROOT para acessar o menu.")
-        show_menu()
