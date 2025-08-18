@@ -4,14 +4,8 @@ import socket
 import os
 import subprocess
 import shutil
-import time
-import random
-import re  # Adicionado para parsear request
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
-
-# Cache global para status que funcionaram por cliente (IP:porta)
-STATUS_CACHE = {}
 
 def is_root():
     return os.geteuid() == 0
@@ -39,6 +33,27 @@ def get_port_from_args():
             i += 1
     return port
 
+def get_status_from_args():
+    args = sys.argv[1:]
+    status = "Switching Protocols"
+    i = 0
+    while i < len(args):
+        if args[i] == "--status":
+            if i + 1 < len(args):
+                status = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    return status
+
+async def peek_stream(transport):
+    sock = transport.get_extra_info('socket')
+    if sock is None:
+        return ""
+    peek_buffer = sock.recv(8192, socket.MSG_PEEK)
+    data_str = peek_buffer.decode('utf-8', errors='replace')
+    return data_str
+
 async def transfer_data(source_reader, dest_writer):
     while True:
         data = await source_reader.read(8192)
@@ -49,68 +64,22 @@ async def transfer_data(source_reader, dest_writer):
     dest_writer.close()
 
 async def handle_client(reader, writer):
-    peername = writer.get_extra_info('peername')
-    cached_status = STATUS_CACHE.get(peername)
-    
-    # Ler request inicial para parsear
-    request_data = await reader.read(1024)
-    request_str = request_data.decode('utf-8', errors='replace')
-    
-    # Verificar se é CONNECT method
-    if re.match(r'^CONNECT ', request_str, re.IGNORECASE):
-        # Responder 200 para CONNECT tunneling
-        response = "HTTP/1.1 200 Connection Established\r\n\r\n".encode()
-        writer.write(response)
-        await writer.drain()
-        initial_data = await reader.read(1024)  # Ler data pós-response
-    else:
-        # Fallback para loop mínimo se não CONNECT
-        status_options = [
-            "101 Switching Protocols",
-            "200 OK"
-        ]
-        
-        server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
-        
-        headers = f"Server: {random.choice(server_variants)}\r\n" \
-                  f"Connection: keep-alive\r\n" \
-                  f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n" \
-                  f"Content-Type: text/html; charset=UTF-8\r\n" \
-                  f"Cache-Control: no-cache\r\n" \
-                  f"X-Content-Type-Options: nosniff\r\n" \
-                  f"X-Frame-Options: DENY\r\n" \
-                  f"X-XSS-Protection: 1; mode=block\r\n" \
-                  f"Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" \
-                  f"Set-Cookie: sessionid={random.randint(100000, 999999)}; Path=/; HttpOnly\r\n\r\n"
-        
-        if cached_status:
-            status_options = [cached_status] + [s for s in status_options if s != cached_status]
-        
-        successful_status = None
-        initial_data = b''
-        for status in status_options:
-            response = f"HTTP/1.1 {status}\r\n{headers}".encode()
-            writer.write(response)
-            await writer.drain()
-            
-            try:
-                initial_data = await asyncio.wait_for(reader.read(1024), timeout=3.0)  # Aumentado timeout
-                if initial_data:
-                    successful_status = status
-                    break
-            except asyncio.TimeoutError:
-                continue
-        
-        if not successful_status:
-            writer.close()
-            await writer.wait_closed()
-            return
-        
-        STATUS_CACHE[peername] = successful_status
-    
-    data_str = initial_data.decode('utf-8', errors='replace')
+    status = get_status_from_args()
+    writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
+    await writer.drain()
+
+    buffer = await reader.read(1024)
+
+    writer.write(f"HTTP/1.1 200 Connection established\r\n\r\n".encode())
+    await writer.drain()
+
+    try:
+        data = await asyncio.wait_for(peek_stream(writer.transport), timeout=1.0)
+    except asyncio.TimeoutError:
+        data = ""
+
     addr_proxy = "0.0.0.0:22"
-    if "SSH" in data_str or not initial_data:
+    if "SSH" in data or data == "":
         addr_proxy = "0.0.0.0:22"
     else:
         addr_proxy = "0.0.0.0:1194"
@@ -124,10 +93,6 @@ async def handle_client(reader, writer):
         writer.close()
         await writer.wait_closed()
         return
-
-    if initial_data:
-        server_writer.write(initial_data)
-        await server_writer.drain()
 
     client_to_server = asyncio.create_task(transfer_data(reader, server_writer))
     server_to_client = asyncio.create_task(transfer_data(server_reader, writer))
@@ -164,12 +129,12 @@ def is_port_in_use(port):
     except Exception:
         return False
 
-def add_proxy_port(port):
+def add_proxy_port(port, status="Switching Protocols"):
     if is_port_in_use(port):
         print(f"A porta {port} já está em uso.")
         return
 
-    command = f"/usr/bin/python3 /opt/multiflowproxy/proxy.py --port {port}"
+    command = f"/usr/bin/python3 /opt/multiflowproxy/proxy.py --port {port} --status '{status}'"
     service_file_path = f"/etc/systemd/system/proxy{port}.service"
     service_content = f"""[Unit]
 Description=MultiflowProxy{port}
@@ -279,13 +244,6 @@ def install_proxy():
 
     print("Instalação concluída com sucesso.")
 
-    # Iniciar na porta desejada
-    port = input("Digite a porta para iniciar o proxy: ")
-    while not port.isdigit() or int(port) < 1 or int(port) > 65535:
-        print("Porta inválida. Tente novamente.")
-        port = input("Digite a porta: ")
-    add_proxy_port(int(port))
-
 def uninstall_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
@@ -306,43 +264,49 @@ def uninstall_proxy():
 def show_menu():
     while True:
         os.system('clear')
-        print("--- MULTIFLOW PROXY ---")
+        print("------------------------------------------------")
+        print("|                  MULTIFLOW PROXY             |")
+        print("------------------------------------------------")
+
         active_ports = "nenhuma"
         if os.path.exists(PORTS_FILE) and os.path.getsize(PORTS_FILE) > 0:
             with open(PORTS_FILE, 'r') as f:
                 active_ports = " ".join(f.read().splitlines())
-        print(f"Portas ativas: {active_ports}")
-        print("1 - Instalar Proxy")
-        print("2 - Abrir Porta")
-        print("3 - Remover Porta")
-        print("4 - Desinstalar Proxy")
-        print("0 - Sair")
-        option = input("Selecione: ")
+
+        print(f"| Portas(s): {active_ports.ljust(34)}|")
+        print("------------------------------------------------")
+        print("| 1 - Abrir Porta                              |")
+        print("| 2 - Remover Porta                            |")
+        print("| 3 - Desinstalar Proxy                        |")
+        print("| 0 - Voltar                                   |")
+        print("------------------------------------------------")
+        print()
+
+        option = input(" --> Selecione uma opção: ")
+
         if option == '1':
-            install_proxy()
-            input("Pressione Enter para voltar.")
+            port = input("Digite a porta: ")
+            while not port.isdigit():
+                print("Digite uma porta válida.")
+                port = input("Digite a porta: ")
+            status = input("Digite o status de conexão (deixe vazio para o padrão): ") or "Switching Protocols"
+            add_proxy_port(int(port), status)
+            input("> Porta ativada com sucesso. Pressione qualquer tecla para voltar ao menu.")
         elif option == '2':
-            port = input("Porta: ")
+            port = input("Digite a porta: ")
             while not port.isdigit():
-                print("Porta inválida.")
-                port = input("Porta: ")
-            add_proxy_port(int(port))
-            input("Pressione Enter para voltar.")
-        elif option == '3':
-            port = input("Porta: ")
-            while not port.isdigit():
-                print("Porta inválida.")
-                port = input("Porta: ")
+                print("Digite uma porta válida.")
+                port = input("Digite a porta: ")
             del_proxy_port(int(port))
-            input("Pressione Enter para voltar.")
-        elif option == '4':
+            input("> Porta desativada com sucesso. Pressione qualquer tecla para voltar ao menu.")
+        elif option == '3':
             uninstall_proxy()
-            input("Pressione Enter para voltar.")
+            input("> Desinstalação concluída. Pressione qualquer tecla para voltar ao menu.")
         elif option == '0':
             sys.exit(0)
         else:
-            print("Opção inválida.")
-            input("Pressione Enter para voltar.")
+            print("Opção inválida. Pressione qualquer tecla para voltar ao menu.")
+            input()
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and ("--port" in sys.argv):
@@ -350,4 +314,5 @@ if __name__ == "__main__":
     else:
         if not is_root():
             error_exit("EXECUTE COMO ROOT para acessar o menu.")
+        install_proxy()
         show_menu()
