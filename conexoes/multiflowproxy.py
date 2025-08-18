@@ -59,23 +59,23 @@ async def handle_client(reader, writer):
    
     server_variants = ["nginx/1.18.0 (Ubuntu)", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0"]
    
-    headers = "Server: {0}\r\n".format(random.choice(server_variants)) + \
-              "Connection: keep-alive\r\n" + \
-              "Date: {0}\r\n".format(time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())) + \
-              "Content-Type: text/html; charset=UTF-8\r\n" + \
-              "Cache-Control: no-cache\r\n" + \
-              "X-Content-Type-Options: nosniff\r\n" + \
-              "X-Frame-Options: DENY\r\n" + \
-              "X-XSS-Protection: 1; mode=block\r\n" + \
-              "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" + \
-              "Set-Cookie: sessionid={0}; Path=/; HttpOnly\r\n\r\n".format(random.randint(100000, 999999))
+    headers = f"Server: {random.choice(server_variants)}\r\n" \
+              f"Connection: keep-alive\r\n" \
+              f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n" \
+              f"Content-Type: text/html; charset=UTF-8\r\n" \
+              f"Cache-Control: no-cache\r\n" \
+              f"X-Content-Type-Options: nosniff\r\n" \
+              f"X-Frame-Options: DENY\r\n" \
+              f"X-XSS-Protection: 1; mode=block\r\n" \
+              f"Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" \
+              f"Set-Cookie: sessionid={random.randint(100000, 999999)}; Path=/; HttpOnly\r\n\r\n"
    
     if cached_status:
         status_options = [cached_status] + [s for s in status_options if s != cached_status]  # Prioriza o cached
     
     successful_status = None
     for status in status_options:
-        response = "HTTP/1.1 {0}\r\n{1}".format(status, headers).encode()
+        response = f"HTTP/1.1 {status}\r\n{headers}".encode()
         
         writer.write(response)
         await writer.drain()
@@ -159,8 +159,8 @@ def add_proxy_port(port):
 
     command = f"/usr/bin/python3 /opt/multiflowproxy/proxy.py --port {port}"
     service_file_path = f"/etc/systemd/system/proxy{port}.service"
-    service_content = """[Unit]
-Description=MultiflowProxy{0}
+    service_content = f"""[Unit]
+Description=MultiflowProxy{port}
 After=network.target
 
 [Service]
@@ -174,14 +174,14 @@ LimitRSS=infinity
 LimitCPU=infinity
 LimitFSIZE=infinity
 Type=simple
-ExecStart={1}
+ExecStart={command}
 Restart=always
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-""".format(port, command)
+"""
 
     with open(service_file_path, 'w') as f:
         f.write(service_content)
@@ -331,3 +331,11 @@ def show_menu():
         else:
             print("Opção inválida.")
             input("Pressione Enter para voltar.")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and ("--port" in sys.argv):
+        asyncio.run(run_proxy())
+    else:
+        if not is_root():
+            error_exit("EXECUTE COMO ROOT para acessar o menu.")
+        show_menu()
