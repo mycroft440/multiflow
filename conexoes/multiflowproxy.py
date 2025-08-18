@@ -64,8 +64,9 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
         await writer.wait_closed()
         return
 
-    asyncio.create_task(transfer_data(reader, server_writer))
-    await transfer_data(server_reader, writer)
+    t1 = asyncio.create_task(transfer_data(reader, server_writer))
+    t2 = asyncio.create_task(transfer_data(server_reader, writer))
+    await asyncio.gather(t1, t2)
 
 async def transfer_data(source: StreamReader, dest: StreamWriter):
     while True:
