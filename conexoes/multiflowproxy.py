@@ -265,9 +265,11 @@ async def handle_client(reader, writer):
         return
    
     data_str = initial_data.decode('utf-8', errors='replace')
-    addr_proxy = "0.0.0.0:1194"  # Default to OpenVPN
-    if data_str.startswith('SSH-'):
+    addr_proxy = "0.0.0.0:22"
+    if "SSH" in data_str or not initial_data:
         addr_proxy = "0.0.0.0:22"
+    else:
+        addr_proxy = "0.0.0.0:1194"
     logger.info(f"Detected protocol: {'SSH' if addr_proxy == '0.0.0.0:22' else 'OpenVPN'}")
     logger.info(f"Routing connection from {peername} to {addr_proxy}")
    
