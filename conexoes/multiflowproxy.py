@@ -4,9 +4,47 @@ import socket
 import os
 import subprocess
 import shutil
+import json
+import time
 
 PORTS_FILE = "/opt/multiflowproxy/ports"
 PROXY_DIR = "/opt/multiflowproxy"
+CONFIG_FILE = '/etc/proxy_config.json'
+
+DEFAULT_CONFIG = {
+    'installed': False,
+    'active': False,
+    'ports': [80],
+    'ip': '0.0.0.0',
+    'password': '',
+    'default_host': '0.0.0.0:22'
+}
+
+class ConfigManager:
+    def __init__(self):
+        self.config_file = CONFIG_FILE
+        self.load_config()
+    
+    def load_config(self):
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    self.config = json.load(f)
+            else:
+                self.config = DEFAULT_CONFIG.copy()
+                self.save_config()
+        except:
+            self.config = DEFAULT_CONFIG.copy()
+    
+    def save_config(self):
+        try:
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            with open(self.config_file, 'w') as f:
+                json.dump(self.config, f, indent=4)
+            return True
+        except Exception as e:
+            print(f"\033[1;31mErro ao salvar configuração: {e}\033[0m")
+            return False
 
 def is_root():
     return os.geteuid() == 0
@@ -225,7 +263,7 @@ def install_proxy():
     if not is_root():
         error_exit("EXECUTE COMO ROOT")
     
-    TOTAL_STEPS = 8
+    TOTAL_STEPS = 9
     CURRENT_STEP = 0
     
     def increment_step():
@@ -304,6 +342,7 @@ def uninstall_proxy():
     print("\n✓ Desinstalação concluída com sucesso.")
 
 def show_menu():
+    config_manager = ConfigManager()
     while True:
         os.system('clear')
         print("\033[0;34m━"*8, "\033[1;32m MULTIFLOW PROXY \033[0m", "\033[0;34m━"*8, "\n")
@@ -325,7 +364,7 @@ def show_menu():
                     active_ports = ", ".join(ports)
         print(f"\033[1;33mPortas:\033[0m \033[1;32m{active_ports}\033[0m\n")
         
-        print("\033[0;34m━"*10, "\033[1;32m MENU \033[0m", "\033[0;34m━"*10, "\n")
+        print("\033[0;34m━"*10, "\033[1;32m MENU \033[0m", "\033[0;34m━\033[1;37m"*11, "\n")
         
         if not is_proxy_installed():
             print("\033[1;33m[1]\033[0m Instalar Proxy")
@@ -337,7 +376,7 @@ def show_menu():
             print("\033[1;33m[4]\033[0m Desinstalar Proxy")
             print("\033[1;33m[0]\033[0m Sair")
         
-        print("\n\033[0;34m━"*10, "\033[1;32m ESCOLHA \033[0m", "\033[0;34m━"*10, "\n")
+        print("\n\033[0;34m━"*10, "\033[1;32m ESCOLHA \033[0m", "\033[0;34m━\033[1;37m"*11, "\n")
         option = input("\033[1;33m ➜ \033[0m")
         
         if option == '1':
