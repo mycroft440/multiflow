@@ -4,7 +4,7 @@ import socket
 from asyncio import StreamReader, StreamWriter
 import os
 
-PORTS_FILE = "/opt/multiprotocolo/ports"  # Caminho persistente; use /tmp para testes
+PORTS_FILE = "ports"  # Arquivo no diretório atual para evitar problemas de permissão
 
 port_to_status = {}
 
@@ -130,7 +130,7 @@ def show_menu(ports):
 async def main_menu():
     global port_to_status
     dir_path = os.path.dirname(PORTS_FILE)
-    if not os.path.exists(dir_path):
+    if dir_path and not os.path.exists(dir_path):
         try:
             os.makedirs(dir_path)
             with open(PORTS_FILE, 'w') as f:
