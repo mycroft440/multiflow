@@ -19,7 +19,7 @@ def load_ports():
                         port_str, status = line.split(':', 1)
                     else:
                         port_str = line
-                        status = "@MultiProtocolo"
+                        status = "@RustyManager"
                     ports[int(port_str)] = status
         return ports
     return {}
@@ -51,7 +51,7 @@ async def server_task(port, sock=None):
 
 async def handle_client(reader: StreamReader, writer: StreamWriter):
     port = writer.get_extra_info('sockname')[1]
-    status = port_to_status.get(port, "@MultiProtocolo")
+    status = port_to_status.get(port, "@RustyManager")
     await writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
     await writer.drain()
 
@@ -66,7 +66,7 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
             addr_proxy = "0.0.0.0:22"
         else:
             addr_proxy = "0.0.0.0:1194"
-    except asyncio.TimeoutError:
+    except Exception:
         addr_proxy = "0.0.0.0:22"
 
     try:
@@ -105,7 +105,7 @@ async def peek_stream(reader: StreamReader):
 
 def get_status():
     args = sys.argv[1:]
-    status = "@MultiProtocolo"
+    status = "@RustyManager"
     for i in range(len(args)):
         if args[i] == "--status":
             if i + 1 < len(args):
@@ -177,8 +177,8 @@ async def main_menu():
                     print("Porta já em uso ou erro ao bind.")
                     await asyncio.sleep(2)
                     continue
-                status_str = input("Digite o status de conexão (deixe vazio para @MultiProtocolo): ").strip()
-                status = status_str if status_str else "@MultiProtocolo"
+                status_str = input("Digite o status de conexão (deixe vazio para @RustyManager): ").strip()
+                status = status_str if status_str else "@RustyManager"
                 task = asyncio.create_task(server_task(port, sock=s))
                 tasks[port] = task
                 ports[port] = status
@@ -234,19 +234,19 @@ async def main_single(port):
 
 def get_port():
     args = sys.argv[1:]
-    port = None
+    port = 80
     for i in range(len(args)):
         if args[i] == "--port":
             if i + 1 < len(args):
                 try:
                     port = int(args[i + 1])
                 except ValueError:
-                    port = None
+                    port = 80
     return port
 
 if __name__ == "__main__":
-    port = get_port()
-    if port is not None:
-        asyncio.run(main_single(port))
-    else:
+    if '--menu' in sys.argv:
         asyncio.run(main_menu())
+    else:
+        port = get_port()
+        asyncio.run(main_single(port))
