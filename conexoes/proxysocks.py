@@ -59,38 +59,98 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         client_writer: The writer associated with the client socket.
         status: The status string to embed in the HTTP response.
     """
-    # Send the HTTP handshake messages.  Use CRLF per RFC 7230.  First
-    # send a 101 response using the provided status string, then
-    # consume up to 1024 bytes from the client.  Finally respond with
-    # a literal 200 OK line, as seen in the reference implementation.
+    # The RustyProxy protocol begins with an HTTP‐like request.  Some
+    # clients (e.g. injector apps) send custom headers such as
+    # ``X-Real-Host``, ``X-Pass`` and ``X-Split`` to instruct the proxy
+    # which upstream host to connect to.  If no ``X-Real-Host`` header is
+    # present, the original Rust implementation performs a simple
+    # protocol probe and decides between SSH (port 22) and OpenVPN
+    # (port 1194).  We therefore read an initial chunk from the client to
+    # extract these headers before sending any handshake lines.
     try:
-        handshake_101 = f"HTTP/1.1 101 {status}\r\n\r\n".encode()
-        client_writer.write(handshake_101)
+        # Read up to 8 KiB from the client for header parsing.  This
+        # should cover the entire HTTP request.  We deliberately avoid
+        # reading until EOF so that subsequent protocol data (e.g.
+        # OpenVPN or SSH handshake) remains buffered.
+        initial_data = await client_reader.read(8192)
+    except Exception as exc:  # pylint: disable=broad-except
+        logging.error("Failed to read initial data: %s", exc)
+        client_writer.close()
+        await client_writer.wait_closed()
+        return
+
+    # Decode the header for parsing; ignore undecodable bytes.
+    header_text = initial_data.decode("utf-8", errors="ignore")
+
+    # Helper to extract the value of a header.  This replicates the
+    # behaviour of the original proxy scripts.
+    def find_header(text: str, header: str) -> str:
+        idx = text.find(header + ": ")
+        if idx == -1:
+            return ""
+        idx = text.find(":", idx)
+        value = text[idx + 2 :]
+        end = value.find("\r\n")
+        if end == -1:
+            return ""
+        return value[:end]
+
+    host_port_header = find_header(header_text, "X-Real-Host")
+    x_split_header = find_header(header_text, "X-Split")
+
+    # Determine the upstream host and port.  If X-Real-Host is
+    # specified, parse it; otherwise fall back to protocol probing.
+    backend_host: str
+    backend_port: int
+    if host_port_header:
+        # Parse the host:port specification.  If no port is provided,
+        # default to 22 (SSH) to mirror the behaviour of proxy.py.
+        if ":" in host_port_header:
+            hp_host, hp_port_str = host_port_header.rsplit(":", 1)
+            try:
+                backend_port = int(hp_port_str)
+            except ValueError:
+                backend_port = 22
+            backend_host = hp_host
+        else:
+            backend_host = host_port_header
+            backend_port = 22
+    else:
+        # No X-Real-Host header; perform protocol detection on any
+        # remaining data in the buffer.  The bytes we already read are
+        # purely HTTP headers and should not be forwarded to the
+        # backend, so we discard them.  Use probe_backend with a
+        # timeout just like the Rust implementation.  If the probe
+        # times out, default to SSH.
+        try:
+            backend_host, backend_port = await asyncio.wait_for(
+                probe_backend(client_reader, client_writer), timeout=1.0
+            )
+        except asyncio.TimeoutError:
+            backend_host, backend_port = ("0.0.0.0", 22)
+
+    # If the X-Split header is present, consume another chunk from the
+    # client.  Some injector apps send a second request in this case.
+    if x_split_header:
+        try:
+            await client_reader.read(8192)
+        except Exception:
+            pass
+
+    # Send the handshake responses.  According to the original proxy
+    # scripts and the Rust implementation, the proxy must send a 101
+    # Switching Protocols line followed by a 200 OK line.  Use CRLF
+    # sequences exactly as expected by clients.
+    try:
+        client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
         await client_writer.drain()
-        # Read and discard up to 1024 bytes from the client.  This call
-        # returns as soon as any data is available, mirroring the Rust code.
-        await client_reader.read(1024)
-        # Always send 200 OK irrespective of the provided status.  Many
-        # clients expect this exact string.
-        handshake_200 = b"HTTP/1.1 200 OK\r\n\r\n"
-        client_writer.write(handshake_200)
+        client_writer.write(b"HTTP/1.1 200 OK\r\n\r\n")
         await client_writer.drain()
     except Exception as exc:  # pylint: disable=broad-except
         logging.error("Failed during handshake with client: %s", exc)
         client_writer.close()
         await client_writer.wait_closed()
         return
-
-    # Probe the client stream to decide which backend to forward to.  Use a
-    # timeout of one second to mirror the Rust implementation's use of
-    # tokio::time::timeout around peek_stream.
-    try:
-        backend_host, backend_port = await asyncio.wait_for(
-            probe_backend(client_reader, client_writer), timeout=1.0
-        )
-    except asyncio.TimeoutError:
-        # No data within timeout -> default to SSH port
-        backend_host, backend_port = ("0.0.0.0", 22)
 
     # Establish a connection to the chosen backend.
     try:
@@ -101,31 +161,26 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         await client_writer.wait_closed()
         return
 
-    # Proxy data in both directions concurrently.  We spawn two tasks:
-    # one moving data from client to server and one moving data from
-    # server to client.  When either direction completes (e.g. the
-    # client disconnects), the other will be cancelled to tidy up.
+    # Forward data bidirectionally.  When one side closes, the other
+    # writer will be closed to signal EOF.  We intentionally do not
+    # forward the initial HTTP headers to the backend.
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
         try:
             while True:
                 data = await reader.read(8192)
                 if not data:
-                    # EOF on one side, stop forwarding.
                     break
                 writer.write(data)
                 await writer.drain()
         except Exception as exc:  # pylint: disable=broad-except
             logging.debug("Forwarding %s encountered error: %s", direction, exc)
         finally:
-            # Close the writer to signal EOF to the other side.
             try:
                 writer.close()
                 await writer.wait_closed()
             except Exception:
                 pass
 
-    # Create the tasks and wait for both to finish.  If one task
-    # finishes early, the other will still run to completion.
     client_to_server = asyncio.create_task(forward(client_reader, server_writer, "client->server"))
     server_to_client = asyncio.create_task(forward(server_reader, client_writer, "server->client"))
     await asyncio.gather(client_to_server, server_to_client, return_exceptions=True)
@@ -175,7 +230,10 @@ async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyn
     except Exception:
         return default_backend
     # Decide on the backend based on the peeked data.
-    if not text or 'SSH' in text:
+    # Perform a case‑insensitive search for "SSH".  If the peeked data is
+    # empty or contains SSH, default to the SSH backend; otherwise use
+    # the OpenVPN backend.  Using .upper() avoids missing lowercase "ssh".
+    if not text or 'SSH' in text.upper():
         return default_backend
     return alt_backend
 
