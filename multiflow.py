@@ -460,11 +460,15 @@ def build_connections_frame(status_msg=""):
     s.append("\n")
     s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
     s.append("\n")
-    s.append(menu_option("1", "Openvpn", Icons.LOCK, MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "ProxySocks", Icons.UNLOCK, MC.PURPLE_GRADIENT))
-    s.append(menu_option("3", "MultiFlow Proxy", Icons.KEY, MC.BLUE_GRADIENT))
+    # Ao construir o menu de conexões, removemos os ícones das opções e
+    # ajustamos a ordem das entradas conforme solicitado. Agora a
+    # segunda posição é "MultiFlow Proxy" e a terceira é "ProxySocks".
+    s.append(menu_option("1", "Openvpn", "", MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "MultiFlow Proxy", "", MC.BLUE_GRADIENT))
+    s.append(menu_option("3", "ProxySocks", "", MC.PURPLE_GRADIENT))
     s.append("\n")
-    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
+    # Para a opção de voltar ao menu principal, removemos o ícone
+    s.append(menu_option("0", "Voltar ao Menu Principal", "", MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
     return "".join(s)
 
@@ -475,10 +479,12 @@ def build_tools_frame(status_msg=""):
     s.append("\n")
     s.append(modern_box("FERRAMENTAS DE OTIMIZAÇÃO", [], Icons.TOOLS, MC.ORANGE_GRADIENT, MC.ORANGE_LIGHT))
     s.append("\n")
-    s.append(menu_option("1", "Otimizador de VPS", Icons.ROCKET, MC.GREEN_GRADIENT, badge="TURBO"))
-    s.append(menu_option("2", "Bloqueador de Sites", Icons.SHIELD, MC.RED_GRADIENT))
+    # Remover ícones de todas as opções do submenu de ferramentas. O badge
+    # "TURBO" permanece para destacar o otimizador.
+    s.append(menu_option("1", "Otimizador de VPS", "", MC.GREEN_GRADIENT, badge="TURBO"))
+    s.append(menu_option("2", "Bloqueador de Sites", "", MC.RED_GRADIENT))
     s.append("\n")
-    s.append(menu_option("0", "Voltar ao Menu Principal", Icons.BACK, MC.YELLOW_GRADIENT))
+    s.append(menu_option("0", "Voltar ao Menu Principal", "", MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
     return "".join(s)
 
@@ -548,6 +554,7 @@ def conexoes_menu():
         TerminalManager.after_input()
 
         if choice == "1":
+            # Mantemos a opção 1 para OpenVPN
             TerminalManager.leave_alt_screen()
             try:
                 menu_openvpn.main_menu()
@@ -555,17 +562,7 @@ def conexoes_menu():
                 TerminalManager.enter_alt_screen()
             status = "OpenVPN: operação concluída."
         elif choice == "2":
-            TerminalManager.leave_alt_screen()
-            try:
-                root = _find_multiflow_root()
-                proxysocks_path = os.path.join(root, 'conexoes', 'proxysocks.py')
-                subprocess.run([sys.executable, proxysocks_path], check=True)
-            except Exception as e:
-                print(f"Erro ao executar ProxySocks: {e}")
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "ProxySocks: operação concluída."
-        elif choice == "3":
+            # A opção 2 agora executa MultiFlow Proxy
             TerminalManager.leave_alt_screen()
             try:
                 root = _find_multiflow_root()
@@ -576,6 +573,18 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "MultiFlow Proxy: operação concluída."
+        elif choice == "3":
+            # A opção 3 passa a executar ProxySocks
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                proxysocks_path = os.path.join(root, 'conexoes', 'proxysocks.py')
+                subprocess.run([sys.executable, proxysocks_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar ProxySocks: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "ProxySocks: operação concluída."
         elif choice == "0":
             return
         else:
