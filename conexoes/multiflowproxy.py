@@ -1,381 +1,466 @@
-import asyncio
+"""
+Python reimplementation of the RustyProxy server together with the
+interactive menu from ``menu.sh``.  The original Rust program
+(``RustyProxyOnly``) implements an asynchronous TCP proxy that
+listens on a configurable port and forwards traffic to either an SSH
+or OpenVPN backend based on a simple protocol probe.  The Bash
+``menu.sh`` script provides a text‑based menu for opening and
+closing multiple proxy instances via systemd services.
+
+This single Python script encapsulates both pieces of functionality:
+
+* **Proxy mode**: When invoked with ``--port`` (and optionally
+  ``--status``), it runs a proxy on the specified port.  It sends
+  HTTP status lines to the client, peeks at the first bytes of the
+  connection using the underlying socket's ``MSG_PEEK`` flag to
+  choose between port 22 (SSH) and 1194 (OpenVPN), and then
+  asynchronously shuttles data between client and server.
+
+* **Menu mode**: When invoked without ``--port`` (and executed as
+  root), it presents an interactive menu similar to the original
+  ``menu.sh``.  Users can add or remove proxy ports; the script
+  writes appropriate systemd unit files to run itself in proxy mode,
+  starts/stops the units via ``systemctl`` and records active ports in
+  ``/opt/rustyproxy/ports``.
+
+This code leverages Python's :mod:`asyncio` standard library to
+provide asynchronous networking.  Because Python lacks a direct
+``peek`` on the high‑level streams, the implementation uses the
+socket's ``recv`` with ``MSG_PEEK`` via a thread pool to inspect
+incoming data without consuming it.  Error handling is done via
+exceptions and logging rather than ``Result`` values, and stream
+splitting is unnecessary because ``asyncio`` separates readers and
+writers for each connection.  Despite these differences, the core
+logic—HTTP handshake, protocol detection and bidirectional
+forwarding—mirrors the original Rust design.
+"""
+
 import argparse
+import random
+from datetime import datetime, timezone
+import asyncio
 import logging
-import sys
+import os
 import socket
+import subprocess
+import sys
+from pathlib import Path
+from typing import Tuple
 
-# --- Configure maximum logging verbosity ---
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG)
+async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, status: str) -> None:
+    """Handle a single incoming client connection.
 
-detailed_formatter = logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s'
-)
+    Sends HTTP status lines to the client, performs a protocol probe on
+    the incoming stream and then proxies data bidirectionally between
+    the client and the selected backend.  Any exceptions raised
+    during processing will cause the client connection to be closed.
 
-console_handler.setFormatter(detailed_formatter)
-logger.addHandler(console_handler)
-# --- End logging configuration ---
-
-# Global variables to hold server state
-server_instance = None
-current_port = None
-current_status = None
-
-async def peek_data(reader, length=8192, timeout_duration=1.0):
+    Args:
+        client_reader: The reader associated with the client socket.
+        client_writer: The writer associated with the client socket.
+        status: The status string to embed in the HTTP response.
     """
-    Attempt to peek data from the StreamReader without consuming it.
-    Uses the underlying socket with MSG_PEEK flag.
-    """
+    # The RustyProxy protocol begins with an HTTP‐like request.  Some
+    # clients (e.g. injector apps) send custom headers such as
+    # ``X-Real-Host``, ``X-Pass`` and ``X-Split`` to instruct the proxy
+    # which upstream host to connect to.  If no ``X-Real-Host`` header is
+    # present, the original Rust implementation performs a simple
+    # protocol probe and decides between SSH (port 22) and OpenVPN
+    # (port 1194).  We therefore read an initial chunk from the client to
+    # extract these headers before sending any handshake lines.
     try:
-        # Access the underlying socket
-        transport = reader._transport
-        sock = transport.get_extra_info('socket')
-        if sock is None:
-            logger.warning("Could not get underlying socket for peeking (sock is None).")
-            return ""
-
-        # Use asyncio.wait_for to implement timeout
-        loop = asyncio.get_running_loop()
-
-        def _peek():
-            try:
-                flags = socket.MSG_PEEK
-                # Nem todo SO tem MSG_DONTWAIT (ex.: Windows)
-                if hasattr(socket, "MSG_DONTWAIT"):
-                    flags |= socket.MSG_DONTWAIT
-                data = sock.recv(length, flags)
-                return data
-            except BlockingIOError:
-                return b""
-            except Exception as e:
-                logger.debug(f"Socket error during peek: {e}")
-                raise e
-
-        data_bytes = await asyncio.wait_for(
-            loop.run_in_executor(None, _peek), timeout=timeout_duration
-        )
-
-        if isinstance(data_bytes, bytes):
-            data_str = data_bytes.decode('utf-8', errors='ignore')
-            logger.debug(f"Peeked {len(data_bytes)} bytes: {repr(data_str[:100])}...")
-            return data_str
-        else:
-            logger.warning(f"Peek returned non-bytes type: {type(data_bytes)}")
-            return ""
-
-    except asyncio.TimeoutError:
-        logger.warning(f"Timeout ({timeout_duration}s) while peeking data.")
-        return ""
-    except Exception as e:
-        logger.error(f"Error during peek operation: {e}", exc_info=True)
-        return ""  # Return empty string on error
-
-
-async def handle_client(client_reader, client_writer):
-    """
-    Handles a client connection, determines the destination based on initial data,
-    and forwards traffic.
-    """
-    client_addr = client_writer.get_extra_info('peername')
-    logger.info(f"New connection from {client_addr}")
-
-    try:
-        # Send initial HTTP 101 Switching Protocols response
-        status = current_status
-        initial_response = f"HTTP/1.1 101 {status}\r\n\r\n"
-        logger.debug(f"Sending 101 response: {repr(initial_response)}")
-        client_writer.write(initial_response.encode())
-        await client_writer.drain()
-        logger.debug("101 response sent and drained.")
-
-        # --- Read initial data (like Rust code does with 1024 buffer) ---
-        logger.debug("Reading initial 1024 bytes from client (like Rust)...")
-        initial_data = b""
-        bytes_read_initial = 0
-        try:
-            initial_data = await asyncio.wait_for(client_reader.read(1024), timeout=1.0)
-            bytes_read_initial = len(initial_data)
-            if bytes_read_initial > 0:
-                initial_data_for_check = initial_data.decode('utf-8', errors='ignore')
-                logger.debug(f"Read {bytes_read_initial} initial bytes: {repr(initial_data_for_check[:100])}...")
-            else:
-                initial_data_for_check = ""
-                logger.debug("No initial data read (EOF or zero bytes).")
-        except asyncio.TimeoutError:
-            logger.warning("Timeout reading initial 1024 bytes.")
-            initial_data_for_check = ""
-        except Exception as e:
-            logger.error(f"Error reading initial data: {e}", exc_info=True)
-            initial_data_for_check = ""  # Default to SSH on read error
-
-        # Send the initial HTTP 200 OK response to the client (as per Rust code)
-        ok_response = f"HTTP/1.1 200 {status}\r\n\r\n"
-        logger.debug(f"Sending 200 OK response to client: {repr(ok_response)}")
-        client_writer.write(ok_response.encode())
-        await client_writer.drain()
-        logger.debug("200 OK response sent and drained.")
-
-        # --- Use peek to inspect data for protocol detection (like Rust) ---
-        logger.debug("Attempting to peek at client data for protocol detection...")
-        peeked_data_str = await peek_data(client_reader, length=8192, timeout_duration=1.0)
-
-        # Preferir usar o que já foi lido; se vazio, usar o peek
-        data_to_inspect = initial_data_for_check if initial_data_for_check else peeked_data_str
-
-        # Determine destination port based on available data (matching Rust logic closely)
-        if "SSH" in data_to_inspect or not data_to_inspect.strip():
-            dest_port = 22
-            logger.info("Detected or defaulted to SSH traffic (port 22)")
-        else:
-            dest_port = 1194
-            logger.info("Detected OpenVPN traffic (port 1194)")
-
-        # --- Connect to the destination server ---
-        # Conectar a 0.0.0.0 como destino não funciona; use localhost por padrão
-        dest_addr = '127.0.0.1'
-        logger.info(f"Connecting to destination: {dest_addr}:{dest_port}")
-
-        try:
-            logger.debug(f"Attempting to connect to destination server {dest_addr}:{dest_port}...")
-            server_reader, server_writer = await asyncio.open_connection(dest_addr, dest_port)
-            logger.info(f"Successfully connected to destination {dest_addr}:{dest_port}")
-        except Exception as e:
-            logger.error(f"Failed to connect to destination {dest_addr}:{dest_port} - {e}", exc_info=True)
-            client_writer.close()
-            await client_writer.wait_closed()
-            return
-
-        # --- Forward the initial data that was read to the server ---
-        if bytes_read_initial > 0:
-            logger.debug(f"Forwarding the initial {bytes_read_initial} bytes read to the server.")
-            server_writer.write(initial_data)
-            await server_writer.drain()
-            logger.debug("Initial data successfully forwarded to server.")
-
-        # --- Relay data bidirectionally ---
-        logger.info("Starting bidirectional data relay...")
-        await asyncio.gather(
-            relay_data(client_reader, server_writer, f"client ({client_addr})->server ({dest_addr}:{dest_port})"),
-            relay_data(server_reader, client_writer, f"server ({dest_addr}:{dest_port})->client ({client_addr})")
-        )
-        logger.info("Data relay stopped (EOF or error).")
-
-    except asyncio.CancelledError:
-        logger.info(f"Client handler for {client_addr} was cancelled.")
-    except Exception as e:
-        logger.error(f"Unexpected error handling client {client_addr}: {e}", exc_info=True)
-    finally:
-        logger.debug(f"Closing client connection {client_addr}...")
+        # Read up to 8 KiB from the client for header parsing.  This
+        # should cover the entire HTTP request.  We deliberately avoid
+        # reading until EOF so that subsequent protocol data (e.g.
+        # OpenVPN or SSH handshake) remains buffered.
+        initial_data = await client_reader.read(8192)
+    except Exception as exc:  # pylint: disable=broad-except
+        logging.error("Failed to read initial data: %s", exc)
         client_writer.close()
         await client_writer.wait_closed()
-        logger.info(f"Client connection {client_addr} closed.")
+        return
 
+    # Decode the header for parsing; ignore undecodable bytes.
+    header_text = initial_data.decode("utf-8", errors="ignore")
 
-async def relay_data(reader, writer, direction_tag):
-    """
-    Relays data from a reader to a writer.
-    Logs detailed information about data transfer.
-    """
-    logger.debug(f"Relay task started for {direction_tag}")
-    total_bytes = 0
-    try:
-        buffer_size = 8192
-        while True:
-            data = await reader.read(buffer_size)
-            bytes_read = len(data)
-            total_bytes += bytes_read
-            logger.debug(
-                f"[{direction_tag}] Read {bytes_read} bytes (Total: {total_bytes}). "
-                f"Data (repr, first 50 chars): {repr(data[:50])}{'...' if bytes_read > 50 else ''}"
+    # Helper to extract the value of a header.  This replicates the
+    # behaviour of the original proxy scripts.
+    def find_header(text: str, header: str) -> str:
+        idx = text.find(header + ": ")
+        if idx == -1:
+            return ""
+        idx = text.find(":", idx)
+        value = text[idx + 2 :]
+        end = value.find("\r\n")
+        if end == -1:
+            return ""
+        return value[:end]
+
+    host_port_header = find_header(header_text, "X-Real-Host")
+    x_split_header = find_header(header_text, "X-Split")
+
+    # Determine the upstream host and port.  If X-Real-Host is
+    # specified, parse it; otherwise fall back to protocol probing.
+    backend_host: str
+    backend_port: int
+    if host_port_header:
+        # Parse the host:port specification.  If no port is provided,
+        # default to 22 (SSH) to mirror the behaviour of proxy.py.
+        if ":" in host_port_header:
+            hp_host, hp_port_str = host_port_header.rsplit(":", 1)
+            try:
+                backend_port = int(hp_port_str)
+            except ValueError:
+                backend_port = 22
+            backend_host = hp_host
+        else:
+            backend_host = host_port_header
+            backend_port = 22
+    else:
+        # No X-Real-Host header; perform protocol detection on any
+        # remaining data in the buffer.  The bytes we already read are
+        # purely HTTP headers and should not be forwarded to the
+        # backend, so we discard them.  Use probe_backend with a
+        # timeout just like the Rust implementation.  If the probe
+        # times out, default to SSH.
+        try:
+            backend_host, backend_port = await asyncio.wait_for(
+                probe_backend(client_reader, client_writer), timeout=1.0
             )
+        except asyncio.TimeoutError:
+            backend_host, backend_port = ("0.0.0.0", 22)
 
-            # --- FIX de sintaxe: antes estava 'if not  # EOF' ---
-            if not data:  # EOF
-                logger.info(f"[{direction_tag}] EOF received. Stopping relay. Total bytes transferred: {total_bytes}")
-                break
-
-            writer.write(data)
-            await writer.drain()
-            logger.debug(f"[{direction_tag}] Wrote {bytes_read} bytes and drained.")
-
-    except asyncio.CancelledError:
-        logger.info(f"[{direction_tag}] Relay task was cancelled. Total bytes transferred: {total_bytes}")
-    except Exception as e:
-        logger.error(f"[{direction_tag}] Error relaying data: {e}", exc_info=True)
-    finally:
-        logger.debug(f"[{direction_tag}] Closing writer stream...")
-        writer.close()
-        await writer.wait_closed()
-        logger.debug(f"[{direction_tag}] Writer stream closed.")
-
-
-async def start_server(port, status):
-    """
-    Starts the TCP server.
-    """
-    global server_instance, current_port, current_status
-    current_port = port
-    current_status = status
-
-    try:
-        logger.info(f"Attempting to bind server to port {port}...")
-        # Listen on all interfaces using IPv6 notation [::]
-        server = await asyncio.start_server(handle_client, '::', port, family=socket.AF_UNSPEC)
-        server_instance = server
-        addr = server.sockets[0].getsockname()
-        logger.info(f'Server successfully bound and listening on {addr[0]}:{addr[1]}')
-        print(f"\n[INFO] Proxy server is now running on port {port} with status '{status}'")
-
-        # Run serve_forever in background
-        logger.debug("Starting server.serve_forever in a background task...")
-        asyncio.create_task(server.serve_forever())
-        logger.info("Server background task initiated.")
-
-    except Exception as e:
-        logger.critical(f"Server failed to start or encountered an error during setup: {e}", exc_info=True)
-        print(f"\n[ERROR] Failed to start server setup: {e}")
-        server_instance = None
-
-
-async def stop_server():
-    """Stops the currently running server."""
-    global server_instance
-    if server_instance:
+    # If the X-Split header is present, consume another chunk from the
+    # client.  Some injector apps send a second request in this case.
+    if x_split_header:
         try:
-            logger.info("Stopping server...")
-            server_instance.close()
-            logger.debug("Server close signal sent, waiting for it to close...")
-            await server_instance.wait_closed()
-            logger.info("Server stopped successfully.")
-            print("\n[INFO] Proxy server stopped.")
-        except Exception as e:
-            logger.error(f"Error stopping server: {e}", exc_info=True)
-            print(f"\n[ERROR] Error stopping server: {e}")
+            await client_reader.read(8192)
+        except Exception:
+            pass
+
+    # Send the handshake responses.  According to the original proxy
+    # scripts and the Rust implementation, the proxy must send a 101
+    # Switching Protocols line followed by a 200 OK line.  Use CRLF
+    # sequences exactly as expected by clients.
+    try:
+        # Construir e enviar respostas HTTP realistas.  Na primeira
+        # resposta (101 Switching Protocols) incluímos um cabeçalho
+        # "Server" rotativo e um cabeçalho "Date".  Na segunda
+        # resposta (200 OK) adicionamos "Content-Type" e
+        # "Connection".  Isto ajuda a ofuscar a natureza do proxy.
+        server_variants = [
+            "nginx/1.18.0 (Ubuntu)",
+            "Apache/2.4.41 (Ubuntu)",
+            "Microsoft-IIS/10.0",
+        ]
+        server_header = f"Server: {random.choice(server_variants)}"
+        # Data em formato GMT, conforme cabeçalho HTTP padrão
+        now_gmt = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
+        date_header = f"Date: {now_gmt}"
+        part1 = (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            f"{server_header}\r\n"
+            f"{date_header}\r\n\r\n"
+        )
+        part2 = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n"
+            "Connection: keep-alive\r\n\r\n"
+        )
+        client_writer.write(part1.encode("utf-8"))
+        client_writer.write(part2.encode("utf-8"))
+        await client_writer.drain()
+    except Exception as exc:  # pylint: disable=broad-except
+        logging.error("Failed during handshake with client: %s", exc)
+        client_writer.close()
+        await client_writer.wait_closed()
+        return
+
+    # Establish a connection to the chosen backend.
+    try:
+        server_reader, server_writer = await asyncio.open_connection(backend_host, backend_port)
+    except Exception as exc:  # pylint: disable=broad-except
+        logging.error("Failed to connect to backend %s:%d: %s", backend_host, backend_port, exc)
+        client_writer.close()
+        await client_writer.wait_closed()
+        return
+
+    # Forward data bidirectionally.  When one side closes, the other
+    # writer will be closed to signal EOF.  We intentionally do not
+    # forward the initial HTTP headers to the backend.
+    async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
+        try:
+            while True:
+                data = await reader.read(8192)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        except Exception as exc:  # pylint: disable=broad-except
+            logging.debug("Forwarding %s encountered error: %s", direction, exc)
         finally:
-            server_instance = None
-    else:
-        logger.debug("Stop server called, but no server instance found or it was already None.")
-        print("\n[INFO] No server instance is currently tracked or it was already stopped.")
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    client_to_server = asyncio.create_task(forward(client_reader, server_writer, "client->server"))
+    server_to_client = asyncio.create_task(forward(server_reader, client_writer, "server->client"))
+    await asyncio.gather(client_to_server, server_to_client, return_exceptions=True)
 
 
-def display_menu():
-    """Displays the interactive menu."""
-    print("\n--- Rusty Proxy Manager (DEBUG MODE) ---")
-    if server_instance is not None:
-        print(f"Status: Running on port {current_port}")
-    else:
-        print("Status: Stopped")
-    print("1. Start Server")
-    print("2. Stop Server")
-    print("3. Show Status")
-    print("4. Exit")
-    print("----------------------------------------")
+async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> Tuple[str, int]:
+    """Inspect the client's incoming data to select the backend port.
 
+    The original Rust implementation examines the first few bytes of
+    the client stream without consuming them.  If the data contains
+    ``"SSH"`` or if nothing is available within one second, it uses
+    port 22 (SSH); otherwise it uses port 1194 (commonly OpenVPN).
 
-async def interactive_menu():
-    """Main loop for the interactive menu."""
-    global current_port, current_status
+    Args:
+        client_reader: The reader for the client connection.
+        client_writer: The writer for the client connection.
 
-    parser = argparse.ArgumentParser(description='TCP Proxy for SSH/OpenVPN Tunneling (DEBUG MODE)')
-    parser.add_argument('--port', type=int, default=80, help='Port to listen on (default: 80)')
-    parser.add_argument('--status', type=str, default='@RustyManager', help='Status message for HTTP responses (default: @RustyManager)')
-    parser.add_argument('--asyncio-debug', action='store_true', help='Enable asyncio debug mode')
-    args = parser.parse_args()
+    Returns:
+        A tuple ``(host, port)`` indicating where to forward the traffic.
+    """
+    # Attempt to peek at up to 8192 bytes of incoming data.  We use
+    # the underlying socket's MSG_PEEK flag because asyncio's high
+    # level API does not support peeking.  If the socket isn't
+    # available or peeking fails, fall back to the default.
+    default_backend = ("0.0.0.0", 22)
+    alt_backend = ("0.0.0.0", 1194)
 
-    current_port = args.port
-    current_status = args.status
-
-    if args.asyncio_debug:
-        logger.info("Enabling asyncio debug mode via argument.")
-        loop = asyncio.get_running_loop()
-        loop.set_debug(True)
-
-    print(f"Rusty Proxy Manager (DEBUG) initialized with default port {current_port} and status '{current_status}'")
-    logger.info(f"Rusty Proxy Manager (DEBUG) initialized with default port {current_port} and status '{current_status}'")
-
-    while True:
-        display_menu()
-        try:
-            choice = await asyncio.get_running_loop().run_in_executor(None, input, "Enter your choice (1-4): ")
-            choice = choice.strip()
-
-            if choice == '1':
-                if server_instance is not None:
-                    print("\n[INFO] Server start command received. A server instance might already exist or be running.")
-                    logger.info("User attempted to start server, but server_instance is not None.")
-
-                port_input = await asyncio.get_running_loop().run_in_executor(None, input, f"Enter port (default {current_port}): ")
-                port_input = port_input.strip()
-                if port_input:
-                    try:
-                        new_port = int(port_input)
-                        if 1 <= new_port <= 65535:
-                            current_port = new_port
-                            logger.info(f"Port updated to {current_port} based on user input.")
-                        else:
-                            print("[WARNING] Invalid port number. Using current/default port.")
-                            logger.warning(f"User entered invalid port number: {new_port}. Keeping {current_port}.")
-                    except ValueError:
-                        print("[WARNING] Invalid input. Using current/default port.")
-                        logger.warning(f"User entered non-integer port: '{port_input}'. Keeping {current_port}.")
-
-                status_input = await asyncio.get_running_loop().run_in_executor(None, input, f"Enter status message (default '{current_status}'): ")
-                status_input = status_input.strip()
-                if status_input:
-                    current_status = status_input
-                    logger.info(f"Status message updated to '{current_status}' based on user input.")
-
-                await start_server(current_port, current_status)
-
-            elif choice == '2':
-                logger.info("User requested to stop server.")
-                await stop_server()
-
-            elif choice == '3':
-                if server_instance is not None:
-                    status_msg = f"\n[INFO] Server Status: Seeming running on port {current_port} with status '{current_status}'"
-                else:
-                    status_msg = "\n[INFO] Server Status: Stopped"
-                print(status_msg)
-                logger.info(status_msg.replace("\n[INFO] ", "", 1))
-
-            elif choice == '4':
-                logger.info("User requested to exit.")
-                if server_instance is not None:
-                    logger.info("Server instance exists, attempting to stop it before exit.")
-                    await stop_server()
-                print("\nExiting Rusty Proxy Manager. Goodbye!")
-                logger.info("Exiting Rusty Proxy Manager.")
-                break
-
-            else:
-                print("\n[ERROR] Invalid choice. Please enter a number between 1 and 4.")
-                logger.warning(f"User entered invalid menu choice: '{choice}'")
-
-        except KeyboardInterrupt:
-            logger.info("\nReceived interrupt signal (Ctrl+C) in menu loop.")
-            print("\n\nReceived interrupt signal (Ctrl+C).")
-            if server_instance is not None:
-                logger.info("Server instance exists, stopping it due to interrupt.")
-                await stop_server()
-            print("Exiting Rusty Proxy Manager. Goodbye!")
-            logger.info("Exiting Rusty Proxy Manager due to interrupt.")
-            break
-        except Exception as e:
-            error_msg = f"\n[ERROR] An unexpected error occurred in the menu loop: {e}"
-            print(error_msg)
-            logger.error(error_msg, exc_info=True)
-
-
-# --- Entry Point ---
-if __name__ == '__main__':
+    # Fetch the underlying socket from the transport.  This is a bit
+    # fragile because it relies on private attributes, but it mirrors
+    # the behaviour of tokio::net::TcpStream::peek.
+    # Fetch the underlying socket via the public get_extra_info API on the writer.
+    sock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
+    if sock is None:
+        return default_backend
+    # Use the same technique as the original Proxy code: yield control
+    # once via loop.sock_recv with a zero‑byte read to allow the event
+    # loop to notice incoming data, then perform a non‑blocking peek.
+    sock.setblocking(False)
+    loop = asyncio.get_running_loop()
     try:
-        asyncio.run(interactive_menu())
-    except Exception as e:
-        critical_msg = f"\n[CRITICAL ERROR] Application failed during startup or main loop: {e}"
-        print(critical_msg)
-        logger.critical(critical_msg, exc_info=True)
-        sys.exit(1)
+        # This call does not read any data but ensures that the loop
+        # registers the socket as ready; it may raise if the socket is
+        # closed.  Equivalent to peek_stream's loop.sock_recv(sock, 0).
+        await loop.sock_recv(sock, 0)
+        data_bytes = sock.recv(8192, socket.MSG_PEEK)
+        text = data_bytes.decode('utf-8', errors='ignore')
+    except Exception:
+        return default_backend
+    # Decide on the backend based on the peeked data.
+    # Perform a case‑insensitive search for "SSH".  If the peeked data is
+    # empty or contains SSH, default to the SSH backend; otherwise use
+    # the OpenVPN backend.  Using .upper() avoids missing lowercase "ssh".
+    if not text or 'SSH' in text.upper():
+        return default_backend
+    return alt_backend
+
+
+async def run_proxy(port: int, status: str) -> None:
+    """Start the proxy listener and handle incoming connections."""
+    """
+    Start the proxy listener and handle incoming connections.
+
+    To ensure that both IPv4 and IPv6 clients can connect, create
+    an explicit IPv6 socket and disable the IPV6_V6ONLY flag.  This
+    mirrors the behaviour of the original proxy, which binds to
+    ``::`` and allows dual‑stack operation.
+    """
+    # Create an IPv6 socket configured for dual stack
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    # Allow both IPv4 and IPv6 (0 disables the v6 only flag)
+    try:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    except AttributeError:
+        # IPV6_V6ONLY may not exist on all platforms; ignore if missing
+        pass
+    # Allow reusing the address immediately after the program exits
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("::", port))
+    sock.listen(100)
+    server = await asyncio.start_server(
+        lambda r, w: handle_client(r, w, status),
+        sock=sock
+    )
+    addr_list = ", ".join(str(s.getsockname()) for s in server.sockets or [])
+    # Log a start message without referencing "RustyProxy".  Use
+    # "multiflow proxy" as the identifier instead.
+    logging.info("Starting multiflow proxy Python port on %s", addr_list)
+    async with server:
+        await server.serve_forever()
+
+
+# File used to record active proxy ports, mirroring menu.sh behaviour.
+PORTS_FILE = Path("/opt/rustyproxy/ports")
+
+
+def is_port_in_use(port: int) -> bool:
+    """Return True if the given TCP port is bound on the local machine."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        result = sock.connect_ex(("127.0.0.1", port))
+        return result == 0
+
+
+def add_proxy_port(port: int, status: str) -> None:
+    """Create and start a systemd service to run this script as a proxy on a port."""
+    if is_port_in_use(port):
+        print(f"A porta {port} já está em uso.")
+        return
+    # Determine the path to this script.  When installed via the installer
+    # this file should reside at /opt/rustyproxy/proxy.py but we compute
+    # it dynamically to support other setups.
+    script_path = Path(__file__).resolve()
+    command = f"{sys.executable} {script_path} --port {port} --status {status}"
+    service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
+    service_content = f"""[Unit]
+Description=multiflow proxy {port}
+After=network.target
+
+[Service]
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitMEMLOCK=infinity
+LimitSTACK=infinity
+LimitCORE=0
+LimitAS=infinity
+LimitRSS=infinity
+LimitCPU=infinity
+LimitFSIZE=infinity
+Type=simple
+ExecStart={command}
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+"""
+    service_file_path.write_text(service_content)
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+    subprocess.run(["systemctl", "enable", f"proxy{port}.service"], check=False)
+    subprocess.run(["systemctl", "start", f"proxy{port}.service"], check=False)
+    # Ensure ports file exists
+    PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with PORTS_FILE.open("a") as f:
+        f.write(f"{port}\n")
+    print(f"Porta {port} aberta com sucesso.")
+
+
+def del_proxy_port(port: int) -> None:
+    """Stop and remove the systemd service for a proxy port."""
+    subprocess.run(["systemctl", "disable", f"proxy{port}.service"], check=False)
+    subprocess.run(["systemctl", "stop", f"proxy{port}.service"], check=False)
+    service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
+    if service_file_path.exists():
+        service_file_path.unlink()
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+    # Remove from ports file
+    if PORTS_FILE.exists():
+        lines = [l.strip() for l in PORTS_FILE.read_text().splitlines() if l.strip()]
+        lines = [l for l in lines if l != str(port)]
+        PORTS_FILE.write_text("\n".join(lines) + ("\n" if lines else ""))
+    print(f"Porta {port} fechada com sucesso.")
+
+
+def show_menu() -> None:
+    """Interactive menu for managing proxy ports, similar to menu.sh."""
+    # Ensure the ports file exists
+    if not PORTS_FILE.exists():
+        PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PORTS_FILE.touch()
+    while True:
+        os.system("clear")
+        # Título: substituir referências a RustyProxy por multiflow proxy.
+        # O cabeçalho decorativo "@RustyManager" foi removido a pedido do utilizador.
+        print("------------------------------------------------")
+        print(f"|{'multiflow proxy':^47}|")
+        print("------------------------------------------------")
+        # Exibir o estado actual do proxy.  Se houver portas
+        # activas registadas em PORTS_FILE, indicamos "Ativo" e
+        # listamos as portas separadas por vírgula; caso contrário
+        # mostramos "Inativo" sem portas.  Isto oferece uma visão
+        # dinâmica do estado do serviço.
+        if PORTS_FILE.exists() and PORTS_FILE.stat().st_size > 0:
+            with PORTS_FILE.open() as f:
+                ports = [line.strip() for line in f if line.strip()]
+            status_line = f"Status: Ativo - {', '.join(ports)}"
+        else:
+            status_line = "Status: Inativo"
+        # Ajustar o preenchimento para caber dentro da moldura de 47
+        # caracteres (45 depois das barras laterais).
+        print(f"| {status_line:<45}|")
+        print("------------------------------------------------")
+        print("| 1 - Abrir Porta                                   |")
+        print("| 2 - Fechar Porta                                  |")
+        print("| 0 - Sair                                          |")
+        print("------------------------------------------------")
+        option = input(" --> Selecione uma opção: ").strip()
+        if option == '1':
+            port_input = input("Digite a porta: ").strip()
+            while not port_input.isdigit():
+                print("Digite uma porta válida.")
+                port_input = input("Digite a porta: ").strip()
+            port = int(port_input)
+            status = input("Digite o status de conexão (deixe vazio para o padrão): ").strip() or "@RustyProxy"
+            add_proxy_port(port, status)
+            input("> Porta ativada com sucesso. Pressione Enter para voltar ao menu.")
+        elif option == '2':
+            port_input = input("Digite a porta: ").strip()
+            while not port_input.isdigit():
+                print("Digite uma porta válida.")
+                port_input = input("Digite a porta: ").strip()
+            port = int(port_input)
+            del_proxy_port(port)
+            input("> Porta desativada com sucesso. Pressione Enter para voltar ao menu.")
+        elif option == '0':
+            sys.exit(0)
+        else:
+            input("Opção inválida. Pressione Enter para voltar ao menu.")
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments.
+
+    If --port is provided the script will run in proxy mode.  If
+    omitted, the interactive menu will be shown (root privileges
+    required).
+    """
+    parser = argparse.ArgumentParser(description="multiflow proxy Python implementation with menu")
+    parser.add_argument("--port", type=int, help="Port to listen on")
+    parser.add_argument("--status", type=str, default="@RustyManager", help="Status string for HTTP responses")
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Program entry point.
+
+    If a port is specified on the command line the script runs the
+    proxy on that port, otherwise it launches the interactive menu.
+    The menu requires root privileges because it manipulates systemd
+    services.  Logging is enabled when running as a proxy to provide
+    diagnostic information.
+    """
+    args = parse_args()
+    # If a port was passed, run in proxy mode
+    if args.port is not None:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+        try:
+            asyncio.run(run_proxy(args.port, args.status))
+        except KeyboardInterrupt:
+            logging.info("Proxy terminated by user")
+    else:
+        # Menu mode; ensure running as root
+        if os.geteuid() != 0:
+            print("Este script deve ser executado como root para o menu.")
+            sys.exit(1)
+        show_menu()
+
+
+if __name__ == "__main__":
+    main()
