@@ -95,9 +95,12 @@ def stop_and_disable_services():
 def remove_project_files():
     """Remove o diretório do projeto e todos os binários/scripts relacionados."""
     print_step("Removendo arquivos do projeto, binários e links")
+    # Inclui links simbólicos adicionais criados pelo instalador (h e menu)
     paths_to_remove = [
         INSTALL_DIR,
         "/usr/local/bin/multiflow",
+        "/usr/local/bin/h",
+        "/usr/local/bin/menu",
         "/usr/local/bin/badvpn-udpgw",
         "/etc/easy-rsa",
         TMP_INSTALL_SCRIPT
@@ -105,6 +108,7 @@ def remove_project_files():
     for path in paths_to_remove:
         try:
             if os.path.lexists(path):
+                # Remove diretórios recursivamente, mas preserve links simbólicos
                 if os.path.isdir(path) and not os.path.islink(path):
                     shutil.rmtree(path)
                     print(f"  - Diretório removido: {path}")
@@ -116,29 +120,38 @@ def remove_project_files():
     print_success("Arquivos do projeto removidos.")
 
 def remove_service_files():
-    """Remove os arquivos de serviço do systemd."""
+    """Remove arquivos e diretórios de serviço do systemd relacionados ao Multiflow, BadVPN e OpenVPN."""
     print_step("Removendo arquivos de serviço do Systemd")
-    service_paths = [
-        "/etc/systemd/system/multiflow.service",
-        "/etc/systemd/system/badvpn.service",
-        "/lib/systemd/system/openvpn-server@.service" # Caminho comum em algumas distros
+    # Defina padrões para localizar serviços relevantes. Isso cobre serviços padrão
+    # e instâncias (como openvpn@nome.service) em /etc e /lib.
+    patterns = [
+        "multiflow*.service",
+        "badvpn*.service",
+        "openvpn*.service"
     ]
-    # Busca por arquivos de serviço do openvpn de forma mais segura
-    openvpn_services = run_command("find /etc/systemd/system /lib/systemd/system -name 'openvpn*.service' 2>/dev/null", check=False)
-    if openvpn_services:
-        service_paths.extend(openvpn_services.split('\n'))
+    service_paths: list[str] = []
+    for base_dir in ("/etc/systemd/system", "/lib/systemd/system"):
+        for pattern in patterns:
+            # Use find para localizar arquivos e diretórios correspondentes
+            cmd = f"find {base_dir} -maxdepth 1 -name '{pattern}' 2>/dev/null"
+            found = run_command(cmd, check=False)
+            if found:
+                service_paths.extend(found.split("\n"))
 
-    # Remove duplicatas
-    for service_file in sorted(list(set(service_paths))):
-        if service_file and os.path.exists(service_file):
+    # Remover duplicatas e filtrar caminhos vazios
+    for service_file in sorted(set(filter(None, service_paths))):
+        if os.path.exists(service_file):
             try:
-                os.remove(service_file)
+                if os.path.isdir(service_file):
+                    shutil.rmtree(service_file)
+                else:
+                    os.remove(service_file)
                 print(f"  - Arquivo de serviço removido: {service_file}")
             except Exception as e:
                 print_warning(f"Não foi possível remover {service_file}: {e}")
-    
+    # Recarregue os daemons do systemd para refletir as remoções
     print("  - Recarregando o daemon do systemd...")
-    run_command("systemctl daemon-reload")
+    run_command("systemctl daemon-reload", check=False)
     print_success("Arquivos de serviço removidos.")
 
 def remove_configs_and_logs():
