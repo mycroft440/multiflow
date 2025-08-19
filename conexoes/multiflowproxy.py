@@ -33,7 +33,7 @@ async def peek_data(reader, length=8192, timeout_duration=1.0):
         # Access the underlying socket
         transport = reader._transport
         sock = transport.get_extra_info('socket')
-        if not sock:
+        if sock is None: # Correct way to check for None
             logger.warning("Could not get underlying socket for peeking.")
             return ""
 
@@ -43,11 +43,23 @@ async def peek_data(reader, length=8192, timeout_duration=1.0):
         def _peek():
             # Perform the peek operation on the socket
             # MSG_PEEK reads data without removing it from the queue
-            return sock.recv(length, socket.MSG_PEEK)
+            # Handle potential errors during peek
+            try:
+                return sock.recv(length, socket.MSG_PEEK)
+            except BlockingIOError:
+                 # No data available immediately, return empty bytes
+                 return b""
+            except Exception as e:
+                 # Re-raise other socket errors
+                 raise e
 
+        # Apply timeout to the executor call
         data_bytes = await asyncio.wait_for(
             loop.run_in_executor(None, _peek), timeout=timeout_duration
         )
+        # Ensure data_bytes is not None (though it shouldn't be from recv)
+        if data_bytes is None:
+            data_bytes = b""
         data_str = data_bytes.decode('utf-8', errors='ignore')
         logger.debug(f"Peeked {len(data_bytes)} bytes: {repr(data_str[:100])}...")
         return data_str
@@ -56,7 +68,7 @@ async def peek_data(reader, length=8192, timeout_duration=1.0):
         return ""
     except Exception as e:
         logger.error(f"Error during peek operation: {e}", exc_info=True)
-        return ""
+        return "" # Return empty string on error
 
 
 async def handle_client(client_reader, client_writer):
@@ -76,12 +88,39 @@ async def handle_client(client_reader, client_writer):
         await client_writer.drain()
         logger.debug("101 response sent and drained.")
 
-        # --- Use peek to inspect initial data without consuming it ---
-        logger.debug("Attempting to peek at initial client data...")
-        data_str = await peek_data(client_reader, length=8192, timeout_duration=1.0)
+        # --- Read initial data for protocol detection (Rust code reads, not peeks here) ---
+        # Note: The Rust code actually *reads* the first 1024 bytes into a buffer
+        # and then proceeds. It doesn't seem to rely on peeking for the initial detection
+        # in the way the previous Python version tried to. Let's mimic the Rust logic more closely.
+        # However, the Rust peek is used for content inspection.
 
-        # Determine destination port based on peeked data (like Rust)
-        if "SSH" in data_str or not data_str.strip():
+        # First, read the initial data (like Rust does with the 1024 buffer)
+        logger.debug("Reading initial client data for protocol detection (like Rust)...")
+        initial_buffer = bytearray(1024) # Match Rust's initial buffer size
+        try:
+             bytes_read_initial = await asyncio.wait_for(client_reader.readinto(initial_buffer), timeout=1.0)
+             if bytes_read_initial > 0:
+                  initial_data_for_check = initial_buffer[:bytes_read_initial].decode('utf-8', errors='ignore')
+                  logger.debug(f"Read {bytes_read_initial} bytes for initial check: {repr(initial_data_for_check[:100])}...")
+             else:
+                  initial_data_for_check = ""
+                  logger.debug("No initial data read (EOF?).")
+        except asyncio.TimeoutError:
+            logger.warning("Timeout reading initial data for protocol check.")
+            initial_data_for_check = ""
+        except Exception as e:
+             logger.error(f"Error reading initial data for protocol check: {e}", exc_info=True)
+             initial_data_for_check = "" # Default to SSH on error
+
+        # --- Use peek to inspect initial data without consuming it (for detailed inspection if needed) ---
+        # The peek can still be useful for more detailed inspection if the initial read is inconclusive
+        # or if we want to be extra sure. For now, let's rely primarily on the initial read like Rust.
+        logger.debug("Attempting to peek at initial client data (for potential detailed inspection)...")
+        peeked_data_str = await peek_data(client_reader, length=8192, timeout_duration=1.0)
+
+        # Determine destination port based on *initial read data* (mimicking Rust closer)
+        # Rust checks the data read into the 1024 buffer
+        if "SSH" in initial_data_for_check or not initial_data_for_check.strip():
             dest_port = 22
             logger.info("Detected or defaulted to SSH traffic (port 22)")
         else:
@@ -105,14 +144,26 @@ async def handle_client(client_reader, client_writer):
             return # Exit the handler
 
         # Send the initial HTTP 200 OK response to the client (as per Rust code)
+        # Note: The Rust code writes this *after* reading the initial 1024 bytes
+        # and *before* connecting to the server. Let's keep this order.
         ok_response = f"HTTP/1.1 200 {status}\r\n\r\n"
         logger.debug(f"Sending 200 OK response to client: {repr(ok_response)}")
         client_writer.write(ok_response.encode())
         await client_writer.drain()
         logger.debug("200 OK response sent and drained.")
 
+        # --- Important: Write the initial data that was read to the server ---
+        # The Rust code reads 1024 bytes initially. That data must be sent to the server
+        # because it's part of the client's stream.
+        if bytes_read_initial > 0:
+             logger.debug(f"Forwarding initial {bytes_read_initial} bytes read to the server.")
+             server_writer.write(initial_buffer[:bytes_read_initial])
+             await server_writer.drain()
+             logger.debug("Initial data forwarded to server.")
+
         # --- Relay data bidirectionally ---
-        # Because we used peek, the initial data is still available in client_reader
+        # The peeked data is still in the client stream, but we already sent the initial read data.
+        # The relay should now continue normally.
         logger.info("Starting bidirectional data relay...")
         await asyncio.gather(
             relay_data(client_reader, server_writer, f"client ({client_addr})->server ({dest_addr}:{dest_port})"),
@@ -184,15 +235,20 @@ async def start_server(port, status):
         print(f"\n[INFO] Proxy server is now running on port {port} with status '{status}'")
 
         logger.debug("Entering server's serve_forever loop...")
-        async with server:
-            await server.serve_forever()
+        # Run the server forever in the background task
+        # We don't await serve_forever here directly inside start_server
+        # because it blocks. Instead, we let the task run.
+        # The menu loop needs to continue.
+        # We need to signal that the server is running and let the menu continue.
+        # Let's run serve_forever in its own task.
+        server_task = asyncio.create_task(server.serve_forever())
+        # Keep a reference to the task to prevent it from being garbage collected?
+        # Or store the task? Let's just log that it's started.
+        logger.info("Server task started, running in background.")
 
-    except asyncio.CancelledError:
-        logger.info("Server start task was cancelled.")
-        print("\n[INFO] Proxy server stop initiated.")
-    except Exception as e:
-        logger.critical(f"Server failed to start or encountered an error: {e}", exc_info=True)
-        print(f"\n[ERROR] Failed to start server: {e}")
+    except Exception as e: # Catch general exceptions during server creation
+        logger.critical(f"Server failed to start or encountered an error during setup: {e}", exc_info=True)
+        print(f"\n[ERROR] Failed to start server setup: {e}")
         server_instance = None
 
 
@@ -200,26 +256,35 @@ async def stop_server():
     """Stops the currently running server."""
     global server_instance
     if server_instance:
-        if server_instance.is_serving():
+        # Check if it's actually serving (hasn't been closed already)
+        # is_serving might not be perfectly reliable, but it's a start
+        # Let's try closing it directly and handle potential errors
+        try:
             logger.info("Stopping server...")
-            server_instance.close()
+            server_instance.close() # Signal the server to stop accepting new connections
             logger.debug("Server close signal sent, waiting for it to close...")
-            await server_instance.wait_closed()
+            await server_instance.wait_closed() # Wait for the server to finish closing
             logger.info("Server stopped successfully.")
             print("\n[INFO] Proxy server stopped.")
-        else:
-            logger.debug("Server instance exists but is not serving.")
-            print("\n[INFO] Server instance found but not currently serving.")
-        server_instance = None
+        except Exception as e:
+            logger.error(f"Error stopping server: {e}", exc_info=True)
+            print(f"\n[ERROR] Error stopping server: {e}")
+        finally:
+            server_instance = None # Clear the reference regardless of success/failure
     else:
-        logger.debug("Stop server called, but no server instance found.")
-        print("\n[INFO] No server instance is currently tracked.")
+        logger.debug("Stop server called, but no server instance found or it was already None.")
+        print("\n[INFO] No server instance is currently tracked or it was already stopped.")
 
 
 def display_menu():
     """Displays the interactive menu."""
     print("\n--- Rusty Proxy Manager (DEBUG MODE) ---")
-    if server_instance and server_instance.is_serving():
+    # Check if server instance exists and seems to be serving
+    # This check might not be 100% accurate, but gives a general idea
+    if server_instance is not None:
+        # Let's assume if it exists, it's intended to be running
+        # A more robust check might involve checking the task or internal state
+        # but this is simpler for now.
         print(f"Status: Running on port {current_port}")
     else:
         print("Status: Stopped")
@@ -245,7 +310,9 @@ async def interactive_menu():
 
     if args.asyncio_debug:
         logger.info("Enabling asyncio debug mode via argument.")
-        asyncio.get_event_loop().set_debug(True)
+        # Enable asyncio debug mode on the current loop
+        loop = asyncio.get_running_loop()
+        loop.set_debug(True)
 
     print(f"Rusty Proxy Manager (DEBUG) initialized with default port {current_port} and status '{current_status}'")
     logger.info(f"Rusty Proxy Manager (DEBUG) initialized with default port {current_port} and status '{current_status}'")
@@ -253,80 +320,90 @@ async def interactive_menu():
     while True:
         display_menu()
         try:
+            # Use run_in_executor for blocking input to keep the event loop free
             choice = await asyncio.get_event_loop().run_in_executor(None, input, "Enter your choice (1-4): ")
             choice = choice.strip()
 
             if choice == '1':
-                if server_instance and server_instance.is_serving():
-                    print("\n[INFO] Server is already running.")
-                    logger.info("User attempted to start server, but it's already running.")
-                else:
-                    port_input = await asyncio.get_event_loop().run_in_executor(None, input, f"Enter port (default {current_port}): ")
-                    port_input = port_input.strip()
-                    if port_input:
-                        try:
-                            new_port = int(port_input)
-                            if 1 <= new_port <= 65535:
-                                current_port = new_port
-                                logger.info(f"Port updated to {current_port} based on user input.")
-                            else:
-                                print("[WARNING] Invalid port number. Using current/default port.")
-                                logger.warning(f"User entered invalid port number: {new_port}. Keeping {current_port}.")
-                        except ValueError:
-                            print("[WARNING] Invalid input. Using current/default port.")
-                            logger.warning(f"User entered non-integer port: '{port_input}'. Keeping {current_port}.")
+                # Check if server is seemingly already running
+                if server_instance is not None:
+                    print("\n[INFO] Server start command received, but a server instance might already exist. Attempting to start anyway (this might fail or create issues if one is truly running).")
+                    logger.info("User attempted to start server, but server_instance is not None. Proceeding with caution.")
+                #else: # Normal case
 
-                    status_input = await asyncio.get_event_loop().run_in_executor(None, input, f"Enter status message (default '{current_status}'): ")
-                    status_input = status_input.strip()
-                    if status_input:
-                        current_status = status_input
-                        logger.info(f"Status message updated to '{current_status}' based on user input.")
+                # Get port
+                port_input = await asyncio.get_event_loop().run_in_executor(None, input, f"Enter port (default {current_port}): ")
+                port_input = port_input.strip()
+                if port_input:
+                    try:
+                        new_port = int(port_input)
+                        if 1 <= new_port <= 65535:
+                            current_port = new_port
+                            logger.info(f"Port updated to {current_port} based on user input.")
+                        else:
+                            print("[WARNING] Invalid port number. Using current/default port.")
+                            logger.warning(f"User entered invalid port number: {new_port}. Keeping {current_port}.")
+                    except ValueError:
+                        print("[WARNING] Invalid input. Using current/default port.")
+                        logger.warning(f"User entered non-integer port: '{port_input}'. Keeping {current_port}.")
 
-                    logger.info(f"Initiating server start on port {current_port} with status '{current_status}'")
-                    asyncio.create_task(start_server(current_port, current_status))
+                # Get status
+                status_input = await asyncio.get_event_loop().run_in_executor(None, input, f"Enter status message (default '{current_status}'): ")
+                status_input = status_input.strip()
+                if status_input:
+                    current_status = status_input
+                    logger.info(f"Status message updated to '{current_status}' based on user input.")
+
+                logger.info(f"Initiating server start on port {current_port} with status '{current_status}'")
+                # Start server - this should now correctly initiate the server task
+                await start_server(current_port, current_status)
 
             elif choice == '2':
                 logger.info("User requested to stop server.")
                 await stop_server()
 
             elif choice == '3':
-                if server_instance and server_instance.is_serving():
-                    status_msg = f"\n[INFO] Server Status: Running on port {current_port} with status '{current_status}'"
+                # Show status based on server_instance existence
+                if server_instance is not None:
+                    status_msg = f"\n[INFO] Server Status: Seeming running on port {current_port} with status '{current_status}'"
                 else:
                     status_msg = "\n[INFO] Server Status: Stopped"
                 print(status_msg)
-                logger.info(status_msg.replace("\n[INFO] ", ""))
+                logger.info(status_msg.replace("\n[INFO] ", "", 1)) # Log without leading newline/prefix
 
             elif choice == '4':
                 logger.info("User requested to exit.")
-                if server_instance and server_instance.is_serving():
-                    logger.info("Server is running, initiating stop before exit.")
+                # Attempt to stop server if it seems to be running
+                if server_instance is not None:
+                    logger.info("Server instance exists, attempting to stop it before exit.")
                     await stop_server()
                 print("\nExiting Rusty Proxy Manager. Goodbye!")
                 logger.info("Exiting Rusty Proxy Manager.")
-                break
+                break # Exit the menu loop
 
             else:
                 print("\n[ERROR] Invalid choice. Please enter a number between 1 and 4.")
                 logger.warning(f"User entered invalid menu choice: '{choice}'")
 
         except KeyboardInterrupt:
-            logger.info("\nReceived interrupt signal (Ctrl+C).")
+            logger.info("\nReceived interrupt signal (Ctrl+C) in menu loop.")
             print("\n\nReceived interrupt signal (Ctrl+C).")
-            if server_instance and server_instance.is_serving():
-                logger.info("Server is running, stopping it before exit due to interrupt.")
+            # Attempt to stop server gracefully on Ctrl+C
+            if server_instance is not None:
+                logger.info("Server instance exists, stopping it due to interrupt.")
                 await stop_server()
             print("Exiting Rusty Proxy Manager. Goodbye!")
             logger.info("Exiting Rusty Proxy Manager due to interrupt.")
-            break
+            break # Exit the menu loop on Ctrl+C
         except Exception as e:
             error_msg = f"\n[ERROR] An unexpected error occurred in the menu loop: {e}"
             print(error_msg)
-            logger.error(error_msg, exc_info=True)
+            logger.error(error_msg, exc_info=True) # Log full traceback for menu errors
 
 
 if __name__ == '__main__':
     try:
+        # Run the interactive menu, which manages the server lifecycle
         asyncio.run(interactive_menu())
     except Exception as e:
         critical_msg = f"\n[CRITICAL ERROR] Application failed during startup or main loop: {e}"
