@@ -1,252 +1,118 @@
-import sys
 import asyncio
+import argparse
 import socket
-from asyncio import StreamReader, StreamWriter
 import os
+import subprocess
 
-PORTS_FILE = "ports"  # Arquivo no diretório atual para evitar problemas de permissão
+PORTS_FILE = "ports.txt"
 
-port_to_status = {}
-
-def load_ports():
-    if os.path.exists(PORTS_FILE):
-        ports = {}
-        with open(PORTS_FILE, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    if ':' in line:
-                        port_str, status = line.split(':', 1)
-                    else:
-                        port_str = line
-                        status = "@RustyManager"
-                    ports[int(port_str)] = status
-        return ports
-    return {}
-
-def save_ports(ports):
-    with open(PORTS_FILE, 'w') as f:
-        for port, status in ports.items():
-            f.write(f"{port}:{status}\n")
-
-def get_bound_socket(port):
+async def transfer_data(reader, writer):
     try:
-        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        s.bind(('::', port))
-        s.listen(1)  # Reserva a porta
-        return s
-    except OSError:
-        return None
-
-async def server_task(port, sock=None):
-    try:
-        server = await asyncio.start_server(handle_client, '::', port, sock=sock)
-        print(f"Server iniciado na porta {port}")
-        async with server:
-            await server.serve_forever()
-    except OSError as e:
-        print(f"Erro ao iniciar server na porta {port}: {e}")
-        if sock:
-            sock.close()
-
-async def handle_client(reader: StreamReader, writer: StreamWriter):
-    port = writer.get_extra_info('sockname')[1]
-    status = port_to_status.get(port, "@RustyManager")
-    await writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
-    await writer.drain()
-
-    buffer = await reader.read(1024)
-    await writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
-    await writer.drain()
-
-    addr_proxy = "0.0.0.0:22"
-    try:
-        data = await asyncio.wait_for(peek_stream(reader), timeout=1.0)
-        if "SSH" in data or not data:
-            addr_proxy = "0.0.0.0:22"
-        else:
-            addr_proxy = "0.0.0.0:1194"
-    except Exception:
-        addr_proxy = "0.0.0.0:22"
-
-    try:
-        host, port_str = addr_proxy.split(':')
-        server_reader, server_writer = await asyncio.open_connection(host, int(port_str))
+        while True:
+            data = await reader.read(8192)
+            if not data:
+                break
+            writer.write(data)
+            await writer.drain()
     except Exception as e:
-        print("erro ao iniciar conexão para o proxy")
+        print(f"Erro na transferência: {e}")
+    finally:
         writer.close()
         await writer.wait_closed()
-        return None  # Simula Ok(()) vazio do Rust
 
-    t1 = asyncio.create_task(transfer_data(reader, server_writer))
-    t2 = asyncio.create_task(transfer_data(server_reader, writer))
-    await asyncio.gather(t1, t2)
-
-    # Fechar conexões ao final
-    writer.close()
-    await writer.wait_closed()
-    server_writer.close()
-    await server_writer.wait_closed()
-
-async def transfer_data(source: StreamReader, dest: StreamWriter):
-    while True:
-        data = await source.read(8192)
-        if not data:
-            break
-        dest.write(data)
-        await dest.drain()
-
-async def peek_stream(reader: StreamReader):
-    peek_buffer = bytearray(8192)
-    sock = reader._transport.get_extra_info('socket')
-    loop = asyncio.get_running_loop()
-    n = await loop.sock_recv_into(sock, peek_buffer, 8192, socket.MSG_PEEK)
-    return peek_buffer[:n].decode(errors='ignore')
-
-def get_status():
-    args = sys.argv[1:]
-    status = "@RustyManager"
-    for i in range(len(args)):
-        if args[i] == "--status":
-            if i + 1 < len(args):
-                status = args[i + 1]
-    return status
-
-def show_menu(ports):
-    os.system('clear')
-    print("                              Menu MultiProtocolo")
-    print()
-    status = "Ativo" if ports else "Parado"
-    portas_str = ", ".join(f"{port} ({status})" for port, status in ports.items()) if ports else "Sem portas ativas"
-    print(f"Proxy: {status}")
-    print(f"Portas: {portas_str}")
-    print()
-    print("1. Abrir porta e Iniciar")
-    print("2. Remover porta")
-    print("3. Remover Proxy")
-    print("0. voltar")
-    print()
-
-async def main_menu():
-    global port_to_status
-    dir_path = os.path.dirname(PORTS_FILE)
-    if dir_path and not os.path.exists(dir_path):
-        try:
-            os.makedirs(dir_path)
-            with open(PORTS_FILE, 'w') as f:
-                pass
-            print("Instalação inicial realizada: Diretório e arquivo de portas criados.")
-        except PermissionError:
-            print("Erro de permissão ao criar diretório (execute com sudo).")
-            return
-    ports = load_ports()
-    tasks = {}
-    valid_ports = {}
-    for port, status in ports.items():
-        s = get_bound_socket(port)
-        if s is not None:
-            task = asyncio.create_task(server_task(port, sock=s))
-            tasks[port] = task
-            valid_ports[port] = status
+async def handle_client(client_reader, client_writer, status):
+    client_writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
+    await client_writer.drain()
+    
+    await client_reader.read(1024)
+    
+    client_writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
+    await client_writer.drain()
+    
+    try:
+        peeked_data = await asyncio.wait_for(client_reader.peek(8192), timeout=1.0)
+        data_str = peeked_data.decode(errors='ignore')
+        if "SSH" in data_str or not data_str:
+            addr_proxy = ("0.0.0.0", 22)
         else:
-            print(f"Porta {port} não disponível, removendo.")
-    ports = valid_ports
-    port_to_status = ports
-    save_ports(ports)
+            addr_proxy = ("0.0.0.0", 1194)
+    except asyncio.TimeoutError:
+        addr_proxy = ("0.0.0.0", 22)
+    
+    try:
+        server_reader, server_writer = await asyncio.open_connection(*addr_proxy)
+    except Exception as e:
+        print(f"Erro ao conectar ao proxy {addr_proxy}: {e}")
+        client_writer.close()
+        await client_writer.wait_closed()
+        return
+    
+    asyncio.create_task(transfer_data(client_reader, server_writer))
+    await transfer_data(server_reader, client_writer)
 
-    while True:
-        show_menu(ports)
-        option = input("Selecione uma opção: ").strip()
-        if option == '1':
-            if not ports:
-                port_str = input("Digite a porta para iniciar: ").strip()
-            else:
-                port_str = input("Qual porta deseja adicionar? ").strip()
-            try:
-                port = int(port_str)
-                if port in ports:
-                    print("Porta já ativa.")
-                    await asyncio.sleep(2)
-                    continue
-                if port < 1024 and os.getuid() != 0:
-                    print("Portas abaixo de 1024 requerem privilégios de root (execute com sudo).")
-                    await asyncio.sleep(2)
-                    continue
-                s = get_bound_socket(port)
-                if s is None:
-                    print("Porta já em uso ou erro ao bind.")
-                    await asyncio.sleep(2)
-                    continue
-                status_str = input("Digite o status de conexão (deixe vazio para @RustyManager): ").strip()
-                status = status_str if status_str else "@RustyManager"
-                task = asyncio.create_task(server_task(port, sock=s))
-                tasks[port] = task
-                ports[port] = status
-                port_to_status[port] = status
-                save_ports(ports)
-                print("Porta adicionada e iniciada.")
-            except ValueError:
-                print("Porta inválida.")
-            await asyncio.sleep(2)
-        elif option == '2':
-            if not ports:
-                print("Nenhuma porta ativa.")
-                await asyncio.sleep(2)
-                continue
-            port_str = input("Digite a porta para remover: ").strip()
-            try:
-                port = int(port_str)
-                if port in ports:
-                    tasks[port].cancel()
-                    del tasks[port]
-                    del ports[port]
-                    del port_to_status[port]
-                    save_ports(ports)
-                    print("Porta removida.")
-                else:
-                    print("Porta não encontrada.")
-            except ValueError:
-                print("Porta inválida.")
-            await asyncio.sleep(2)
-        elif option == '3':
-            for task in tasks.values():
-                task.cancel()
-            ports.clear()
-            port_to_status.clear()
-            save_ports(ports)
-            print("Proxy removido.")
-            await asyncio.sleep(2)
-        elif option == '0':
-            for task in tasks.values():
-                task.cancel()
-            break
-        else:
-            print("Opção inválida.")
-            await asyncio.sleep(2)
-
-async def main_single(port):
-    global port_to_status
-    port_to_status[port] = get_status()
-    server = await asyncio.start_server(handle_client, '::', port)
-    print(f"Iniciando serviço na porta {port}")
+async def run_proxy(port, status):
+    print(f"Iniciando serviço na porta: {port}")
+    server = await asyncio.start_server(lambda r, w: handle_client(r, w, status), "::", port, family=socket.AF_INET6)
     async with server:
         await server.serve_forever()
 
-def get_port():
-    args = sys.argv[1:]
-    port = 80
-    for i in range(len(args)):
-        if args[i] == "--port":
-            if i + 1 < len(args):
-                try:
-                    port = int(args[i + 1])
-                except ValueError:
-                    port = 80
-    return port
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+def add_proxy_port(port, status="MultiFlow Proxy"):
+    if is_port_in_use(port):
+        print(f"A porta {port} já está em uso.")
+        return
+    cmd = ["python", __file__, "--port", str(port), "--status", status]
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(PORTS_FILE, "a") as f:
+        f.write(f"{port}\n")
+    print(f"Porta {port} aberta com sucesso.")
+
+def del_proxy_port(port):
+    os.system(f"fuser -k {port}/tcp")
+    with open(PORTS_FILE, "r+") as f:
+        lines = f.readlines()
+        f.seek(0)
+        f.truncate()
+        for line in lines:
+            if line.strip() != str(port):
+                f.write(line)
+    print(f"Porta {port} fechada com sucesso.")
+
+def show_menu():
+    while True:
+        print("================= MultiFlow Proxy ================")
+        if os.path.exists(PORTS_FILE) and os.path.getsize(PORTS_FILE) > 0:
+            with open(PORTS_FILE, "r") as f:
+                ports = " ".join(line.strip() for line in f)
+            print(f"Portas(s): {ports}")
+        else:
+            print("Portas(s): nenhuma")
+        print("1 - Abrir Porta")
+        print("2 - Fechar Porta")
+        print("0 - Sair")
+        option = input("Selecione: ")
+        if option == "1":
+            port = int(input("Porta: "))
+            status = input("Status (vazio para padrão): ") or "MultiFlow Proxy"
+            add_proxy_port(port, status)
+        elif option == "2":
+            port = int(input("Porta: "))
+            del_proxy_port(port)
+        elif option == "0":
+            break
+        else:
+            print("Inválido.")
 
 if __name__ == "__main__":
-    if '--menu' in sys.argv:
-        asyncio.run(main_menu())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--status", default="MultiFlow Proxy")
+    args = parser.parse_args()
+
+    if args.port is not None:
+        asyncio.run(run_proxy(args.port, args.status))
     else:
-        port = get_port()
-        asyncio.run(main_single(port))
+        show_menu()
