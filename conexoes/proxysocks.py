@@ -59,20 +59,20 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         client_writer: The writer associated with the client socket.
         status: The status string to embed in the HTTP response.
     """
-    # Send the HTTP handshake messages.  Use CRLF per RFC 7230.
+    # Send the HTTP handshake messages.  Use CRLF per RFC 7230.  First
+    # send a 101 response using the provided status string, then
+    # consume up to 1024 bytes from the client.  Finally respond with
+    # a literal 200 OK line, as seen in the reference implementation.
     try:
         handshake_101 = f"HTTP/1.1 101 {status}\r\n\r\n".encode()
-        handshake_200 = f"HTTP/1.1 200 {status}\r\n\r\n".encode()
         client_writer.write(handshake_101)
         await client_writer.drain()
-        # Read and discard up to 1024 bytes from the client to mimic the
-        # buffer flush in the Rust code.  We don't use the contents.
-        # Read and discard up to 1024 bytes from the client.  The call will
-        # suspend until either EOF or some data arrives, mirroring the
-        # behaviour of the Rust `read` call which waits indefinitely for
-        # input.  We ignore the returned data.
+        # Read and discard up to 1024 bytes from the client.  This call
+        # returns as soon as any data is available, mirroring the Rust code.
         await client_reader.read(1024)
-        # Send the 200 OK line after the discard.
+        # Always send 200 OK irrespective of the provided status.  Many
+        # clients expect this exact string.
+        handshake_200 = b"HTTP/1.1 200 OK\r\n\r\n"
         client_writer.write(handshake_200)
         await client_writer.drain()
     except Exception as exc:  # pylint: disable=broad-except
@@ -182,12 +182,31 @@ async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyn
 
 async def run_proxy(port: int, status: str) -> None:
     """Start the proxy listener and handle incoming connections."""
+    """
+    Start the proxy listener and handle incoming connections.
+
+    To ensure that both IPv4 and IPv6 clients can connect, create
+    an explicit IPv6 socket and disable the IPV6_V6ONLY flag.  This
+    mirrors the behaviour of the original proxy, which binds to
+    ``::`` and allows dual‑stack operation.
+    """
+    # Create an IPv6 socket configured for dual stack
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    # Allow both IPv4 and IPv6 (0 disables the v6 only flag)
+    try:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    except AttributeError:
+        # IPV6_V6ONLY may not exist on all platforms; ignore if missing
+        pass
+    # Allow reusing the address immediately after the program exits
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("::", port))
+    sock.listen(100)
     server = await asyncio.start_server(
         lambda r, w: handle_client(r, w, status),
-        host="::",  # bind to both IPv4 and IPv6
-        port=port
+        sock=sock
     )
-    addr_list = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
+    addr_list = ", ".join(str(s.getsockname()) for s in server.sockets or [])
     logging.info("Starting RustyProxy Python port on %s", addr_list)
     async with server:
         await server.serve_forever()
