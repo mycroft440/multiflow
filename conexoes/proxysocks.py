@@ -81,8 +81,16 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         await client_writer.wait_closed()
         return
 
-    # Probe the client stream to decide which backend to forward to.
-    backend_host, backend_port = await probe_backend(client_reader, client_writer)
+    # Probe the client stream to decide which backend to forward to.  Use a
+    # timeout of one second to mirror the Rust implementation's use of
+    # tokio::time::timeout around peek_stream.
+    try:
+        backend_host, backend_port = await asyncio.wait_for(
+            probe_backend(client_reader, client_writer), timeout=1.0
+        )
+    except asyncio.TimeoutError:
+        # No data within timeout -> default to SSH port
+        backend_host, backend_port = ("0.0.0.0", 22)
 
     # Establish a connection to the chosen backend.
     try:
@@ -152,32 +160,21 @@ async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyn
     sock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
     if sock is None:
         return default_backend
+    # Use the same technique as the original Proxy code: yield control
+    # once via loop.sock_recv with a zero‑byte read to allow the event
+    # loop to notice incoming data, then perform a non‑blocking peek.
     sock.setblocking(False)
     loop = asyncio.get_running_loop()
-    data: bytes = b''
-    # Wait up to one second for data to become available.  This mirrors
-    # the `timeout(Duration::from_secs(1), peek_stream(...))` call in the
-    # Rust implementation.  If no data arrives within the period we
-    # treat it as an empty string.
-    start_time = loop.time()
-    while True:
-        try:
-            data = sock.recv(8192, socket.MSG_PEEK)
-            break
-        except BlockingIOError:
-            if loop.time() - start_time > 1.0:
-                # No data within timeout -> treat as empty
-                data = b''
-                break
-            # Sleep briefly and retry
-            await asyncio.sleep(0.05)
-        except Exception:
-            return default_backend
-    # Interpret the peeked bytes as UTF‑8 text and decide on the backend.
     try:
-        text = data.decode('utf-8', errors='ignore')
+        # This call does not read any data but ensures that the loop
+        # registers the socket as ready; it may raise if the socket is
+        # closed.  Equivalent to peek_stream's loop.sock_recv(sock, 0).
+        await loop.sock_recv(sock, 0)
+        data_bytes = sock.recv(8192, socket.MSG_PEEK)
+        text = data_bytes.decode('utf-8', errors='ignore')
     except Exception:
         return default_backend
+    # Decide on the backend based on the peeked data.
     if not text or 'SSH' in text:
         return default_backend
     return alt_backend
