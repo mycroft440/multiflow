@@ -25,14 +25,6 @@ console_handler.setFormatter(detailed_formatter)
 # Add console handler to logger
 logger.addHandler(console_handler)
 
-# Optionally, also enable asyncio's internal debug mode for even more detail
-# This can produce a lot of output, especially for event loop operations
-# https://docs.python.org/3/library/asyncio-dev.html#asyncio-debug-mode
-# import os
-# os.environ['PYTHONASYNCIODEBUG'] = '1' # Enable before importing asyncio
-# Alternatively, set it programmatically (might need to be done early)
-# asyncio.get_event_loop().set_debug(True) # Enable debug mode on the loop
-
 # --- End logging configuration ---
 
 # Global variables to hold server state
@@ -78,7 +70,7 @@ async def handle_client(client_reader, client_writer):
             logger.warning("Timeout reading initial data, defaulting to SSH port 22")
             initial_client_data = b"" # No data consumed within timeout
         except Exception as e:
-             logger.error(f"Error peeking initial data: {e}", exc_info=True) # Log full traceback
+             logger.error(f"Error peeking initial  {e}", exc_info=True) # Log full traceback
              initial_client_data = b"" # Treat error as no data
 
         # Determine destination port based on initial data
@@ -89,10 +81,11 @@ async def handle_client(client_reader, client_writer):
             dest_port = 1194
             logger.info("Detected OpenVPN traffic (port 1194)")
 
-        dest_addr = '127.0.0.1' # Assuming localhost as per original
+        # --- Connect to the destination server ---
+        # Changed from '127.0.0.1' to '0.0.0.0' to match Rust proxy behavior
+        dest_addr = '0.0.0.0'
         logger.info(f"Connecting to destination: {dest_addr}:{dest_port}")
 
-        # Connect to the destination server
         try:
             logger.debug(f"Attempting to connect to destination server {dest_addr}:{dest_port}...")
             server_reader, server_writer = await asyncio.open_connection(dest_addr, dest_port)
@@ -157,7 +150,7 @@ async def relay_data(reader, writer, direction_tag):
             total_bytes += bytes_read
             logger.debug(f"[{direction_tag}] Read {bytes_read} bytes (Total: {total_bytes}). Data (repr): {repr(data[:50])}{'...' if bytes_read > 50 else ''}")
 
-            if not data: # EOF
+            if not data:  # EOF
                 logger.info(f"[{direction_tag}] EOF received. Stopping relay. Total bytes transferred: {total_bytes}")
                 break
 
@@ -249,7 +242,7 @@ async def interactive_menu():
     parser.add_argument('--port', type=int, default=80, help='Port to listen on (default: 80)')
     parser.add_argument('--status', type=str, default='@RustyManager', help='Status message for HTTP responses (default: @RustyManager)')
     # Adding a flag to easily increase asyncio debug mode
-    parser.add_argument('--asyncio-debug', action='store_true', help='Enable asyncio debug mode') # [[3]]
+    parser.add_argument('--asyncio-debug', action='store_true', help='Enable asyncio debug mode')
     args = parser.parse_args()
 
     current_port = args.port
@@ -258,7 +251,7 @@ async def interactive_menu():
     # Enable asyncio debug mode if requested
     if args.asyncio_debug:
         logger.info("Enabling asyncio debug mode via argument.")
-        asyncio.get_event_loop().set_debug(True) # [[3]]
+        asyncio.get_event_loop().set_debug(True)
 
     print(f"Rusty Proxy Manager (DEBUG) initialized with default port {current_port} and status '{current_status}'")
     logger.info(f"Rusty Proxy Manager (DEBUG) initialized with default port {current_port} and status '{current_status}'")
