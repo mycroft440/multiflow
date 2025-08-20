@@ -322,10 +322,10 @@ def show_menu() -> None:
             print(f"| Portas(s):{active_ports:<35}|")
 
         print("------------------------------------------------")
-        print("| 1 - Abrir Porta        |")
-        print("| 2 - Fechar Porta       |")
-        print("| 3 - Ativar/Desativar HTTP Status |")
-        print("| 0 - Sair               |")
+        print("| 1 - Abrir Porta        ")
+        print("| 2 - Fechar Porta       ")
+        print("| 3 - Ativar/Desativar HTTP Status ")
+        print("| 0 - Sair               ")
         print("------------------------------------------------")
 
         option = input(" --> Selecione uma opção: ").strip()
