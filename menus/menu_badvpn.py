@@ -46,16 +46,17 @@ class BadVPNManager:
             else:
                 status = f"{MC.RED_GRADIENT}{Icons.INACTIVE} Inativo{MC.RESET}"
             
-            # Obtém porta
+            # Obtém porta (regex genérico para qualquer IP, ex: 0.0.0.0 ou 127.0.0.1)
             port = "7300"  # default
             with self.service_file.open('r') as f:
                 content = f.read()
-                match = re.search(r'--listen-addr 127.0.0.1:(\d+)', content)
+                match = re.search(r'--listen-addr [^:]+:(\d+)', content)
                 if match:
                     port = match.group(1)
             
             return status, port
-        except:
+        except Exception as e:
+            print(f"Erro ao obter status: {e}", file=sys.stderr)  # Log para debug
             return f"{MC.RED_GRADIENT}{Icons.CROSS} Erro{MC.RESET}", "N/A"
     
     def get_bbr_status(self):
@@ -191,25 +192,26 @@ def main_menu():
                     TerminalManager.leave_alt_screen()
                     
                     try:
-                        subprocess.run(['sudo', 'bash', str(manager.install_script), port], check=True)
+                        # Removido 'sudo' pois já é root
+                        subprocess.run(['bash', str(manager.install_script), port], check=True)
                         status = f"Porta configurada: {port}"
-                    except:
-                        status = "Erro na configuração"
+                    except Exception as e:
+                        status = f"Erro na configuração: {e}"
                     
                     TerminalManager.enter_alt_screen()
                 else:
                     status = "Porta inválida"
             
             elif choice == "2" and manager.is_installed():
-                subprocess.run(['sudo', 'systemctl', 'start', 'badvpn-udpgw'], check=False)
+                subprocess.run(['systemctl', 'start', 'badvpn-udpgw'], check=False)
                 status = "Serviço iniciado"
             
             elif choice == "3" and manager.is_installed():
-                subprocess.run(['sudo', 'systemctl', 'stop', 'badvpn-udpgw'], check=False)
+                subprocess.run(['systemctl', 'stop', 'badvpn-udpgw'], check=False)
                 status = "Serviço parado"
             
             elif choice == "4" and manager.is_installed():
-                subprocess.run(['sudo', 'systemctl', 'restart', 'badvpn-udpgw'], check=False)
+                subprocess.run(['systemctl', 'restart', 'badvpn-udpgw'], check=False)
                 status = "Serviço reiniciado"
             
             elif choice == "5":
