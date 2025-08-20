@@ -130,6 +130,22 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         hsts = "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
         x_forwarded_for = f"X-Forwarded-For: {'.'.join(str(random.randint(1, 255)) for _ in range(4))}"  # Adicionado para anonimato
 
+        # Blob fake TLS para simular handshake (ServerHello simplificado)
+        fake_tls_blob = b'\x16\x03\x03\x00\x3A'  # ContentType=22 (handshake), Version=3.3 (TLS 1.2), Length=58
+        fake_tls_blob += b'\x02\x00\x00\x36'  # HandshakeType=2 (ServerHello), Length=54
+        fake_tls_blob += b'\x03\x03' + os.urandom(32)  # Version + Random 32 bytes
+        fake_tls_blob += b'\x00'  # Session ID Length=0
+        fake_tls_blob += b'\x13\x01'  # Cipher Suite fake (TLS_AES_128_GCM_SHA256)
+        fake_tls_blob += b'\x00'  # Compression=0
+        fake_tls_blob += b'\x00\x0A'  # Extensions Length=10
+        fake_tls_blob += b'\x00\x2B\x00\x03\x02\x03\x03'  # Supported Versions (TLS 1.2/1.3)
+        fake_tls_blob += os.urandom(10)  # Padding random para variar e evitar detecção
+
+        # Enviar o blob fake TLS primeiro para mascarar
+        client_writer.write(fake_tls_blob)
+        await client_writer.drain()
+        logging.info("Enviado blob fake TLS de %d bytes para simular criptografia", len(fake_tls_blob))
+
         responses = []
         # 100 Continue
         responses.append("HTTP/1.1 100 Continue\r\n\r\n")
@@ -161,7 +177,7 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             client_writer.write(resp.encode("utf-8"))
         await client_writer.drain()
     except Exception as exc:
-        logging.warning("Falha no handshake: %s", exc)
+        logging.warning("Falha no handshake com fake TLS: %s", exc)
         client_writer.close()
         await client_writer.wait_closed()
         return
