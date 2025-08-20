@@ -207,39 +207,56 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36\r\n"
         )
 
-        # Build a list of response payloads.  Each entry is a complete
-        # response to be written to the client.  Responses with body
-        # terminate with an extra CRLF.
-        responses = []
-        responses.append("HTTP/1.1 100 Continue\r\n\r\n")
-        responses.append(
-            "HTTP/1.1 101 Switching Protocols\r\n"
-            f"{server_header}\r\n"
-            f"{date_header}\r\n"
-            f"{cache_status}\r\n"
-            f"{forwarded_header}"
-            f"{x_forwarded_host_header}"
-            f"{x_real_ip_header}"
-            f"{fake_ssl_headers}\r\n"
-        )
-        responses.append("HTTP/1.1 204 No Content\r\n\r\n")
-        responses.append(
-            "HTTP/1.1 200 Connection Established\r\n"
-            "Content-Type: text/plain\r\n"
-            "Connection: keep-alive\r\n"
-            "Cache-Control: no-cache, no-store, must-revalidate\r\n"
-            f"{user_agent_header}"
-            f"{forwarded_header}"
-            f"{x_forwarded_host_header}"
-            f"{x_real_ip_header}"
-            f"{fake_ssl_headers}\r\n"
-        )
-        responses.append("HTTP/1.1 301 Moved Permanently\r\nLocation: /\r\n\r\n")
-        responses.append("HTTP/1.1 403 Forbidden\r\n\r\n")
-        responses.append("HTTP/1.1 404 Not Found\r\n\r\n")
-        responses.append("HTTP/1.1 503 Service Unavailable\r\n\r\n")
+        # Build the handshake responses based on the configured activation
+        # status for each HTTP response.  Only responses marked as active
+        # in the response_status file will be sent to the client.
+        response_status = load_response_status()
+        responses: list[str] = []
+        # 100 Continue
+        if response_status.get("100 Continue", True):
+            responses.append("HTTP/1.1 100 Continue\r\n\r\n")
+        # 101 Switching Protocols (dynamic headers)
+        if response_status.get("101 Switching Protocols", True):
+            responses.append(
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                f"{server_header}\r\n"
+                f"{date_header}\r\n"
+                f"{cache_status}\r\n"
+                f"{forwarded_header}"
+                f"{x_forwarded_host_header}"
+                f"{x_real_ip_header}"
+                f"{fake_ssl_headers}\r\n"
+            )
+        # 204 No Content
+        if response_status.get("204 No Content", True):
+            responses.append("HTTP/1.1 204 No Content\r\n\r\n")
+        # 200 Connection Established (dynamic headers)
+        if response_status.get("200 Connection Established", True):
+            responses.append(
+                "HTTP/1.1 200 Connection Established\r\n"
+                "Content-Type: text/plain\r\n"
+                "Connection: keep-alive\r\n"
+                "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+                f"{user_agent_header}"
+                f"{forwarded_header}"
+                f"{x_forwarded_host_header}"
+                f"{x_real_ip_header}"
+                f"{fake_ssl_headers}\r\n"
+            )
+        # 301 Moved Permanently
+        if response_status.get("301 Moved Permanently", True):
+            responses.append("HTTP/1.1 301 Moved Permanently\r\nLocation: /\r\n\r\n")
+        # 403 Forbidden
+        if response_status.get("403 Forbidden", True):
+            responses.append("HTTP/1.1 403 Forbidden\r\n\r\n")
+        # 404 Not Found
+        if response_status.get("404 Not Found", True):
+            responses.append("HTTP/1.1 404 Not Found\r\n\r\n")
+        # 503 Service Unavailable
+        if response_status.get("503 Service Unavailable", True):
+            responses.append("HTTP/1.1 503 Service Unavailable\r\n\r\n")
 
-        # Send each response line in sequence.
+        # Send each active response line in sequence.
         for resp in responses:
             client_writer.write(resp.encode("utf-8"))
         await client_writer.drain()
@@ -393,6 +410,78 @@ async def run_proxy(port: int, status: str, cloudflare: bool, fake_ssl: bool) ->
 
 PORTS_FILE = Path("/opt/rustyproxy/ports")
 
+# File used to record the activation status of each HTTP response.  Each line
+# contains a response name and its state separated by a colon, e.g.
+# ``200 Connection Established:active``.  If the file is missing, all
+# responses default to active.  This allows the menu to enable/disable
+# specific handshake responses.
+RESPONSES_STATUS_FILE = Path("/opt/rustyproxy/response_status")
+
+# The list of response identifiers in the order they are presented to the
+# user and included in the handshake.  These names should correspond
+# exactly to the status line used in each HTTP response so that the
+# configuration file can be parsed correctly.
+RESPONSE_NAMES = [
+    "100 Continue",
+    "101 Switching Protocols",
+    "204 No Content",
+    "200 Connection Established",
+    "301 Moved Permanently",
+    "403 Forbidden",
+    "404 Not Found",
+    "503 Service Unavailable",
+]
+
+
+def load_response_status() -> dict[str, bool]:
+    """Load the activation status for each HTTP response from disk.
+
+    Reads RESPONSES_STATUS_FILE and returns a dictionary mapping
+    response names to a boolean indicating whether that response should
+    be sent.  Missing or malformed entries default to True.  If the
+    file does not exist, all responses are considered active.
+
+    Returns:
+        A dict where keys are response names and values are booleans.
+    """
+    status: dict[str, bool] = {name: True for name in RESPONSE_NAMES}
+    if not RESPONSES_STATUS_FILE.exists():
+        return status
+    try:
+        with RESPONSES_STATUS_FILE.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or ':' not in line:
+                    continue
+                name, state = line.split(":", 1)
+                name = name.strip()
+                state = state.strip().lower()
+                if name in status:
+                    status[name] = (state == "active")
+    except Exception:
+        # On any error reading/parsing the file, fall back to defaults
+        pass
+    return status
+
+
+def save_response_status(status_dict: dict[str, bool]) -> None:
+    """Persist the response activation status dictionary to disk.
+
+    Writes each entry as ``name:active`` or ``name:inactive`` to the
+    RESPONSES_STATUS_FILE.  Any errors are silently ignored.
+
+    Args:
+        status_dict: The mapping of response names to activation booleans.
+    """
+    try:
+        RESPONSES_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with RESPONSES_STATUS_FILE.open("w", encoding="utf-8") as f:
+            for name in RESPONSE_NAMES:
+                state_str = "active" if status_dict.get(name, True) else "inactive"
+                f.write(f"{name}:{state_str}\n")
+    except Exception:
+        pass
+
 
 def is_port_in_use(port: int) -> bool:
     """Check whether a given port is already listening on localhost.
@@ -544,6 +633,7 @@ def show_menu() -> None:
         print("| 2 - Fechar Porta                                  |")
         print("| 3 - Fake ssl                                      |")
         print("| 4 - Ativar Cloudflare                             |")
+        print("| 5 - Modificar resposta                            |")
         print("| 0 - Sair                                          |")
         print("------------------------------------------------")
         option = input(" --> Selecione uma opção: ").strip()
@@ -588,6 +678,28 @@ def show_menu() -> None:
             enable = enable_input == 's'
             toggle_feature(port, "--cloudflare", enable)
             input("> Operação concluída. Pressione Enter para voltar ao menu.")
+        elif option == '5':
+            # Option to list and toggle HTTP response statuses.  Load current
+            # status from disk, display an enumerated list, and allow
+            # toggling of a selected response.  Persist changes back to disk.
+            statuses = load_response_status()
+            print("\nLista de status HTTP e se estão ativados ou não:\n")
+            for idx, name in enumerate(RESPONSE_NAMES, start=1):
+                state_str = "ativo" if statuses.get(name, True) else "inativo"
+                print(f"{idx}. {name} - {state_str}")
+            selecionado = input("\nSelecione a opção na qual deseja desativar ou ativar: ").strip()
+            if not selecionado.isdigit():
+                input("Opção inválida. Pressione Enter para voltar ao menu.")
+            else:
+                idx = int(selecionado)
+                if 1 <= idx <= len(RESPONSE_NAMES):
+                    name = RESPONSE_NAMES[idx - 1]
+                    statuses[name] = not statuses.get(name, True)
+                    save_response_status(statuses)
+                    estado = "ativado" if statuses[name] else "desativado"
+                    input(f"> Status '{name}' {estado}. Pressione Enter para voltar ao menu.")
+                else:
+                    input("Opção inválida. Pressione Enter para voltar ao menu.")
         elif option == '0':
             sys.exit(0)
         else:
