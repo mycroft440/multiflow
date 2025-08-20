@@ -69,9 +69,9 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         except Exception:
             pass
     try:
-        client_writer.write(f"HTTP/1.1 101 {HTTP_STATUS[101]}\r\nServer: Apache/2.4.41 (Ubuntu)\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36\r\nConnection: Upgrade\r\nKeep-Alive: timeout=60\r\n\r\n".encode())
+        client_writer.write(f"HTTP/1.1 101 {HTTP_STATUS[101]}\r\n\r\n".encode())
         await client_writer.drain()
-        client_writer.write(f"HTTP/1.1 200 {HTTP_STATUS[200]}\r\nServer: Apache/2.4.41 (Ubuntu)\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36\r\nConnection: keep-alive\r\nKeep-Alive: timeout=60\r\nContent-Length: 0\r\n\r\n".encode())
+        client_writer.write(f"HTTP/1.1 200 {HTTP_STATUS[200]}\r\n\r\n".encode())
         await client_writer.drain()
     except Exception as exc:
         logging.error("Falha no handshake com o cliente: %s", exc)
