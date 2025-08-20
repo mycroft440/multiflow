@@ -37,7 +37,6 @@ def load_enabled_statuses() -> Set[int]:
         enabled = set(DEFAULT_ENABLED)
         save_enabled_statuses(enabled)
         return enabled
-
     enabled: Set[int] = set()
     for line in STATUS_FILE.read_text().splitlines():
         line = line.strip()
@@ -49,7 +48,6 @@ def load_enabled_statuses() -> Set[int]:
                 enabled.add(code)
         except ValueError:
             continue
-
     if not enabled:
         enabled = set(DEFAULT_ENABLED)
         save_enabled_statuses(enabled)
@@ -60,8 +58,8 @@ def save_enabled_statuses(enabled: Set[int]) -> None:
     STATUS_FILE.write_text("\n".join(str(c) for c in sorted(enabled)) + "\n")
 
 # --------- Estabilidade de conexão: Keepalive/TCP tuning ----------
-def apply_tcp_keepalive(sock: socket.socket, *, idle: int = 45, interval: int = 15,
-                        count: int = 4, nodelay: bool = True) -> None:
+def apply_tcp_keepalive(sock: socket.socket, *, idle: int = 10, interval: int = 5,  # ALTERAÇÃO: Valores mais agressivos (idle=10, interval=5, count=3)
+                        count: int = 3, nodelay: bool = True) -> None:
     """
     Ativa SO_KEEPALIVE e, quando disponível, ajusta:
       - TCP_KEEPIDLE / TCP_KEEPALIVE (macOS) -> segundos até o 1º probe
@@ -73,7 +71,6 @@ def apply_tcp_keepalive(sock: socket.socket, *, idle: int = 45, interval: int = 
         return
     with contextlib.suppress(OSError):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-
     # Linux/BSD
     if hasattr(socket, "TCP_KEEPIDLE"):
         with contextlib.suppress(OSError):
@@ -84,12 +81,10 @@ def apply_tcp_keepalive(sock: socket.socket, *, idle: int = 45, interval: int = 
     if hasattr(socket, "TCP_KEEPCNT"):
         with contextlib.suppress(OSError):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, count)
-
     # macOS usa TCP_KEEPALIVE para o "idle"
     if hasattr(socket, "TCP_KEEPALIVE"):
         with contextlib.suppress(OSError):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, idle)
-
     if nodelay and hasattr(socket, "TCP_NODELAY"):
         with contextlib.suppress(OSError):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -102,7 +97,20 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         csock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
         apply_tcp_keepalive(csock)
 
-    # Lê primeiros bytes (headers/assinatura)
+    # ALTERAÇÃO: Handshake movido para AQUI - envia status ANTES de ler qualquer conteúdo
+    try:
+        enabled = load_enabled_statuses()
+        for code in sorted(enabled):
+            reason = HTTP_STATUS.get(code, "OK")
+            client_writer.write(f"HTTP/1.1 {code} {reason}\r\n\r\n".encode())
+            await client_writer.drain()
+    except Exception as exc:
+        logging.error("Falha no handshake com o cliente: %s", exc)
+        client_writer.close()
+        await client_writer.wait_closed()
+        return
+
+    # Agora, APÓS handshake, lê os dados iniciais
     try:
         initial_data = await client_reader.read(8192)
     except Exception as exc:
@@ -110,9 +118,7 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         client_writer.close()
         await client_writer.wait_closed()
         return
-
     header_text = initial_data.decode("utf-8", errors="ignore")
-
     def find_header(text: str, header: str) -> str:
         idx = text.find(header + ": ")
         if idx == -1:
@@ -123,10 +129,8 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         if end == -1:
             return ""
         return value[:end]
-
     host_port_header = find_header(header_text, "X-Real-Host")
     x_split_header = find_header(header_text, "X-Split")
-
     # Decide backend (por header ou heurística)
     backend_host: str
     backend_port: int
@@ -144,32 +148,17 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     else:
         try:
             backend_host, backend_port = await asyncio.wait_for(
-                probe_backend(client_reader, client_writer), timeout=1.0
+                probe_backend(initial_data), timeout=1.0
             )
         except asyncio.TimeoutError:
-            backend_host, backend_port = ("0.0.0.0", 22)
-
+            backend_host, backend_port = ("127.0.0.1", 22)
     if x_split_header:
         with contextlib.suppress(Exception):
             await client_reader.read(8192)
-
-    # Handshake: envia todos os HTTP status marcados como "ativos"
-    try:
-        enabled = load_enabled_statuses()
-        for code in sorted(enabled):
-            reason = HTTP_STATUS.get(code, "OK")
-            client_writer.write(f"HTTP/1.1 {code} {reason}\r\n\r\n".encode())
-            await client_writer.drain()
-    except Exception as exc:
-        logging.error("Falha no handshake com o cliente: %s", exc)
-        client_writer.close()
-        await client_writer.wait_closed()
-        return
-
-    # Conecta ao backend
+    # Conecta ao backend (após decidir, que depende dos dados lidos)
     try:
         server_reader, server_writer = await asyncio.open_connection(backend_host, backend_port)
-        # Keepalive no socket para o backend
+        # Keepalive no socket para o backend (com valores agressivos)
         with contextlib.suppress(Exception):
             ssock: socket.socket = server_writer.get_extra_info("socket")  # type: ignore
             apply_tcp_keepalive(ssock)
@@ -178,7 +167,6 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         client_writer.close()
         await client_writer.wait_closed()
         return
-
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
         """
         Copia dados de uma ponta à outra até EOF/erro.
@@ -202,42 +190,25 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
                     except Exception as exc:
                         logging.debug("Half-close %s: %s", direction, exc)
                     break
-
                 writer.write(data)
                 await writer.drain()
         except Exception as exc:
             logging.debug("Erro no fluxo %s: %s", direction, exc)
-
     client_to_server = asyncio.create_task(forward(client_reader, server_writer, "cliente->servidor"))
     server_to_client = asyncio.create_task(forward(server_reader, client_writer, "servidor->cliente"))
-
     # Aguarda os dois sentidos finalizarem
     await asyncio.gather(client_to_server, server_to_client, return_exceptions=True)
-
     # Fecha ordenadamente os dois sockets
     for w in (server_writer, client_writer):
         with contextlib.suppress(Exception):
             w.close()
             await w.wait_closed()
 
-async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> Tuple[str, int]:
-    """Espia os primeiros bytes: se contiver 'SSH' ou vazio → 22; caso contrário → 1194."""
-    default_backend = ("0.0.0.0", 22)
-    alt_backend = ("0.0.0.0", 1194)
-
-    sock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
-    if sock is None:
-        return default_backend
-
-    sock.setblocking(False)
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.sock_recv(sock, 0)
-        data_bytes = sock.recv(8192, socket.MSG_PEEK)
-        text = data_bytes.decode('utf-8', errors='ignore')
-    except Exception:
-        return default_backend
-
+async def probe_backend(initial_data: bytes) -> Tuple[str, int]:
+    """Usa os dados iniciais já lidos pra decidir backend: se contiver 'SSH' ou vazio → 22; caso contrário → 1194."""
+    default_backend = ("127.0.0.1", 22)
+    alt_backend = ("127.0.0.1", 1194)
+    text = initial_data.decode('utf-8', errors='ignore')
     if not text or 'SSH' in text.upper():
         return default_backend
     return alt_backend
@@ -254,7 +225,6 @@ async def run_proxy(port: int) -> None:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)  # herda para aceptados em alguns SOs
     sock.bind(("::", port))
     sock.listen(512)
-
     server = await asyncio.start_server(lambda r, w: handle_client(r, w), sock=sock)
     addr_list = ", ".join(str(s.getsockname()) for s in server.sockets or [])
     logging.info("Iniciando MultiFlow em %s", addr_list)
@@ -276,16 +246,13 @@ def add_proxy_port(port: int) -> None:
     if is_port_in_use(port):
         print(f"A porta {port} já está em uso.")
         return
-
     script_path = Path(__file__).resolve()
     # Sem --status: os HTTP status são globais (menu)
     command = f"{sys.executable} {script_path} --port {port}"
-
     service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
     service_content = f"""[Unit]
 Description=MultiFlow{port}
 After=network.target
-
 [Service]
 LimitNOFILE=infinity
 LimitNPROC=infinity
@@ -300,7 +267,6 @@ Type=simple
 ExecStart={command}
 Restart=always
 RestartSec=1
-
 [Install]
 WantedBy=multi-user.target
 """
@@ -308,7 +274,6 @@ WantedBy=multi-user.target
     subprocess.run(["systemctl", "daemon-reload"], check=False)
     subprocess.run(["systemctl", "enable", f"proxy{port}.service"], check=False)
     subprocess.run(["systemctl", "start", f"proxy{port}.service"], check=False)
-
     PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with PORTS_FILE.open("a") as f:
         f.write(f"{port}\n")
@@ -318,18 +283,14 @@ def del_proxy_port(port: int) -> None:
     """Para e remove o serviço systemd da porta informada."""
     subprocess.run(["systemctl", "disable", f"proxy{port}.service"], check=False)
     subprocess.run(["systemctl", "stop", f"proxy{port}.service"], check=False)
-
     service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
     if service_file_path.exists():
         service_file_path.unlink()
-
     subprocess.run(["systemctl", "daemon-reload"], check=False)
-
     if PORTS_FILE.exists():
         lines = [l.strip() for l in PORTS_FILE.read_text().splitlines() if l.strip()]
         lines = [l for l in lines if l != str(port)]
         PORTS_FILE.write_text("\n".join(lines) + ("\n" if lines else ""))
-
     print(f"Porta {port} fechada com sucesso.")
 
 def toggle_http_status_menu() -> None:
@@ -339,28 +300,23 @@ def toggle_http_status_menu() -> None:
         print("------------------------------------------------")
         print(f"|{'HTTP STATUS DO PROXY':^47}|")
         print("------------------------------------------------")
-
         enabled = load_enabled_statuses()
         all_codes = sorted(HTTP_STATUS.keys())
-
         for idx, code in enumerate(all_codes, start=1):
             flag = "ativo" if code in enabled else "inativo"
             print(f"{idx}. {code} - {flag}")
         print("0. Voltar")
         print("------------------------------------------------")
-
         sel = input("Digite qual deseja alterar: ").strip()
         if sel == "0":
             break
         if not sel.isdigit():
             input("Opção inválida. Pressione Enter para voltar.")
             continue
-
         idx = int(sel)
         if not (1 <= idx <= len(all_codes)):
             input("Opção inválida. Pressione Enter para voltar.")
             continue
-
         code = all_codes[idx - 1]
         if code in enabled:
             enabled.remove(code)
@@ -368,7 +324,6 @@ def toggle_http_status_menu() -> None:
         else:
             enabled.add(code)
             print(f"> Status {code} ativado.")
-
         save_enabled_statuses(enabled)
         input("Pressione Enter para continuar...")
 
@@ -377,13 +332,11 @@ def show_menu() -> None:
     if not PORTS_FILE.exists():
         PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
         PORTS_FILE.touch()
-
     while True:
         os.system("clear")
         print("------------------------------------------------")
         print(f"|{'MULTIFLOW PROXY':^47}|")
         print("------------------------------------------------")
-
         if PORTS_FILE.stat().st_size == 0:
             print(f"| Portas(s): {'nenhuma':<34}|")
         else:
@@ -391,16 +344,13 @@ def show_menu() -> None:
                 ports = [line.strip() for line in f if line.strip()]
             active_ports = ' '.join(ports)
             print(f"| Portas(s):{active_ports:<35}|")
-
         print("------------------------------------------------")
-        print("| 1 - Abrir Porta                     |")
-        print("| 2 - Fechar Porta                    |")
-        print("| 3 - Ativar/Desativar HTTP Status    |")
-        print("| 0 - Sair                            |")
+        print("| 1 - Abrir Porta |")
+        print("| 2 - Fechar Porta |")
+        print("| 3 - Ativar/Desativar HTTP Status |")
+        print("| 0 - Sair |")
         print("------------------------------------------------")
-
         option = input(" --> Selecione uma opção: ").strip()
-
         if option == '1':
             port_input = input("Digite a porta: ").strip()
             while not port_input.isdigit():
@@ -409,7 +359,6 @@ def show_menu() -> None:
             port = int(port_input)
             add_proxy_port(port)
             input("> Porta ativada com sucesso. Pressione Enter para voltar ao menu.")
-
         elif option == '2':
             port_input = input("Digite a porta: ").strip()
             while not port_input.isdigit():
@@ -418,13 +367,10 @@ def show_menu() -> None:
             port = int(port_input)
             del_proxy_port(port)
             input("> Porta desativada com sucesso. Pressione Enter para voltar ao menu.")
-
         elif option == '3':
             toggle_http_status_menu()
-
         elif option == '0':
             sys.exit(0)
-
         else:
             input("Opção inválida. Pressione Enter para voltar ao menu.")
 
@@ -438,7 +384,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Ponto de entrada: proxy (--port) ou menu (root)."""
     args = parse_args()
-
     if args.port is not None:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
         try:
