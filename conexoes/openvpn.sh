@@ -1,6 +1,6 @@
 #!/bin/bash
 # =================================================================
-# OpenVPN Installer & Manager - Versão Completa v4.0
+# OpenVPN Installer & Manager - Versão Simplificada para Debian/Ubuntu v4.1
 # Instalação automática com configurações padrão
 # Porta: 1194 | Protocolo: TCP | DNS: Google
 # =================================================================
@@ -17,9 +17,9 @@ readonly SCOLOR=$'\e[0m'
 
 # --- Configurações Padrão (TCP como solicitado) ---
 readonly DEFAULT_PORT="1194"
-readonly DEFAULT_PROTOCOL="tcp"  # Mudado de UDP para TCP conforme solicitado
-readonly DEFAULT_DNS1="8.8.8.8"   # Google DNS primário
-readonly DEFAULT_DNS2="8.8.4.4"   # Google DNS secundário
+readonly DEFAULT_PROTOCOL="tcp"
+readonly DEFAULT_DNS1="8.8.8.8"
+readonly DEFAULT_DNS2="8.8.4.4"
 readonly DEFAULT_DNS_IPV6_1="2001:4860:4860::8888"
 readonly DEFAULT_DNS_IPV6_2="2001:4860:4860::8844"
 
@@ -58,13 +58,13 @@ debug() {
     [[ "${DEBUG:-0}" == "1" ]] && echo -e "${MAGENTA}[DEBUG] $1${SCOLOR}"
 }
 
-# Função de barra de progresso melhorada
+# Função de barra de progresso melhorada (timeout aumentado para 600s)
 fun_bar() {
     local cmd="$1"
     local desc="${2:-Processando}"
     local spinner="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     local i=0
-    local timeout=300
+    local timeout=600  # Aumentado para 10 min
     
     eval "$cmd" &
     local pid=$!
@@ -112,10 +112,6 @@ check_bash() {
 }
 
 check_virtualization() {
-    if [[ -f /proc/user_beancounters ]]; then
-        warn "OpenVZ detectado. Pode haver limitações."
-    fi
-    
     if ! [[ -e /dev/net/tun ]]; then
         die "TUN/TAP não disponível. Execute: modprobe tun"
     fi
@@ -134,7 +130,7 @@ check_kernel_version() {
     fi
 }
 
-# --- Detecção de Sistema Operacional Expandida ---
+# --- Detecção de Sistema Operacional (Simplificado para Debian/Ubuntu) ---
 detect_os() {
     [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
     source /etc/os-release
@@ -144,33 +140,17 @@ detect_os() {
     OS_NAME="$PRETTY_NAME"
     
     case "$OS_ID" in
-        ubuntu)
+        ubuntu|debian)
             OS="debian"
             GROUPNAME="nogroup"
-            if [[ "${OS_VERSION%%.*}" -lt 20 ]]; then
+            if [[ "$OS_ID" == "ubuntu" && "${OS_VERSION%%.*}" -lt 20 ]]; then
                 warn "Ubuntu $OS_VERSION detectado. Recomendado 20.04+"
-            fi
-            ;;
-        debian)
-            OS="debian"
-            GROUPNAME="nogroup"
-            if [[ "${OS_VERSION%%.*}" -lt 11 ]]; then
+            elif [[ "$OS_ID" == "debian" && "${OS_VERSION%%.*}" -lt 11 ]]; then
                 warn "Debian $OS_VERSION detectado. Recomendado 11+"
             fi
             ;;
-        centos|rhel|rocky|almalinux)
-            OS="centos"
-            GROUPNAME="nobody"
-            if [[ "${OS_VERSION%%.*}" -lt 8 ]]; then
-                warn "CentOS/RHEL $OS_VERSION detectado. Recomendado 8+"
-            fi
-            ;;
-        fedora)
-            OS="centos"
-            GROUPNAME="nobody"
-            ;;
         *)
-            die "Sistema operacional '$OS_ID' não suportado."
+            die "Sistema operacional '$OS_ID' não suportado. Use Debian/Ubuntu."
             ;;
     esac
     
@@ -202,50 +182,31 @@ detect_openvpn_layout() {
     debug "Layout OpenVPN: unidade=${SERVER_UNIT} | conf=${SERVER_CONF}"
 }
 
-# --- Instalação de Dependências Moderna ---
+# --- Instalação de Dependências (Simplificado para apt) ---
 check_dependencies() {
     local missing=()
-    local packages=("openvpn" "easy-rsa" "iptables" "curl")
+    local packages=("openvpn" "easy-rsa" "iptables" "curl" "iptables-persistent" "netfilter-persistent")
     
-    # Adicionar pacotes específicos do OS
-    if [[ "$OS" == "debian" ]]; then
-        packages+=("iptables-persistent" "netfilter-persistent")
-        if [[ "$SUPPORTS_NFTABLES" == "yes" ]]; then
-            packages+=("nftables")
-        fi
-    elif [[ "$OS" == "centos" ]]; then
-        packages+=("firewalld")
+    if [[ "$SUPPORTS_NFTABLES" == "yes" ]]; then
+        packages+=("nftables")
     fi
     
     # Verificar pacotes instalados
     for pkg in "${packages[@]}"; do
-        if [[ "$OS" == "debian" ]]; then
-            if ! dpkg -l 2>/dev/null | grep -q "^ii.*$pkg"; then
-                missing+=("$pkg")
-            fi
-        elif [[ "$OS" == "centos" ]]; then
-            if ! rpm -qa 2>/dev/null | grep -q "^$pkg"; then
-                missing+=("$pkg")
-            fi
+        if ! dpkg -l 2>/dev/null | grep -q "^ii.*$pkg"; then
+            missing+=("$pkg")
         fi
     done
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         info "Instalando dependências: ${missing[*]}"
         
-        if [[ "$OS" == "debian" ]]; then
-            export DEBIAN_FRONTEND=noninteractive
-            echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
-            echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
-            
-            fun_bar "apt-get update -qq" "Atualizando repositórios"
-            fun_bar "apt-get install -y -qq ${missing[*]}" "Instalando pacotes"
-        elif [[ "$OS" == "centos" ]]; then
-            if ! yum list installed epel-release >/dev/null 2>&1; then
-                fun_bar "yum install -y epel-release" "Instalando EPEL"
-            fi
-            fun_bar "yum install -y ${missing[*]}" "Instalando pacotes"
-        fi
+        export DEBIAN_FRONTEND=noninteractive
+        echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+        echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+        
+        fun_bar "apt-get update -qq" "Atualizando repositórios"
+        fun_bar "apt-get install -y -qq ${missing[*]}" "Instalando pacotes"
     fi
     
     # Verificar versão do OpenVPN
@@ -257,9 +218,13 @@ check_dependencies() {
     success "Todas as dependências verificadas! (OpenVPN $ovpn_version)"
 }
 
-# --- Otimização de Performance do Sistema ---
+# --- Otimização de Performance do Sistema (com carregamento de módulos) ---
 optimize_system() {
     info "Aplicando otimizações de sistema..."
+    
+    # Carregar módulos necessários
+    modprobe tcp_bbr 2>/dev/null || warn "Módulo tcp_bbr não carregado (BBR indisponível)"
+    modprobe sch_fq 2>/dev/null || warn "Módulo fq não carregado"
     
     # Otimizações de rede
     cat > /etc/sysctl.d/99-openvpn.conf << EOF
@@ -304,6 +269,7 @@ get_public_ipv6() {
         IPV6=$(curl -6 -s https://api6.ipify.org 2>/dev/null) || \
         IPV6=$(curl -6 -s https://ifconfig.co 2>/dev/null) || \
         IPV6=$(ip -6 addr show scope global | grep -oP '(?<=inet6\s)[\da-f:]+' | head -1)
+        [[ -z "$IPV6" ]] && warn "IPv6 detectado mas endereço público não encontrado."
         echo "$IPV6"
     fi
 }
@@ -315,25 +281,19 @@ setup_easy_rsa() {
     info "Configurando PKI e certificados..."
     mkdir -p "$EASY_RSA_DIR"
     
-    # Copiar Easy-RSA
-    local found=0
-    for dir in /usr/share/easy-rsa /usr/lib/easy-rsa /usr/lib64/easy-rsa; do
-        if [[ -d "$dir" ]]; then
-            cp -r "$dir"/* "$EASY_RSA_DIR/"
-            found=1
-            break
-        fi
-    done
-    
-    [[ $found -eq 0 ]] && die "Easy-RSA não encontrado"
+    # Copiar Easy-RSA (path padrão em Debian/Ubuntu)
+    if [[ -d "/usr/share/easy-rsa" ]]; then
+        cp -r "/usr/share/easy-rsa"/* "$EASY_RSA_DIR/"
+    else
+        die "Easy-RSA não encontrado em /usr/share/easy-rsa"
+    fi
     
     cd "$EASY_RSA_DIR" || die "Falha ao acessar $EASY_RSA_DIR"
     
-    # Verificar se easyrsa existe e é executável
     [[ ! -f "./easyrsa" ]] && die "Script easyrsa não encontrado"
     chmod +x "./easyrsa"
     
-    # Configurar vars para usar curvas elípticas (mais rápido e seguro)
+    # Configurar vars para curvas elípticas
     cat > vars << EOF
 set_var EASYRSA_ALGO ec
 set_var EASYRSA_CURVE secp384r1
@@ -353,15 +313,15 @@ EOF
     # Gerar certificado do servidor
     fun_bar "echo 'yes' | ./easyrsa build-server-full server nopass" "Gerando certificado do servidor"
     
-    # Gerar DH (ou usar parâmetros pré-computados para acelerar)
-    if [[ -f /usr/share/easy-rsa/dh2048.pem ]]; then
+    # Gerar DH (tentar pré-computado ou gerar)
+    if [[ -f "/usr/share/easy-rsa/dh2048.pem" ]]; then
         cp /usr/share/easy-rsa/dh2048.pem pki/dh.pem
         info "Usando parâmetros DH pré-computados"
     else
         fun_bar "./easyrsa gen-dh" "Gerando parâmetros Diffie-Hellman"
     fi
     
-    # Gerar chave tls-crypt (mais seguro que tls-auth)
+    # Gerar chave tls-crypt
     info "Gerando chave tls-crypt..."
     openvpn --genkey secret pki/tc.key || die "Falha ao gerar tls-crypt"
     
@@ -382,13 +342,9 @@ configure_server() {
     info "Configurando servidor OpenVPN..."
     
     local IP=$(get_public_ip)
-    local IPV6=""
+    local IPV6=$(get_public_ipv6)
     
-    if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
-        IPV6=$(get_public_ipv6)
-    fi
-    
-    # Configuração do servidor com TCP (conforme solicitado)
+    # Configuração do servidor com TCP
     cat > "$SERVER_CONF" << EOF
 # OpenVPN Server Configuration - TCP Mode
 port $DEFAULT_PORT
@@ -405,7 +361,7 @@ dh dh.pem
 tls-crypt tc.key
 auth SHA512
 
-# Criptografia de dados (compatível com 2.4+)
+# Criptografia de dados
 cipher AES-256-GCM
 ncp-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
 
@@ -419,7 +375,7 @@ server 10.8.0.0 255.255.255.0
 EOF
 
     # Adicionar suporte IPv6 se disponível
-    if [[ "$SUPPORTS_IPV6" == "yes" ]] && [[ -n "$IPV6" ]]; then
+    if [[ "$SUPPORTS_IPV6" == "yes" && -n "$IPV6" ]]; then
         cat >> "$SERVER_CONF" << EOF
 server-ipv6 fd42:42:42::/64
 push "route-ipv6 ::/0"
@@ -446,7 +402,7 @@ txqueuelen 1000
 mssfix 1420
 tun-mtu 1500
 
-# TCP específico - evitar fragmentação
+# TCP específico
 tcp-nodelay
 
 # Persistência e logging
@@ -473,7 +429,7 @@ EOF
     success "Servidor configurado com protocolo TCP!"
 }
 
-# --- Configuração do Firewall ---
+# --- Configuração do Firewall (Simplificado para Debian/Ubuntu, priorizando nftables) ---
 configure_firewall() {
     info "Configurando firewall..."
     
@@ -482,11 +438,10 @@ configure_firewall() {
     
     info "Interface principal: $IFACE"
     
-    # Usar nftables se disponível (mais moderno)
-    if [[ "$SUPPORTS_NFTABLES" == "yes" ]] && [[ "$OS" == "debian" ]]; then
+    # Priorizar nftables se disponível
+    if [[ "$SUPPORTS_NFTABLES" == "yes" ]]; then
         info "Configurando nftables..."
         
-        # Criar configuração nftables
         cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 
@@ -514,7 +469,7 @@ table ip nat {
 }
 EOF
 
-        if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
+        if [[ "$SUPPORTS_IPV6" == "yes" && -n "$IPV6" ]]; then
             cat >> /etc/nftables.conf << EOF
 
 table ip6 nat {
@@ -533,7 +488,7 @@ EOF
         # Fallback para iptables
         info "Configurando iptables..."
         
-        # Abrir porta TCP (importante!)
+        # Abrir porta TCP
         iptables -A INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT
         
         # NAT e forward
@@ -544,7 +499,7 @@ EOF
         iptables -A FORWARD -i tun+ -o "$IFACE" -j ACCEPT
         
         # IPv6 se disponível
-        if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
+        if [[ "$SUPPORTS_IPV6" == "yes" && -n "$IPV6" ]]; then
             ip6tables -A INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT
             ip6tables -t nat -A POSTROUTING -s fd42:42:42::/64 -o "$IFACE" -j MASQUERADE
             ip6tables -A INPUT -i tun+ -j ACCEPT
@@ -554,17 +509,10 @@ EOF
         fi
         
         # Salvar regras
-        if [[ "$OS" == "debian" ]]; then
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/rules.v4
-            [[ "$SUPPORTS_IPV6" == "yes" ]] && ip6tables-save > /etc/iptables/rules.v6
-            systemctl enable --now netfilter-persistent
-        elif [[ "$OS" == "centos" ]]; then
-            firewall-cmd --add-service=openvpn --permanent
-            firewall-cmd --add-port=$DEFAULT_PORT/tcp --permanent
-            firewall-cmd --add-masquerade --permanent
-            firewall-cmd --reload
-        fi
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4
+        [[ "$SUPPORTS_IPV6" == "yes" && -n "$IPV6" ]] && ip6tables-save > /etc/iptables/rules.v6
+        systemctl enable --now netfilter-persistent
     fi
     
     success "Firewall configurado!"
@@ -689,7 +637,7 @@ start_service() {
     # Verificar se está rodando
     sleep 3
     if ! systemctl is-active --quiet "$SERVER_UNIT"; then
-        journalctl -xeu "$SERVER_UNIT" --no-pager | tail -20
+        journalctl -xeu "$SERVER_UNIT" --no-pager | tail -30
         die "OpenVPN falhou ao iniciar. Verifique os logs acima."
     fi
     
@@ -742,7 +690,7 @@ show_installation_summary() {
     echo -e "${WHITE}Resumo da Configuração:${SCOLOR}"
     echo -e "  ${WHITE}• IP Público:${SCOLOR} ${GREEN}$IP${SCOLOR}"
     
-    if [[ "$SUPPORTS_IPV6" == "yes" ]] && [[ -n "$IPV6" ]]; then
+    if [[ "$SUPPORTS_IPV6" == "yes" && -n "$IPV6" ]]; then
         echo -e "  ${WHITE}• IPv6:${SCOLOR} ${GREEN}$IPV6${SCOLOR}"
     fi
     
@@ -846,5 +794,5 @@ main() {
 # Tratamento de sinais
 trap 'echo -e "\n${RED}Script interrompido!${SCOLOR}"; tput cnorm; exit 130' INT TERM
 
-# Executar
+# Executar (ative debug se quiser: DEBUG=1)
 main "$@"
