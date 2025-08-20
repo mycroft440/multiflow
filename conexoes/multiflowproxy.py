@@ -505,7 +505,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="multiflowproxy com menu e handshake multi-status")
     parser.add_argument("--port", type=int, help="Porta para escutar")
     parser.add_argument(
-        "--status", type=str, default="@MultiFlowManager", help="String de status para respostas HTTP (opcional)"
+        "--status", type=str, default="MultiProtocolo", help="String de status para respostas HTTP (opcional)"
     )
     parser.add_argument("--cloudflare", action="store_true", help="Ativa cabeçalhos Cloudflare e detecção de loop")
     parser.add_argument("--fake-ssl", action="store_true", help="Envia bytes TLS falsos após o handshake")
