@@ -181,7 +181,7 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         # and included it as a "Status:" header.  To produce a more
         # professional and consistent response, we no longer emit a
         # custom status header.  Instead, standard HTTP status lines
-        # such as "200 Connection Established" are used.
+        # such as "200 OK" are used.
 
         # Prepare optional fake SSL headers.  These are included when
         # --fake-ssl is set, to attempt to trick DPI.
@@ -231,9 +231,9 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         if response_status.get("204 No Content", True):
             responses.append("HTTP/1.1 204 No Content\r\n\r\n")
         # 200 Connection Established (dynamic headers)
-        if response_status.get("200 Connection Established", True):
+        if response_status.get("200 OK", True):
             responses.append(
-                "HTTP/1.1 200 Connection Established\r\n"
+                "HTTP/1.1 200 OK\r\n"
                 "Content-Type: text/plain\r\n"
                 "Connection: keep-alive\r\n"
                 "Cache-Control: no-cache, no-store, must-revalidate\r\n"
@@ -401,7 +401,7 @@ async def run_proxy(port: int, status: str, cloudflare: bool, fake_ssl: bool) ->
     # Log all bound addresses (IPv6/IPv4).  Useful for debugging.
     addr_list = ", ".join(str(s.getsockname()) for s in server.sockets or [])
     logging.info(
-        "Starting multiflow proxy Python port on %s (Cloudflare: %s, Fake SSL: %s)",
+        "Starting RustyProxy Python port on %s (Cloudflare: %s, Fake SSL: %s)",
         addr_list, cloudflare, fake_ssl,
     )
     async with server:
@@ -425,7 +425,7 @@ RESPONSE_NAMES = [
     "100 Continue",
     "101 Switching Protocols",
     "204 No Content",
-    "200 Connection Established",
+    "200 OK",
     "301 Moved Permanently",
     "403 Forbidden",
     "404 Not Found",
@@ -444,7 +444,7 @@ def load_response_status() -> dict[str, bool]:
     Returns:
         A dict where keys are response names and values are booleans.
     """
-    status: dict[str, bool] = {name: True for name in RESPONSE_NAMES}
+    status: dict[str, bool] = {name: (name in {"101 Switching Protocols", "200 OK"}) for name in RESPONSE_NAMES}
     if not RESPONSES_STATUS_FILE.exists():
         return status
     try:
@@ -523,7 +523,7 @@ def add_proxy_port(port: int, status: str, cloudflare: bool, fake_ssl: bool) -> 
     command = f"{sys.executable} {script_path} --port {port} --status {status} {cf_flag} {ssl_flag}"
     service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
     service_content = f"""[Unit]
-Description=multiflow proxy {port}
+Description=RustyProxy {port}
 After=network.target
 
 [Service]
@@ -619,7 +619,7 @@ def show_menu() -> None:
     while True:
         os.system("clear")
         print("------------------------------------------------")
-        print(f"|{'multiflow proxy':^47}|")
+        print(f"|{'RUSTY PROXY':^47}|")
         print("------------------------------------------------")
         if PORTS_FILE.exists() and PORTS_FILE.stat().st_size > 0:
             with PORTS_FILE.open() as f:
@@ -708,7 +708,7 @@ def show_menu() -> None:
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for proxy and menu modes."""
-    parser = argparse.ArgumentParser(description="multiflow proxy Python implementation with menu")
+    parser = argparse.ArgumentParser(description="RustyProxy Python implementation with menu")
     parser.add_argument("--port", type=int, help="Port to listen on")
     parser.add_argument(
         "--status", type=str, default="@RustyManager", help="Status string for HTTP responses"
