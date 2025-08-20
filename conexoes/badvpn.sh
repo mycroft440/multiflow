@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 # Script para instalar e configurar o BadVPN, com tratamento de erros aprimorado.
+# Corrigido para listen-addr 0.0.0.0 (acesso externo) e uso de make install.
 
 # --- Configurações de Segurança e Cores ---
 set -Eeuo pipefail  # Fail-fast: erro em comandos, pipelines, variáveis não definidas; herda ERR em funções
@@ -72,13 +73,14 @@ cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
 log_info "Compilando o BadVPN com 'make'..."
 make
 
-# Verifica se a compilação foi bem-sucedida
-if [[ -f "udpgw/badvpn-udpgw" ]]; then
-    cp "udpgw/badvpn-udpgw" /usr/local/bin/
-    chmod +x /usr/local/bin/badvpn-udpgw
-    log_info "badvpn-udpgw compilado e instalado com sucesso em /usr/local/bin/badvpn-udpgw"
+log_info "Instalando o binário com 'make install'..."
+make install
+
+# Verifica se a instalação foi bem-sucedida
+if [[ -f "/usr/local/bin/badvpn-udpgw" ]]; then
+    log_info "badvpn-udpgw instalado com sucesso em /usr/local/bin/badvpn-udpgw"
 else
-    log_error "O binário 'badvpn-udpgw' não foi encontrado. A compilação falhou."
+    log_error "O binário 'badvpn-udpgw' não foi encontrado. A instalação falhou."
     exit 1
 fi
 
@@ -111,7 +113,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 10000 --client-socket-sndbuf 1048576
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 10000 --client-socket-sndbuf 1048576
 Restart=always
 RestartSec=2
 User=root
@@ -139,7 +141,7 @@ if [ ! -z "$1" ]; then
     
     log_info "Reconfigurando a porta do BadVPN para $NEW_PORT..."
     # Sed melhorado: usa ERE, escapa pontos e limita a porta (2-5 dígitos)
-    sed -E -i "s/--listen-addr 127\.0\.0\.1:[0-9]{2,5}/--listen-addr 127.0.0.1:$NEW_PORT/g" "$SERVICE_FILE"
+    sed -E -i "s/--listen-addr 0\.0\.0\.0:[0-9]{2,5}/--listen-addr 0.0.0.0:$NEW_PORT/g" "$SERVICE_FILE"
     systemctl daemon-reload
     systemctl restart badvpn-udpgw
     log_info "Porta do BadVPN alterada para $NEW_PORT e serviço reiniciado."
@@ -153,6 +155,8 @@ fi
 sleep 2 # Dá um tempo para o serviço iniciar
 if systemctl is-active --quiet badvpn-udpgw; then
     log_info "Operação do BadVPN concluída com sucesso! O serviço está ativo."
+    log_info "Verifique com 'netstat -tuln | grep 7300' ou 'journalctl -u badvpn-udpgw -f' para logs."
+    log_info "Se usar firewall, abra a porta 7300 (ex.: ufw allow 7300)."
 else
     log_error "O serviço BadVPN falhou ao iniciar. Verifique os logs com: journalctl -u badvpn-udpgw.service -l"
 fi
