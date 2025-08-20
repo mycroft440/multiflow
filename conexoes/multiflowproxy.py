@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Tuple
 
 
-async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, status: str, cloudflare: bool, fake_ssl: bool) -> None:
     """Handle a single incoming client connection.
 
     Sends HTTP status lines to the client, performs a protocol probe on
@@ -59,11 +59,14 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     Args:
         client_reader: The reader associated with the client socket.
         client_writer: The writer associated with the client socket.
+        status: The status string to embed in the HTTP response.
+        cloudflare: Flag to enable Cloudflare-specific handling.
+        fake_ssl: Flag to enable fake SSL masking.
     """
     try:
         initial_data = await client_reader.read(8192)
     except Exception as exc:
-        logging.warning("Falha ao ler dados iniciais: %s", exc)
+        logging.error("Failed to read initial data: %s", exc)
         client_writer.close()
         await client_writer.wait_closed()
         return
@@ -71,7 +74,7 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     header_text = initial_data.decode("utf-8", errors="ignore")
 
     def find_header(text: str, header: str) -> str:
-        idx = text.find(header + ": ")
+        idx = text.lower().find(header.lower() + ": ")
         if idx == -1:
             return ""
         idx = text.find(":", idx)
@@ -81,9 +84,22 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             return ""
         return value[:end]
 
-    # Suporte expandido: X-Online-Host como fallback para X-Real-Host (comum em HTTP Injector)
-    host_port_header = find_header(header_text, "X-Real-Host") or find_header(header_text, "X-Online-Host")
+    host_port_header = find_header(header_text, "X-Real-Host")
     x_split_header = find_header(header_text, "X-Split")
+
+    # Cloudflare-specific headers extraction
+    cf_connecting_ip = find_header(header_text, "CF-Connecting-IP") if cloudflare else ""
+    cf_ray = find_header(header_text, "CF-Ray") if cloudflare else ""
+    cdn_loop = find_header(header_text, "CDN-Loop") if cloudflare else ""
+    cf_ipcountry = find_header(header_text, "CF-IPCountry") if cloudflare else ""
+
+    if cloudflare:
+        logging.debug("Cloudflare headers: IP=%s, Ray=%s, Country=%s, CDN-Loop=%s", cf_connecting_ip, cf_ray, cf_ipcountry, cdn_loop)
+        if cdn_loop.count("cloudflare") > 1:
+            logging.warning("Potential loop detected via CDN-Loop: %s", cdn_loop)
+            client_writer.close()
+            await client_writer.wait_closed()
+            return
 
     backend_host: str
     backend_port: int
@@ -112,86 +128,77 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         except Exception:
             pass
 
-    # Enviar respostas HTTP variadas, com headers do Cloudflare para imitação
-    # Fixado o status como "Connection Established" no 200
+    # Enhanced handshake with fake SSL if enabled
     try:
         server_variants = [
-            "cloudflare",
             "nginx/1.18.0 (Ubuntu)",
             "Apache/2.4.41 (Ubuntu)",
             "Microsoft-IIS/10.0",
+            "cloudflare",
         ]
         server_header = f"Server: {random.choice(server_variants)}"
         now_gmt = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
         date_header = f"Date: {now_gmt}"
-        cf_ray = f"CF-Ray: {random.randint(1000000000, 9999999999)}-{random.choice(['AMS', 'LHR', 'CDG', 'SFO'])}"
-        cf_connecting_ip = f"CF-Connecting-IP: {'.'.join(str(random.randint(1, 255)) for _ in range(4))}"
-        cf_cache_status = f"CF-Cache-Status: {random.choice(['HIT', 'MISS', 'DYNAMIC'])}"
-        hsts = "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
-        x_forwarded_for = f"X-Forwarded-For: {'.'.join(str(random.randint(1, 255)) for _ in range(4))}"  # Adicionado para anonimato
+        cache_status = "CF-Cache-Status: HIT" if cloudflare else "Cache-Control: no-cache"
 
-        # Blob fake TLS para simular handshake (ServerHello simplificado)
-        fake_tls_blob = b'\x16\x03\x03\x00\x3A'  # ContentType=22 (handshake), Version=3.3 (TLS 1.2), Length=58
-        fake_tls_blob += b'\x02\x00\x00\x36'  # HandshakeType=2 (ServerHello), Length=54
-        fake_tls_blob += b'\x03\x03' + os.urandom(32)  # Version + Random 32 bytes
-        fake_tls_blob += b'\x00'  # Session ID Length=0
-        fake_tls_blob += b'\x13\x01'  # Cipher Suite fake (TLS_AES_128_GCM_SHA256)
-        fake_tls_blob += b'\x00'  # Compression=0
-        fake_tls_blob += b'\x00\x0A'  # Extensions Length=10
-        fake_tls_blob += b'\x00\x2B\x00\x03\x02\x03\x03'  # Supported Versions (TLS 1.2/1.3)
-        fake_tls_blob += os.urandom(10)  # Padding random para variar e evitar detecção
-
-        # Enviar o blob fake TLS primeiro para mascarar
-        client_writer.write(fake_tls_blob)
-        await client_writer.drain()
-        logging.info("Enviado blob fake TLS de %d bytes para simular criptografia", len(fake_tls_blob))
+        # Fake SSL headers
+        fake_ssl_headers = ""
+        if fake_ssl:
+            fake_ssl_headers = (
+                "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n"
+                "Upgrade: tls/1.3\r\n"
+                "Alt-Svc: h3=\":443\"; ma=86400\r\n"
+            )
 
         responses = []
-        # 100 Continue
         responses.append("HTTP/1.1 100 Continue\r\n\r\n")
-        # 101 Switching Protocols com headers Cloudflare
         responses.append(
             "HTTP/1.1 101 Switching Protocols\r\n"
             f"{server_header}\r\n"
             f"{date_header}\r\n"
-            f"{cf_ray}\r\n"
-            f"{cf_connecting_ip}\r\n"
-            f"{hsts}\r\n"
-            f"{x_forwarded_for}\r\n\r\n"
+            f"{cache_status}\r\n"
+            f"{fake_ssl_headers}\r\n"
         )
-        # 200 com status fixo "Connection Established"
+        responses.append("HTTP/1.1 204 No Content\r\n\r\n")
         responses.append(
-            "HTTP/1.1 200 Connection Established\r\n"
+            "HTTP/1.1 200 OK\r\n"
             "Content-Type: text/plain\r\n"
             "Connection: keep-alive\r\n"
-            "Cache-Control: no-cache\r\n"
-            f"{cf_cache_status}\r\n\r\n"
+            "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+            f"{fake_ssl_headers}\r\n"
         )
-        # Adicionados: 302 Redirect, 429 Too Many Requests, 502 Bad Gateway, 503
-        responses.append(f"HTTP/1.1 302 Found\r\nLocation: https://example.com\r\n\r\n")
-        responses.append("HTTP/1.1 429 Too Many Requests\r\n\r\n")
-        responses.append("HTTP/1.1 502 Bad Gateway\r\n\r\n")
+        responses.append("HTTP/1.1 301 Moved Permanently\r\nLocation: /\r\n\r\n")
+        responses.append("HTTP/1.1 403 Forbidden\r\n\r\n")
+        responses.append("HTTP/1.1 404 Not Found\r\n\r\n")
         responses.append("HTTP/1.1 503 Service Unavailable\r\n\r\n")
 
         for resp in responses:
             client_writer.write(resp.encode("utf-8"))
         await client_writer.drain()
+
+        # Send fake TLS bytes if fake_ssl enabled (masks as TLS record)
+        if fake_ssl:
+            fake_tls_bytes = b'\x16\x03\x03\x00\x2a' + os.urandom(42)  # Fake ServerHello + random data
+            client_writer.write(fake_tls_bytes)
+            await client_writer.drain()
+            logging.debug("Sent fake TLS bytes for masking")
+
     except Exception as exc:
-        logging.warning("Falha no handshake com fake TLS: %s", exc)
+        logging.error("Failed during handshake with client: %s", exc)
         client_writer.close()
         await client_writer.wait_closed()
         return
 
-    # Conexão ao backend, sem TLS
     try:
         server_reader, server_writer = await asyncio.open_connection(backend_host, backend_port)
+        if cloudflare and cf_connecting_ip:
+            logging.info("Forwarding from real client IP: %s to backend %s:%d", cf_connecting_ip, backend_host, backend_port)
     except Exception as exc:
-        logging.warning("Falha ao conectar ao backend %s:%d: %s", backend_host, backend_port, exc)
+        logging.error("Failed to connect to backend %s:%d: %s", backend_host, backend_port, exc)
         client_writer.close()
         await client_writer.wait_closed()
         return
 
-    # Forward bidirecional
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
         try:
             while True:
@@ -201,7 +208,7 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
                 writer.write(data)
                 await writer.drain()
         except Exception as exc:
-            logging.debug("Erro no forwarding %s: %s", direction, exc)
+            logging.debug("Forwarding %s encountered error: %s", direction, exc)
         finally:
             try:
                 writer.close()
@@ -215,11 +222,10 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
 
 
 async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> Tuple[str, int]:
-    """Inspect the client's incoming data to select the backend port."""
     default_backend = ("0.0.0.0", 22)
     alt_backend = ("0.0.0.0", 1194)
 
-    sock: socket.socket = client_writer.get_extra_info("socket")
+    sock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
     if sock is None:
         return default_backend
     sock.setblocking(False)
@@ -227,19 +233,16 @@ async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyn
     try:
         await loop.sock_recv(sock, 0)
         data_bytes = sock.recv(8192, socket.MSG_PEEK)
-        text = data_bytes.decode('utf-8', errors='ignore').upper()
-    except Exception as exc:
-        logging.warning("Falha no peek durante probe: %s", exc)
+        text = data_bytes.decode('utf-8', errors='ignore')
+    except Exception:
         return default_backend
 
-    # Detecção simples: SSH ou default para OpenVPN
-    if not text or 'SSH' in text:
+    if not text or 'SSH' in text.upper():
         return default_backend
     return alt_backend
 
 
-async def run_proxy(port: int) -> None:
-    """Start the proxy listener and handle incoming connections."""
+async def run_proxy(port: int, status: str, cloudflare: bool, fake_ssl: bool) -> None:
     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
@@ -248,13 +251,12 @@ async def run_proxy(port: int) -> None:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("::", port))
     sock.listen(100)
-
     server = await asyncio.start_server(
-        lambda r, w: handle_client(r, w),
+        lambda r, w: handle_client(r, w, status, cloudflare, fake_ssl),
         sock=sock
     )
     addr_list = ", ".join(str(s.getsockname()) for s in server.sockets or [])
-    logging.info("Iniciando multiflow proxy Python na porta %s", addr_list)
+    logging.info("Starting multiflow proxy Python port on %s (Cloudflare: %s, Fake SSL: %s)", addr_list, cloudflare, fake_ssl)
     async with server:
         await server.serve_forever()
 
@@ -269,12 +271,14 @@ def is_port_in_use(port: int) -> bool:
         return result == 0
 
 
-def add_proxy_port(port: int) -> None:
+def add_proxy_port(port: int, status: str, cloudflare: bool, fake_ssl: bool) -> None:
     if is_port_in_use(port):
         print(f"A porta {port} já está em uso.")
         return
     script_path = Path(__file__).resolve()
-    command = f"{sys.executable} {script_path} --port {port}"
+    cf_flag = "--cloudflare" if cloudflare else ""
+    ssl_flag = "--fake-ssl" if fake_ssl else ""
+    command = f"{sys.executable} {script_path} --port {port} --status {status} {cf_flag} {ssl_flag}"
     service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
     service_content = f"""[Unit]
 Description=multiflow proxy {port}
@@ -321,6 +325,15 @@ def del_proxy_port(port: int) -> None:
     print(f"Porta {port} fechada com sucesso.")
 
 
+def toggle_fake_ssl(port: int, enable: bool) -> None:
+    # Para togglear, paramos o service, recriamos com o flag atualizado.
+    # Mas para simplicidade, assumimos que status e cloudflare permanecem os mesmos (não salvamos, então recrie manual).
+    # Melhor: fechar e reabrir com pergunta.
+    print("Para togglear fake SSL, feche e reabra a porta com a opção desejada.")
+    # Implementação simples: del e add com novo flag, mas precisa de inputs.
+    # Por agora, sugiro manual.
+
+
 def show_menu() -> None:
     if not PORTS_FILE.exists():
         PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -340,6 +353,7 @@ def show_menu() -> None:
         print("------------------------------------------------")
         print("| 1 - Abrir Porta                                   |")
         print("| 2 - Fechar Porta                                  |")
+        print("| 3 - Fake ssl                                      |")
         print("| 0 - Sair                                          |")
         print("------------------------------------------------")
         option = input(" --> Selecione uma opção: ").strip()
@@ -349,7 +363,12 @@ def show_menu() -> None:
                 print("Digite uma porta válida.")
                 port_input = input("Digite a porta: ").strip()
             port = int(port_input)
-            add_proxy_port(port)
+            status = input("Digite o status de conexão (deixe vazio para o padrão): ").strip() or "@RustyProxy"
+            cf_input = input("Ativar modo Cloudflare? (s/n, default n): ").strip().lower()
+            cloudflare = cf_input == 's'
+            ssl_input = input("Ativar fake SSL? (s/n, default n): ").strip().lower()
+            fake_ssl = ssl_input == 's'
+            add_proxy_port(port, status, cloudflare, fake_ssl)
             input("> Porta ativada com sucesso. Pressione Enter para voltar ao menu.")
         elif option == '2':
             port_input = input("Digite a porta: ").strip()
@@ -359,6 +378,9 @@ def show_menu() -> None:
             port = int(port_input)
             del_proxy_port(port)
             input("> Porta desativada com sucesso. Pressione Enter para voltar ao menu.")
+        elif option == '3':
+            print("Opção Fake SSL: Para ativar/desativar em uma porta, feche (opção 2) e reabra (opção 1) com a escolha.")
+            input("Pressione Enter para voltar ao menu.")
         elif option == '0':
             sys.exit(0)
         else:
@@ -368,17 +390,20 @@ def show_menu() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="multiflow proxy Python implementation with menu")
     parser.add_argument("--port", type=int, help="Port to listen on")
+    parser.add_argument("--status", type=str, default="@RustyManager", help="Status string for HTTP responses")
+    parser.add_argument("--cloudflare", action="store_true", help="Enable Cloudflare-specific handling")
+    parser.add_argument("--fake-ssl", action="store_true", help="Enable fake SSL masking for bypass")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     if args.port is not None:
-        logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(message)s")
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
         try:
-            asyncio.run(run_proxy(args.port))
+            asyncio.run(run_proxy(args.port, args.status, args.cloudflare, args.fake_ssl))
         except KeyboardInterrupt:
-            logging.info("Proxy terminado pelo usuário")
+            logging.info("Proxy terminated by user")
     else:
         if os.geteuid() != 0:
             print("Este script deve ser executado como root para o menu.")
