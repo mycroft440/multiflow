@@ -1,3 +1,40 @@
+"""
+Python reimplementation of the RustyProxy server together with the
+interactive menu from ``menu.sh``.  The original Rust program
+(``RustyProxyOnly``) implements an asynchronous TCP proxy that
+listens on a configurable port and forwards traffic to either an SSH
+or OpenVPN backend based on a simple protocol probe.  The Bash
+``menu.sh`` script provides a text‑based menu for opening and
+closing multiple proxy instances via systemd services.
+
+This single Python script encapsulates both pieces of functionality:
+
+* **Proxy mode**: When invoked with ``--port`` (and optionally
+  ``--status``), it runs a proxy on the specified port.  It sends
+  HTTP status lines to the client, peeks at the first bytes of the
+  connection using the underlying socket's ``MSG_PEEK`` flag to
+  choose between port 22 (SSH) and 1194 (OpenVPN), and then
+  asynchronously shuttles data between client and server.
+
+* **Menu mode**: When invoked without ``--port`` (and executed as
+  root), it presents an interactive menu similar to the original
+  ``menu.sh``.  Users can add or remove proxy ports; the script
+  writes appropriate systemd unit files to run itself in proxy mode,
+  starts/stops the units via ``systemctl`` and records active ports in
+  ``/opt/rustyproxy/ports``.
+
+This code leverages Python's :mod:`asyncio` standard library to
+provide asynchronous networking.  Because Python lacks a direct
+``peek`` on the high‑level streams, the implementation uses the
+socket's ``recv`` with ``MSG_PEEK`` via a thread pool to inspect
+incoming data without consuming it.  Error handling is done via
+exceptions and logging rather than ``Result`` values, and stream
+splitting is unnecessary because ``asyncio`` separates readers and
+writers for each connection.  Despite these differences, the core
+logic—HTTP handshake, protocol detection and bidirectional
+forwarding—mirrors the original Rust design.
+"""
+
 import argparse
 import random
 from datetime import datetime, timezone
@@ -85,12 +122,10 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
 
     # Determine backend host/port.  Precedence:
     # 1. X-Real-Host header, optionally with a port suffix (host:port).
-    # 2. If no header is provided, infer protocol based on the initial
-    #    bytes read from the client.  A banner containing 'SSH' (case
-    #    insensitive) indicates an SSH connection on port 22; otherwise
-    #    fall back to the OpenVPN port 1194.  The backend host always
-    #    defaults to 0.0.0.0; real addresses should be configured in the
-    #    consumer environment (e.g. via systemd unit files).
+    # 2. If no header is provided, perform a protocol probe on the
+    #    remaining unread bytes.  This mirrors the behaviour of the
+    #    original proxy, which uses MSG_PEEK to decide between SSH and
+    #    OpenVPN.  On timeout or failure, default to the SSH port.
     if host_port_header:
         # Split host and port if provided (only splits on last colon to allow IPv6).
         if ":" in host_port_header:
@@ -104,24 +139,24 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             backend_host = host_port_header
             backend_port = 22
     else:
-        # No X-Real-Host header: infer protocol from initial_data.
-        # Use a case-insensitive search for 'SSH' to detect an SSH banner.
-        if b'SSH' in initial_data.upper():
+        try:
+            # Peek at the remaining bytes after the initial HTTP header to
+            # determine the protocol.  A timeout of one second matches the
+            # original behaviour; if the probe times out, assume SSH.
+            backend_host, backend_port = await asyncio.wait_for(
+                probe_backend(client_reader, client_writer), timeout=1.0
+            )
+        except asyncio.TimeoutError:
             backend_host, backend_port = ("0.0.0.0", 22)
-        else:
-            backend_host, backend_port = ("0.0.0.0", 1194)
 
-    # Buffer to accumulate any additional bytes read before connecting to
-    # the backend.  We'll forward these to the backend once the connection
-    # is established to preserve the original client payload.
-    buffered_data = initial_data
-
-    # If the X-Split header is present, consume additional bytes.  This is
-    # part of a special multi-split protocol and aligns with the Rust version.
+    # If the X-Split header is present, consume and discard an additional chunk
+    # from the client.  Some injector applications send a second request in
+    # this case.  We intentionally drop these bytes and do not forward them
+    # to the backend, as they are part of the proxy negotiation rather than
+    # the target protocol.
     if x_split_header:
         try:
-            more_data = await client_reader.read(8192)
-            buffered_data += more_data
+            await client_reader.read(8192)
         except Exception:
             pass
 
@@ -141,6 +176,12 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         now_gmt = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
         date_header = f"Date: {now_gmt}"
         cache_status = "CF-Cache-Status: HIT" if cloudflare else "Cache-Control: no-cache"
+
+        # The proxy previously allowed a custom status string via --status
+        # and included it as a "Status:" header.  To produce a more
+        # professional and consistent response, we no longer emit a
+        # custom status header.  Instead, standard HTTP status lines
+        # such as "200 Connection Established" are used.
 
         # Prepare optional fake SSL headers.  These are included when
         # --fake-ssl is set, to attempt to trick DPI.
@@ -183,7 +224,7 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         )
         responses.append("HTTP/1.1 204 No Content\r\n\r\n")
         responses.append(
-            "HTTP/1.1 200 OK\r\n"
+            "HTTP/1.1 200 Connection Established\r\n"
             "Content-Type: text/plain\r\n"
             "Connection: keep-alive\r\n"
             "Cache-Control: no-cache, no-store, must-revalidate\r\n"
@@ -233,24 +274,11 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         await client_writer.wait_closed()
         return
 
-    # If we successfully connected to the backend, send any buffered
-    # client data (initial_data plus any X-Split data) to the backend
-    # before starting bidirectional forwarding.  It's important to
-    # deliver these bytes so the backend sees the complete protocol
-    # preamble (e.g. SSH banner or VPN handshake).  Without this, the
-    # proxy would consume the client's initial bytes and break the
-    # protocol.
-    try:
-        if buffered_data:
-            server_writer.write(buffered_data)
-            await server_writer.drain()
-    except Exception as exc:
-        logging.error("Failed to write buffered data to backend: %s", exc)
-        client_writer.close()
-        await client_writer.wait_closed()
-        server_writer.close()
-        await server_writer.wait_closed()
-        return
+    # Once connected to the backend, immediately begin relaying data.  We
+    # deliberately do not forward the initial HTTP headers or any
+    # negotiation data consumed above, as those bytes are not part of the
+    # target protocol.  This mirrors the original behaviour and prevents
+    # injecting proxy headers into the SSH/OpenVPN handshake.
 
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str) -> None:
         """Continuously relay data from reader to writer until EOF or error."""
@@ -520,13 +548,17 @@ def show_menu() -> None:
         print("------------------------------------------------")
         option = input(" --> Selecione uma opção: ").strip()
         if option == '1':
+            # Solicita apenas a porta a ser aberta.  O status de conexão é
+            # fixo e não mais solicitado ao usuário para simplificar o fluxo.
             port_input = input("Digite a porta: ").strip()
             while not port_input.isdigit():
                 print("Digite uma porta válida.")
                 port_input = input("Digite a porta: ").strip()
             port = int(port_input)
-            status = input("Digite o status de conexão (deixe vazio para o padrão): ").strip() or "@RustyProxy"
-            add_proxy_port(port, status, cloudflare=False, fake_ssl=False)
+            # Use um valor de status fixo e verídico para todas as conexões criadas pelo menu.
+            # Em vez de um identificador simbólico, indicamos explicitamente que a conexão foi estabelecida.
+            fixed_status = "connection established"
+            add_proxy_port(port, fixed_status, cloudflare=False, fake_ssl=False)
             input("> Porta ativada com sucesso. Pressione Enter para voltar ao menu.")
         elif option == '2':
             port_input = input("Digite a porta: ").strip()
