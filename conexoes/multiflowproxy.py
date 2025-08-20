@@ -46,10 +46,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Tuple
-import ssl  # Adicionado para suporte a TLS
 
 
-async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, use_tls: bool = False) -> None:
+async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
     """Handle a single incoming client connection.
 
     Sends HTTP status lines to the client, performs a protocol probe on
@@ -60,7 +59,6 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     Args:
         client_reader: The reader associated with the client socket.
         client_writer: The writer associated with the client socket.
-        use_tls: Se True, wrap o tráfego com TLS para melhor evasão.
     """
     try:
         initial_data = await client_reader.read(8192)
@@ -168,13 +166,9 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         await client_writer.wait_closed()
         return
 
-    # Conexão ao backend, com TLS se ativado
+    # Conexão ao backend, sem TLS
     try:
-        if use_tls:
-            context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            server_reader, server_writer = await asyncio.open_connection(backend_host, backend_port, ssl=context)
-        else:
-            server_reader, server_writer = await asyncio.open_connection(backend_host, backend_port)
+        server_reader, server_writer = await asyncio.open_connection(backend_host, backend_port)
     except Exception as exc:
         logging.warning("Falha ao conectar ao backend %s:%d: %s", backend_host, backend_port, exc)
         client_writer.close()
@@ -208,7 +202,6 @@ async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyn
     """Inspect the client's incoming data to select the backend port."""
     default_backend = ("0.0.0.0", 22)
     alt_backend = ("0.0.0.0", 1194)
-    tls_backend = ("0.0.0.0", 443)  # Adicionado para TLS/Cloudflare
 
     sock: socket.socket = client_writer.get_extra_info("socket")
     if sock is None:
@@ -219,18 +212,17 @@ async def probe_backend(client_reader: asyncio.StreamReader, client_writer: asyn
         await loop.sock_recv(sock, 0)
         data_bytes = sock.recv(8192, socket.MSG_PEEK)
         text = data_bytes.decode('utf-8', errors='ignore').upper()
-    except Exception:
+    except Exception as exc:
+        logging.warning("Falha no peek durante probe: %s", exc)
         return default_backend
 
-    # Detecção expandida: TLS ClientHello (comum em Cloudflare), SSH ou default
-    if b'\x16\x03' in data_bytes:  # TLS Handshake signature
-        return tls_backend
+    # Detecção simples: SSH ou default para OpenVPN
     if not text or 'SSH' in text:
         return default_backend
     return alt_backend
 
 
-async def run_proxy(port: int, use_tls: bool, use_ssl: bool) -> None:
+async def run_proxy(port: int) -> None:
     """Start the proxy listener and handle incoming connections."""
     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     try:
@@ -241,23 +233,12 @@ async def run_proxy(port: int, use_tls: bool, use_ssl: bool) -> None:
     sock.bind(("::", port))
     sock.listen(100)
 
-    # SSL para o listener (frontend)
-    ssl_context = None
-    if use_ssl:
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        # Self-signed cert para simplicidade (produção: use cert real)
-        ssl_context.load_cert_chain(certfile=Path("/tmp/selfsigned.crt"), keyfile=Path("/tmp/selfsigned.key"))
-        # Gerar self-signed se não existir (simples, para teste)
-        if not Path("/tmp/selfsigned.crt").exists():
-            subprocess.run(["openssl", "req", "-x509", "-nodes", "-days", "365", "-newkey", "rsa:2048", "-keyout", "/tmp/selfsigned.key", "-out", "/tmp/selfsigned.crt", "-subj", "/CN=localhost"], check=True)
-
     server = await asyncio.start_server(
-        lambda r, w: handle_client(r, w, use_tls),
-        sock=sock,
-        ssl=ssl_context
+        lambda r, w: handle_client(r, w),
+        sock=sock
     )
     addr_list = ", ".join(str(s.getsockname()) for s in server.sockets or [])
-    logging.info("Iniciando multiflow proxy Python na porta %s (TLS: %s, SSL: %s)", addr_list, use_tls, use_ssl)
+    logging.info("Iniciando multiflow proxy Python na porta %s", addr_list)
     async with server:
         await server.serve_forever()
 
@@ -272,14 +253,12 @@ def is_port_in_use(port: int) -> bool:
         return result == 0
 
 
-def add_proxy_port(port: int, use_tls: bool, use_ssl: bool) -> None:
+def add_proxy_port(port: int) -> None:
     if is_port_in_use(port):
         print(f"A porta {port} já está em uso.")
         return
     script_path = Path(__file__).resolve()
-    tls_flag = "--tls" if use_tls else ""
-    ssl_flag = "--ssl" if use_ssl else ""
-    command = f"{sys.executable} {script_path} --port {port} {tls_flag} {ssl_flag}"
+    command = f"{sys.executable} {script_path} --port {port}"
     service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
     service_content = f"""[Unit]
 Description=multiflow proxy {port}
@@ -309,7 +288,7 @@ WantedBy=multi-user.target
     PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with PORTS_FILE.open("a") as f:
         f.write(f"{port}\n")
-    print(f"Porta {port} aberta com sucesso (TLS: {use_tls}, SSL: {use_ssl}).")
+    print(f"Porta {port} aberta com sucesso.")
 
 
 def del_proxy_port(port: int) -> None:
@@ -354,11 +333,7 @@ def show_menu() -> None:
                 print("Digite uma porta válida.")
                 port_input = input("Digite a porta: ").strip()
             port = int(port_input)
-            tls_input = input("Usar TLS para backend (s/n)? ").strip().lower()
-            use_tls = tls_input == 's'
-            ssl_input = input("Usar SSL para listener (s/n)? ").strip().lower()
-            use_ssl = ssl_input == 's'
-            add_proxy_port(port, use_tls, use_ssl)
+            add_proxy_port(port)
             input("> Porta ativada com sucesso. Pressione Enter para voltar ao menu.")
         elif option == '2':
             port_input = input("Digite a porta: ").strip()
@@ -377,8 +352,6 @@ def show_menu() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="multiflow proxy Python implementation with menu")
     parser.add_argument("--port", type=int, help="Port to listen on")
-    parser.add_argument("--tls", action="store_true", help="Ativar TLS wrapping para o backend")
-    parser.add_argument("--ssl", action="store_true", help="Ativar SSL para o listener (frontend)")
     return parser.parse_args()
 
 
@@ -387,7 +360,7 @@ def main() -> None:
     if args.port is not None:
         logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(message)s")
         try:
-            asyncio.run(run_proxy(args.port, args.tls, args.ssl))
+            asyncio.run(run_proxy(args.port))
         except KeyboardInterrupt:
             logging.info("Proxy terminado pelo usuário")
     else:
