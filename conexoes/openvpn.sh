@@ -86,11 +86,7 @@ check_dependencies() {
             echo -e "${CYAN}Instalando dependências faltantes... (outputs visíveis para monitorar)${SCOLOR}"
             if [[ "$OS" == "debian" ]]; then
                 fun_bar "apt update -qq && apt install -y -qq ${missing[*]}"  # -qq para menos verbose, mas outputs ainda visíveis
-            elif [[ "$OS" == "centos" ]]; then
-                if ! yum list installed epel-release >/dev/null 2>&1; then
-                    fun_bar "yum install -y epel-release"
-                fi
-                fun_bar "yum install -y ${missing[*]}"
+
             fi
            
             local still_missing=()
@@ -117,15 +113,40 @@ detect_os() {
     [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
     source /etc/os-release
     OS_ID="$ID"
-    case "$OS_ID" in
-        ubuntu|debian) OS="debian"; GROUPNAME="nogroup" ;;
-        centos|fedora|rhel) OS="centos"; GROUPNAME="nobody" ;;
-        *) die "Sistema operacional '$OS_ID' não suportado." ;;
-    esac
+    OS="debian"
+    GROUPNAME="nogroup"
+    if [[ "$OS_ID" != "ubuntu" && "$OS_ID" != "debian" ]]; then
+        die "Sistema operacional '$OS_ID' não suportado. Este script suporta apenas Debian/Ubuntu."
+    fi
 }
+cleanup_previous_installation() {
+    echo -e "${CYAN}Verificando e limpando instalações anteriores do OpenVPN...${SCOLOR}"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop openvpn@server 2>/dev/null
+        systemctl disable openvpn@server 2>/dev/null
+    else
+        service openvpn@server stop 2>/dev/null
+    fi
+
+    fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y" 2>/dev/null
+
+    # Remove iptables rules
+    iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -j MASQUERADE 2>/dev/null
+    iptables -D INPUT -i tun+ -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -i "$(ip -4 route ls | grep default | grep -Po \'(?<=dev )(\S+)\' | head -1)" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null
+    netfilter-persistent save 2>/dev/null
+
+    rm -rf /etc/openvpn ~/ovpn-clients
+    echo -e "${GREEN}Limpeza concluída (se houver instalações anteriores).${SCOLOR}"
+}
+
 # --- Funções Principais do OpenVPN ---
 install_openvpn() {
     clear
+    cleanup_previous_installation
     echo -e "${BLUE}--- Instalador OpenVPN ---${SCOLOR}"
    
     local EASY_RSA_DIR="/etc/openvpn/easy-rsa"
@@ -241,13 +262,7 @@ configure_firewall() {
         iptables -A FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT
         iptables-save > /etc/iptables/rules.v4 || die "Falha ao salvar regras iptables."
         netfilter-persistent save || die "Falha ao persistir regras (verifique iptables-persistent)."
-    elif [[ "$OS" = "centos" ]]; then
-        systemctl start firewalld || die "Falha ao iniciar firewalld."
-        systemctl enable firewalld || die "Falha ao habilitar firewalld."
-        firewall-cmd --add-service=openvpn --permanent || die "Falha ao adicionar serviço OpenVPN."
-        firewall-cmd --add-masquerade --permanent || die "Falha ao adicionar masquerade."
-        firewall-cmd --reload || die "Falha ao recarregar firewalld."
-    fi
+
 }
 create_client() {
     local CLIENT_NAME="$1"
@@ -367,11 +382,7 @@ uninstall_openvpn() {
             iptables -D FORWARD -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
             iptables-save > /etc/iptables/rules.v4 2>/dev/null
             netfilter-persistent save 2>/dev/null
-        elif [[ "$OS" = "centos" ]]; then
-            fun_bar "yum remove -y openvpn easy-rsa firewalld lsof"
-            firewall-cmd --remove-service=openvpn --permanent 2>/dev/null
-            firewall-cmd --remove-masquerade --permanent 2>/dev/null
-            firewall-cmd --reload 2>/dev/null
+
         fi
        
         rm -rf /etc/openvpn ~/ovpn-clients
@@ -434,3 +445,4 @@ main() {
     main_menu
 }
 main
+
