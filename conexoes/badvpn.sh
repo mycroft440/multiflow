@@ -138,3 +138,4 @@ echo ""
 echo "Para monitorar perdas de pacotes UDP (importante!), use:"
 echo "  netstat -su | grep 'packet receive errors'"
 echo ""
+
