@@ -59,9 +59,7 @@ check_root() {
 check_bash() {
     readlink /proc/$$/exe | grep -q "bash" || die "Execute este script com bash, não com sh."
 }
-check_tun() {
-    [[ ! -e /dev/net/tun ]] && die "O dispositivo TUN/TAP não está disponível. Ative-o com 'modprobe tun' ou verifique o kernel."
-}
+
 check_dependencies() {
     local missing=()
     local packages=("openvpn" "easy-rsa" "iptables" "lsof")
@@ -439,10 +437,9 @@ main() {
     clear
     check_root
     check_bash
-    check_tun
+
     detect_os
     check_dependencies
     main_menu
 }
 main
-
