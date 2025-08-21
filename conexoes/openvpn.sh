@@ -602,6 +602,64 @@ EOF
     echo -e "${WHITE}Arquivo salvo em: ${GREEN}$CLIENT_DIR/${CLIENT_NAME}.ovpn${SCOLOR}"
 }
 
+# ----------------- Limpeza de Instalações Mal Sucedidas ----------------
+# Esta função tenta remover quaisquer vestígios de uma instalação anterior
+# do OpenVPN que possa ter falhado ou deixado o sistema em estado
+# inconsistente. Ela remove serviços, arquivos de configuração,
+# regras de firewall, diretórios de log e pacotes relacionados ao OpenVPN.
+cleanup_failed_installation() {
+    info "Limpando instalações anteriores de OpenVPN (se existirem)..."
+    # Parar e desabilitar possíveis unidades do OpenVPN
+    if systemctl list-unit-files | grep -q '^openvpn'; then
+        systemctl stop "$SERVER_UNIT" 2>/dev/null || true
+        systemctl disable "$SERVER_UNIT" 2>/dev/null || true
+    fi
+    # Remover diretórios de configuração
+    rm -rf /etc/openvpn 2>/dev/null || true
+    rm -rf "$OVPN_DIR/easy-rsa" 2>/dev/null || true
+    # Remover logs e diretórios de clientes
+    rm -rf "$OVPN_LOG_DIR" 2>/dev/null || true
+    rm -rf ~/ovpn-clients 2>/dev/null || true
+    # Limpar regras nftables se suportado
+    if [[ "$SUPPORTS_NFTABLES" == "yes" ]]; then
+        nft flush ruleset 2>/dev/null || true
+        rm -f /etc/nftables.conf 2>/dev/null || true
+        systemctl disable nftables 2>/dev/null || true
+    fi
+    # Limpar regras iptables (IPv4)
+    local IFACE
+    IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )\S+' | head -1 || true)
+    if [[ -n "$IFACE" ]]; then
+        # Porta principal
+        iptables -D INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE 2>/dev/null || true
+        iptables -D INPUT -i tun+ -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -i tun+ -o "$IFACE" -j ACCEPT 2>/dev/null || true
+    fi
+    # Limpar regras ip6tables se IPv6 estiver ativo
+    if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
+        if [[ -n "$IFACE" ]]; then
+            ip6tables -D INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT 2>/dev/null || true
+            ip6tables -t nat -D POSTROUTING -s fd42:42:42::/64 -o "$IFACE" -j MASQUERADE 2>/dev/null || true
+            ip6tables -D INPUT -i tun+ -j ACCEPT 2>/dev/null || true
+            ip6tables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null || true
+            ip6tables -D FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+            ip6tables -D FORWARD -i tun+ -o "$IFACE" -j ACCEPT 2>/dev/null || true
+        fi
+    fi
+    # Excluir arquivos persistentes e desabilitar serviços
+    rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6 2>/dev/null || true
+    systemctl disable netfilter-persistent 2>/dev/null || true
+    # Remover pacotes relacionados
+    if dpkg -l | grep -q '^ii.*openvpn'; then
+        apt-get remove --purge -y openvpn easy-rsa 2>/dev/null || true
+        apt-get autoremove -y 2>/dev/null || true
+    fi
+    success "Limpeza de instalações anteriores concluída."
+}
+
 # ------------------------ Iniciar Serviço -----------------------------
 start_service() {
     info "Iniciando serviço OpenVPN..."
@@ -688,6 +746,58 @@ check_if_installed() {
     fi
 }
 
+# -------------------- Limpeza de Instalação Falha --------------------
+# Esta função remove restos de uma instalação mal sucedida do OpenVPN.
+# Caso pacotes estejam parcialmente instalados ou diretórios de configuração
+# permaneçam após uma falha, a função tenta removê-los para permitir uma
+# reinstalação limpa. Ela também purga as regras de firewall criadas
+# anteriormente para o OpenVPN.
+cleanup_failed_installation() {
+    info "Verificando e limpando possíveis instalações mal sucedidas de OpenVPN..."
+    # Verifica se o pacote openvpn está instalado. Se estiver, remove-o.
+    if dpkg -l 2>/dev/null | grep -q '^ii.*openvpn'; then
+        warn "Pacote openvpn instalado, removendo para reinstalação limpa."
+        apt-get remove --purge -y openvpn || warn "Falha ao remover pacote openvpn"
+    fi
+    # Verifica se easy-rsa está instalado e remove
+    if dpkg -l 2>/dev/null | grep -q '^ii.*easy-rsa'; then
+        warn "Pacote easy-rsa instalado, removendo para reinstalação limpa."
+        apt-get remove --purge -y easy-rsa || true
+    fi
+    # Desabilita e remove serviços OpenVPN se existirem
+    if systemctl list-unit-files 2>/dev/null | grep -q '^openvpn@'; then
+        systemctl disable --now openvpn@server || true
+    fi
+    if systemctl list-unit-files 2>/dev/null | grep -q '^openvpn-server@'; then
+        systemctl disable --now openvpn-server@server || true
+    fi
+    # Remove diretórios de configuração e logs
+    rm -rf /etc/openvpn 2>/dev/null || true
+    rm -rf "$OVPN_LOG_DIR" 2>/dev/null || true
+    # Remove regras iptables específicas da porta padrão
+    # ATENÇÃO: essa remoção é superficial e assume que a porta padrão
+    #  não é utilizada por outros serviços. Ajuste se necessário.
+    if iptables -C INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT 2>/dev/null; then
+        iptables -D INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT || true
+    fi
+    if iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o "$(ip -4 route ls | grep default | grep -Po '(?<=dev )\S+' | head -1)" -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o "$(ip -4 route ls | grep default | grep -Po '(?<=dev )\S+' | head -1)" -j MASQUERADE || true
+    fi
+    # Remove regras IPv6 se existirem
+    if [[ "$SUPPORTS_IPV6" == "yes" ]]; then
+        if ip6tables -C INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT 2>/dev/null; then
+            ip6tables -D INPUT -p tcp --dport "$DEFAULT_PORT" -j ACCEPT || true
+        fi
+        if ip6tables -t nat -C POSTROUTING -s fd42:42:42::/64 -o "$(ip -4 route ls | grep default | grep -Po '(?<=dev )\S+' | head -1)" -j MASQUERADE 2>/dev/null; then
+            ip6tables -t nat -D POSTROUTING -s fd42:42:42::/64 -o "$(ip -4 route ls | grep default | grep -Po '(?<=dev )\S+' | head -1)" -j MASQUERADE || true
+        fi
+    fi
+    # Remove configurações persistentes de iptables/nftables se existirem
+    rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6 2>/dev/null || true
+    rm -f /etc/nftables.conf 2>/dev/null || true
+    success "Limpeza concluída. Se existia uma instalação parcial, ela foi removida."
+}
+
 # --------------------- Instalação Principal ---------------------------
 install_openvpn() {
     clear
@@ -703,6 +813,8 @@ install_openvpn() {
     echo -e "  • Systemd-Resolved: ${GREEN}$SUPPORTS_SYSTEMD_RESOLVED${SCOLOR}"
     echo
     sleep 2
+    # Antes de qualquer ação, certifique-se de que não há instalações parciais
+    cleanup_failed_installation
     optimize_system
     check_dependencies
     setup_easy_rsa
@@ -719,6 +831,8 @@ main() {
     check_bash
     check_virtualization
     check_kernel_version
+    # Executar rotina de limpeza antes de detectar o sistema
+    cleanup_failed_installation
     detect_os
     detect_openvpn_layout
     check_if_installed
