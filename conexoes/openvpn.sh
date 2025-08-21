@@ -1,582 +1,370 @@
-"""
-Fixed MultiFlow proxy implementation with proper HTTP handshake order.
-
-This script reimplements the MultiFlow proxy found in the original
-``conexoes/multiflowproxy.py`` but fixes several issues that caused
-connections to fail:
-
-* **Indentation errors** – the oraaiginal file contained incorrect
-  indentation on many lines, prevaenting the interpreter from even
-  importing the module.  This version is syntactically valid and can
-  be executed directly with Python 3.
-* **Malformed HTTP response lines** – the previous implementation
-  constructed status lines using an f‑string that spanned two lines.
-  That introduced an unintended newline between the status code and
-  reason phrase (e.g. ``"HTTP/1.1 101\nSwitching Protocols"``), which
-  violates the HTTP specification.  Here, the status line is built on a
-  single line using ``f"HTTP/1.1 {code} {reason}\r\n\r\n"``.
-* **Missing 200 response by default** – clients that rely on both
-  ``101 Switching Protocols`` and ``200 Connection Established`` were
-  failing because ``200`` was disabled unless explicitly toggled in the
-  menu.  The default set of enabled statuses now includes 200, and
-  status 101 is always sent regardless of menu configuration.  Only
-  these two lines are emitted during the handshake; other status codes
-  present in the configuration file are ignored because they are not
-  part of the traditional proxy handshake.
-* **Handshake order** – the proxy now sends its status lines
-  immediately after accepting a connection and **before** reading any
-  payload from the client.  This matches the user’s requirement to
-  "enviar primeiro o status e depois ler a payload" (send the status
-  first and then read the payload).
-
-The proxy listens on a configurable port and forwards connections to
-either an SSH backend (port 22) or an OpenVPN backend (port 1194).
-Clients may specify an alternate destination using the ``X‑Real‑Host``
-header.  A simple menu is provided (when the script is run without
-``--port``) for opening and closing proxy instances and toggling the
-default HTTP status codes written to the status file.
-"""
-
-import argparse
-import asyncio
-import logging
-import os
-import socket
-import subprocess
-import sys
-import contextlib
-from pathlib import Path
-from typing import Tuple, Set
-
-
-# ---------------------------------------------------------------------------
-# HTTP status management
-# ---------------------------------------------------------------------------
-
-# Map of status codes to reason phrases.  Only 101 and 200 are used in
-# the handshake, but other codes can be toggled in the menu for
-# completeness.
-HTTP_STATUS = {
-    100: "Continue",
-    101: "Switching Protocols",
-    200: "Connection Established",
-    204: "No Content",
-    301: "Moved Permanently",
-    302: "Found",
-    403: "Forbidden",
-    404: "Not Found",
-    503: "Service Unavailable",
+#!/bin/bash
+# =================================================================
+# OpenVPN Installer & Manager
+# mycroft rasqui
+# =================================================================
+# --- Variáveis de Cor ---
+readonly RED='\e[1;31m'
+readonly GREEN='\e[1;32m'
+readonly YELLOW='\e[1;33m'
+readonly BLUE='\e[1;34m'
+readonly CYAN='\e[1;36m'
+readonly WHITE='\e[1;37m'
+readonly SCOLOR='\e[0m'
+# --- Funções de Utilidade ---
+die() {
+    echo -e "${RED}[ERRO] $1${SCOLOR}" >&2
+    exit "${2:-1}"
 }
-
-# File that records which status codes are enabled.  The proxy will
-# always send 101; if 200 is enabled it will send that after 101.  All
-# other enabled codes are ignored by the handshake routine.
-STATUS_FILE = Path("/opt/multiflow/http_status")
-
-# Default enabled statuses include 200 to satisfy clients that expect
-# both 101 and 200 responses.  Status 101 is always treated as enabled
-# regardless of this set.
-DEFAULT_ENABLED: Set[int] = {101, 200}
-
-
-def load_enabled_statuses() -> Set[int]:
-    """Load the set of active HTTP status codes from ``STATUS_FILE``.
-
-    If the file does not exist or cannot be read, the default set is
-    returned.  Only codes present in ``HTTP_STATUS`` are retained.
-    """
-    try:
-        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    except PermissionError:
-        # Fall back silently if we cannot create the directory
-        return set(DEFAULT_ENABLED)
-    if not STATUS_FILE.exists() or STATUS_FILE.stat().st_size == 0:
-        enabled = set(DEFAULT_ENABLED)
-        # Persist defaults if possible
-        with contextlib.suppress(Exception):
-            save_enabled_statuses(enabled)
-        return enabled
-    enabled: Set[int] = set()
-    for line in STATUS_FILE.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            code = int(line)
-        except ValueError:
-            continue
-        if code in HTTP_STATUS:
-            enabled.add(code)
-    if not enabled:
-        enabled = set(DEFAULT_ENABLED)
-        save_enabled_statuses(enabled)
-    return enabled
-
-
-def save_enabled_statuses(enabled: Set[int]) -> None:
-    """Persist the set of active status codes to ``STATUS_FILE``.
-
-    Failures to write are silently ignored so that the proxy can run in
-    unprivileged environments.  Codes are saved in ascending order,
-    one per line.
-    """
-    with contextlib.suppress(Exception):
-        STATUS_FILE.write_text("\n".join(str(c) for c in sorted(enabled)) + "\n")
-
-
-# ---------------------------------------------------------------------------
-# TCP keepalive tuning
-# ---------------------------------------------------------------------------
-
-def apply_tcp_keepalive(
-    sock: socket.socket,
-    *,
-    idle: int = 10,
-    interval: int = 5,
-    count: int = 3,
-    nodelay: bool = True,
-) -> None:
-    """Configure aggressive TCP keepalive settings on a socket.
-
-    The options set here mirror those in the original multiflowproxy
-    implementation and its Rust analogue.  If a given option is not
-    supported on the platform it is silently ignored.
-    """
-    if not sock:
+warn() {
+    echo -e "${YELLOW}[AVISO] $1${SCOLOR}"
+}
+success() {
+    echo -e "${GREEN}[SUCESSO] $1${SCOLOR}"
+}
+fun_bar() {
+    local cmd="$1"
+    local spinner="/-\\|"
+    local i=0
+    local timeout=600
+    eval "$cmd" &
+    local pid=$!
+    tput civis
+    echo -ne "${YELLOW}Aguarde... [${SCOLOR}"
+    local start_time=$(date +%s)
+    while ps -p "$pid" > /dev/null; do
+        current_time=$(date +%s)
+        if [[ $((current_time - start_time)) -gt $timeout ]]; then
+            kill "$pid" 2>/dev/null
+            die "Timeout na execução: $cmd demorou mais de 5min. Verifique rede ou mirrors."
+        fi
+        i=$(((i + 1) % 4))
+        echo -ne "${CYAN}${spinner:$i:1}${SCOLOR}"
+        sleep 0.2
+        echo -ne "\b"
+    done
+    echo -e "${YELLOW}]${SCOLOR} - ${GREEN}Concluído!${SCOLOR}"
+    tput cnorm
+    wait "$pid" || die "Comando falhou: $cmd"
+}
+# --- Verificações Iniciais ---
+check_root() {
+    [[ "$EUID" -ne 0 ]] && die "Este script precisa ser executado como ROOT."
+}
+check_bash() {
+    readlink /proc/$$/exe | grep -q "bash" || die "Execute este script com bash, não com sh."
+}
+cleanup_previous_installations() {
+    echo -e "${CYAN}Verificando e removendo instalações anteriores do OpenVPN...${SCOLOR}"
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop openvpn@server 2>/dev/null
+        systemctl disable openvpn@server 2>/dev/null
+    else
+        service openvpn@server stop 2>/dev/null
+    fi
+    rm -rf /etc/openvpn /var/log/openvpn ~/ovpn-clients
+    echo -e "${GREEN}Limpeza de instalações anteriores concluída.${SCOLOR}"
+}
+check_dependencies() {
+    local missing=()
+    local packages=("openvpn" "easy-rsa" "iptables" "lsof")
+    local checks=("command -v openvpn" "[ -d /usr/share/easy-rsa ] || [ -d /usr/lib/easy-rsa ] || [ -d /usr/lib64/easy-rsa ]" "command -v iptables" "command -v lsof")
+    if [[ "$OS" == "debian" ]]; then
+        packages+=("iptables-persistent" "netfilter-persistent")
+        checks+=("command -v iptables-save")
+    fi
+    # Detecta dependências ausentes
+    for i in "${!packages[@]}"; do
+        if ! eval "${checks[$i]}"; then
+            missing+=("${packages[$i]}")
+        fi
+    done
+    # Instala automaticamente as dependências ausentes
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${YELLOW}Dependências em falta: ${missing[*]}${SCOLOR}"
+        echo -e "${CYAN}Instalando dependências faltantes...${SCOLOR}"
+        if [[ "$OS" == "debian" ]]; then
+            fun_bar "apt update -qq && apt install -y -qq ${missing[*]}"
+        elif [[ "$OS" == "centos" ]]; then
+            # Habilita repositório EPEL se necessário
+            if ! yum list installed epel-release >/dev/null 2>&1; then
+                fun_bar "yum install -y epel-release"
+            fi
+            fun_bar "yum install -y ${missing[*]}"
+        fi
+        # Verifica novamente se todas as dependências foram instaladas
+        local still_missing=()
+        for i in "${!packages[@]}"; do
+            if ! eval "${checks[$i]}"; then
+                still_missing+=("${packages[$i]}")
+            fi
+        done
+        if [[ ${#still_missing[@]} -gt 0 ]]; then
+            die "Falha ao instalar: ${still_missing[*]}."
+        else
+            success "Dependências instaladas com sucesso!"
+        fi
+    else
+        success "Todas as dependências estão presentes."
+    fi
+    # Alerta se a versão do OpenVPN for antiga
+    local ovpn_version=$(openvpn --version | head -1 | awk '{print $2}')
+    if [[ "$ovpn_version" < "2.5" ]]; then
+        warn "Versão do OpenVPN ($ovpn_version) é antiga. Recomenda-se atualizar para 2.5+ para compatibilidade."
+    fi
+}
+detect_os() {
+    [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
+    source /etc/os-release
+    OS_ID="$ID"
+    case "$OS_ID" in
+        ubuntu|debian) OS="debian"; GROUPNAME="nogroup" ;;
+        centos|fedora|rhel) OS="centos"; GROUPNAME="nobody" ;;
+        *) die "Sistema operacional '$OS_ID' não suportado." ;;
+    esac
+}
+install_openvpn() {
+    clear
+    echo -e "${BLUE}--- Instalador OpenVPN ---${SCOLOR}"
+    local EASY_RSA_DIR="/etc/openvpn/easy-rsa"
+    mkdir -p "$EASY_RSA_DIR" || die "Falha ao criar diretório $EASY_RSA_DIR."
+    cp -r /usr/share/easy-rsa/* "$EASY_RSA_DIR/" 2>/dev/null || cp -r /usr/lib/easy-rsa/* "$EASY_RSA_DIR/" 2>/dev/null || cp -r /usr/lib64/easy-rsa/* "$EASY_RSA_DIR/" 2>/dev/null || die "EasyRSA não encontrado."
+    chmod +x "$EASY_RSA_DIR/easyrsa" || die "Falha ao ajustar permissões do EasyRSA."
+    cd "$EASY_RSA_DIR" || die "Não foi possível acessar $EASY_RSA_DIR."
+    echo -e "${CYAN}Configurando EasyRSA...${SCOLOR}"
+    ./easyrsa init-pki || die "Falha ao inicializar PKI."
+    echo "Easy-RSA CA" | ./easyrsa build-ca nopass || die "Falha ao criar CA."
+    echo "yes" | ./easyrsa build-server-full server nopass || die "Falha ao criar certificado do servidor."
+    ./easyrsa gen-dh || die "Falha ao gerar DH."
+    openvpn --genkey secret pki/ta.key || die "Falha ao gerar chave TA."
+    [[ ! -s pki/ta.key ]] && die "Arquivo ta.key gerado, mas vazio ou inexistente. Verifique versão do OpenVPN."
+    cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem pki/ta.key /etc/openvpn/ || die "Falha ao copiar arquivos."
+    chown root:root /etc/openvpn/*.{key,crt,pem} || die "Falha ao ajustar propriedade."
+    chmod 600 /etc/openvpn/*.{key,crt,pem} || die "Falha ao ajustar permissões."
+    [[ ! -s /etc/openvpn/ta.key ]] && die "ta.key copiado, mas vazio. Falha na geração."
+    configure_server
+    configure_firewall
+    echo -e "${CYAN}Iniciando o serviço OpenVPN...${SCOLOR}"
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable openvpn@server || die "Falha ao habilitar o serviço."
+        systemctl start openvpn@server || die "Falha ao iniciar o serviço. Rode 'journalctl -xeu openvpn@server.service' para detalhes."
+    else
+        service openvpn@server start || die "Falha ao iniciar o serviço sem systemd."
+    fi
+    success "OpenVPN instalado e iniciado com sucesso!"
+    echo -e "${CYAN}Criando o primeiro cliente...${SCOLOR}"
+    create_client "cliente1"
+}
+configure_server() {
+    echo -e "${CYAN}Configurando o servidor OpenVPN...${SCOLOR}"
+    local IP
+    IP=$(curl -s ifconfig.me 2>/dev/null) || IP=$(wget -4qO- "http://whatismyip.akamai.com/" 2>/dev/null) || IP=$(hostname -I | awk '{print $1}')
+    [[ -z "$IP" ]] && die "Não foi possível determinar o IP público."
+    PORT="1194"
+    PROTOCOL="tcp"
+    DNS1="8.8.8.8"
+    DNS2="8.8.4.4"
+    mkdir -p /var/log/openvpn || die "Falha ao criar diretório de logs."
+    chown nobody:"$GROUPNAME" /var/log/openvpn || die "Falha ao ajustar permissões de logs."
+    cat > /etc/openvpn/server.conf <<EOF
+port $PORT
+proto $PROTOCOL
+dev tun
+ca ca.crt
+cert server.crt
+key server.key
+dh dh.pem
+auth SHA512
+tls-auth ta.key 0
+key-direction 0
+topology subnet
+server 10.8.0.0 255.255.255.0
+ifconfig-pool-persist ipp.txt
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS $DNS1"
+push "dhcp-option DNS $DNS2"
+keepalive 10 120
+cipher AES-256-GCM
+ncp-ciphers AES-256-GCM:AES-128-GCM
+tls-version-min 1.2
+user nobody
+group $GROUPNAME
+persist-key
+persist-tun
+status /var/log/openvpn/openvpn-status.log
+log-append /var/log/openvpn/openvpn.log
+verb 3
+mssfix 1300
+sndbuf 0
+rcvbuf 0
+txqueuelen 1000
+socket-flags TCP_NODELAY
+push "socket-flags TCP_NODELAY"
+crl-verify crl.pem
+EOF
+    cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado."
+    ./easyrsa gen-crl || die "Falha ao gerar CRL."
+    cp pki/crl.pem /etc/openvpn/crl.pem || die "Falha ao copiar CRL."
+    chown root:root /etc/openvpn/crl.pem
+    chmod 644 /etc/openvpn/crl.pem
+}
+configure_firewall() {
+    echo -e "${CYAN}Configurando o firewall...${SCOLOR}"
+    sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+    sysctl -p >/dev/null || die "Falha ao ativar encaminhamento de IP."
+    if [[ "$OS" = "debian" ]]; then
+        local IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\\S+)' | head -1)
+        [[ -z "$IFACE" ]] && die "Não foi possível determinar a interface de rede."
+        iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE
+        iptables -A INPUT -i tun+ -j ACCEPT
+        iptables -A FORWARD -i tun+ -j ACCEPT
+        iptables -A FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT
+        iptables-save > /etc/iptables/rules.v4 || die "Falha ao salvar regras iptables."
+        netfilter-persistent save || die "Falha ao persistir regras (verifique iptables-persistent)."
+    elif [[ "$OS" = "centos" ]]; then
+        systemctl start firewalld || die "Falha ao iniciar firewalld."
+        systemctl enable firewalld || die "Falha ao habilitar firewalld."
+        firewall-cmd --add-service=openvpn --permanent || die "Falha ao adicionar serviço OpenVPN."
+        firewall-cmd --add-masquerade --permanent || die "Falha ao adicionar masquerade."
+        firewall-cmd --reload || die "Falha ao recarregar firewalld."
+    fi
+}
+create_client() {
+    local CLIENT_NAME="$1"
+    if [[ -z "$CLIENT_NAME" ]]; then
+        echo -ne "${WHITE}Nome do cliente: ${SCOLOR}"
+        read -r CLIENT_NAME
+        [[ -z "$CLIENT_NAME" ]] && warn "Nome inválido." && return
+    fi
+    cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado."
+    [[ -f "pki/issued/${CLIENT_NAME}.crt" ]] && warn "Cliente '${CLIENT_NAME}' já existe." && return
+    echo -e "${CYAN}Gerando certificado para '${CLIENT_NAME}'...${SCOLOR}"
+    echo "yes" | ./easyrsa build-client-full "$CLIENT_NAME" nopass || die "Falha ao gerar certificado do cliente."
+    local IP=$(curl -s ifconfig.me 2>/dev/null) || IP=$(wget -4qO- "http://whatismyip.akamai.com/" 2>/dev/null) || IP=$(hostname -I | awk '{print $1}')
+    local PROTOCOL=$(grep '^proto' /etc/openvpn/server.conf | cut -d " " -f 2)
+    local PORT=$(grep '^port' /etc/openvpn/server.conf | cut -d " " -f 2)
+    local OVPN_DIR=~/ovpn-clients
+    mkdir -p "$OVPN_DIR" || die "Falha ao criar diretório $OVPN_DIR."
+    cat > "${OVPN_DIR}/${CLIENT_NAME}.ovpn" <<EOF
+client
+dev tun
+proto ${PROTOCOL}
+remote ${IP} ${PORT}
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+auth SHA512
+cipher AES-256-GCM
+key-direction 1
+verb 3
+<ca>
+$(cat /etc/openvpn/easy-rsa/pki/ca.crt)
+</ca>
+<cert>
+$(cat "/etc/openvpn/easy-rsa/pki/issued/${CLIENT_NAME}.crt")
+</cert>
+<key>
+$(cat "/etc/openvpn/easy-rsa/pki/private/${CLIENT_NAME}.key")
+</key>
+<tls-auth>
+$(cat /etc/openvpn/ta.key)
+</tls-auth>
+socket-flags TCP_NODELAY
+EOF
+    success "Configuração do cliente salva em: ${OVPN_DIR}/${CLIENT_NAME}.ovpn"
+}
+revoke_client() {
+    cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado."
+    local clients=()
+    while IFS= read -r file; do
+        clients+=("$(basename "$file" .crt)")
+    done < <(ls -1 pki/issued/*.crt 2>/dev/null)
+    [[ ${#clients[@]} -eq 0 ]] && warn "Nenhum cliente para revogar." && return
+    echo -e "${YELLOW}Selecione o cliente a revogar:${SCOLOR}"
+    for i in "${!clients[@]}"; do
+        echo " $((i + 1))) ${clients[$i]}"
+    done
+    echo -ne "${WHITE}Número do cliente: ${SCOLOR}"
+    read -r choice
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#clients[@]} )); then
+        warn "Seleção inválida."
         return
-    with contextlib.suppress(OSError):
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    # Linux/BSD specific options
-    if hasattr(socket, "TCP_KEEPIDLE"):
-        with contextlib.suppress(OSError):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle)
-    if hasattr(socket, "TCP_KEEPINTVL"):
-        with contextlib.suppress(OSError):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval)
-    if hasattr(socket, "TCP_KEEPCNT"):
-        with contextlib.suppress(OSError):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, count)
-    # macOS uses TCP_KEEPALIVE for the idle time
-    if hasattr(socket, "TCP_KEEPALIVE"):
-        with contextlib.suppress(OSError):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, idle)
-    if nodelay and hasattr(socket, "TCP_NODELAY"):
-        with contextlib.suppress(OSError):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-
-# ---------------------------------------------------------------------------
-# Backend selection
-# ---------------------------------------------------------------------------
-
-async def probe_backend_from_data(initial_data: bytes) -> Tuple[str, int]:
-    """Decide which backend to use based on the initial bytes received.
-
-    If the data is empty or contains the substring ``"SSH"`` (case
-    insensitive) then port 22 (SSH) is selected; otherwise port 1194
-    (OpenVPN) is selected.  The host is always ``127.0.0.1`` so that
-    services can be bound on all interfaces via systemd units.
-    """
-    default_backend = ("127.0.0.1", 22)
-    alt_backend = ("127.0.0.1", 1194)
-    try:
-        text = initial_data.decode("utf-8", errors="ignore")
-    except Exception:
-        return default_backend
-    if not text or "SSH" in text.upper():
-        return default_backend
-    return alt_backend
-
-
-async def handle_client(
-    client_reader: asyncio.StreamReader,
-    client_writer: asyncio.StreamWriter,
-) -> None:
-    """Handle a single client connection.
-
-    This coroutine performs the following steps:
-
-    #. Enables TCP keepalive on the client socket.
-    #. Sends the handshake status lines (101 and, if enabled, 200) to
-       the client before reading any payload.
-    #. Reads up to 8 KiB of data from the client to parse custom
-       headers ``X‑Real‑Host`` and ``X‑Split``.
-    #. Determines the backend address either from ``X‑Real‑Host`` or by
-       analysing the initial data via :func:`probe_backend_from_data`.
-    #. Optionally consumes a second request if ``X‑Split`` was
-       specified.
-    #. Establishes a connection to the selected backend and shuttles
-       data bidirectionally between the client and server, honouring
-       half‑closures.
-    """
-    # Apply keepalive on the accepted client socket
-    with contextlib.suppress(Exception):
-        csock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
-        apply_tcp_keepalive(csock)
-
-    # Send handshake status lines before reading any payload
-    try:
-        enabled = load_enabled_statuses()
-        # Always include 101 in the handshake
-        handshake_codes = []
-        if 101 not in enabled:
-            handshake_codes.append(101)
-        else:
-            handshake_codes.append(101)
-        # Send 200 only if it is enabled
-        if 200 in enabled:
-            handshake_codes.append(200)
-        for code in handshake_codes:
-            reason = HTTP_STATUS.get(code, "OK")
-            # Compose a proper HTTP response line.  No extra newlines.
-            line = f"HTTP/1.1 {code} {reason}\r\n\r\n"
-            client_writer.write(line.encode())
-            await client_writer.drain()
-    except Exception as exc:
-        logging.error("Falha no handshake com o cliente: %s", exc)
-        client_writer.close()
-        await client_writer.wait_closed()
-        return
-
-    # Read up to 8 KiB of initial data for header parsing
-    try:
-        initial_data = await client_reader.read(8192)
-    except Exception as exc:
-        logging.error("Falha ao ler dados iniciais: %s", exc)
-        client_writer.close()
-        await client_writer.wait_closed()
-        return
-
-    # Decode initial data into text for header extraction
-    header_text = initial_data.decode("utf-8", errors="ignore")
-
-    def find_header(text: str, header: str) -> str:
-        idx = text.find(header + ": ")
-        if idx == -1:
-            return ""
-        idx = text.find(":", idx)
-        value = text[idx + 2 :]
-        end = value.find("\r\n")
-        if end == -1:
-            return ""
-        return value[:end]
-
-    host_port_header = find_header(header_text, "X-Real-Host")
-    x_split_header = find_header(header_text, "X-Split")
-
-    # Decide the backend address
-    backend_host: str
-    backend_port: int
-    if host_port_header:
-        # Parse "host[:port]"
-        if ":" in host_port_header:
-            hp_host, hp_port_str = host_port_header.rsplit(":", 1)
-            try:
-                backend_port = int(hp_port_str)
-            except ValueError:
-                backend_port = 22
-            backend_host = hp_host
-        else:
-            backend_host = host_port_header
-            backend_port = 22
-    else:
-        # No explicit host; determine via probe on initial data
-        try:
-            backend_host, backend_port = await probe_backend_from_data(initial_data)
-        except Exception:
-            backend_host, backend_port = ("127.0.0.1", 22)
-
-    # If X‑Split is present, consume another chunk from the client
-    if x_split_header:
-        with contextlib.suppress(Exception):
-            await client_reader.read(8192)
-
-    # Connect to the backend
-    try:
-        server_reader, server_writer = await asyncio.open_connection(
-            backend_host, backend_port
-        )
-        # Apply keepalive on the backend socket
-        with contextlib.suppress(Exception):
-            ssock: socket.socket = server_writer.get_extra_info("socket")  # type: ignore
-            apply_tcp_keepalive(ssock)
-    except Exception as exc:
-        logging.error(
-            "Falha ao conectar no backend %s:%d: %s",
-            backend_host,
-            backend_port,
-            exc,
-        )
-        client_writer.close()
-        await client_writer.wait_closed()
-        return
-
-    async def forward(
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-        direction: str,
-    ) -> None:
-        """Forward bytes from reader to writer until EOF or error.
-
-        When EOF is seen on the reader, a half‑close is performed on
-        the writer so that the other direction can continue sending.
-        """
-        try:
-            while True:
-                data = await reader.read(65536)
-                if not data:
-                    # Perform a half close to signal EOF
-                    try:
-                        if writer.can_write_eof():
-                            writer.write_eof()
-                            await writer.drain()
-                        else:
-                            wsock: socket.socket = writer.get_extra_info("socket")  # type: ignore
-                            if wsock:
-                                with contextlib.suppress(OSError):
-                                    wsock.shutdown(socket.SHUT_WR)
-                    except Exception as exc:
-                        logging.debug("Half-close %s: %s", direction, exc)
-                    break
-                writer.write(data)
-                await writer.drain()
-        except Exception as exc:
-            logging.debug("Erro no fluxo %s: %s", direction, exc)
-
-    # Launch bidirectional forwarding tasks
-    client_to_server = asyncio.create_task(
-        forward(client_reader, server_writer, "cliente->servidor")
-    )
-    server_to_client = asyncio.create_task(
-        forward(server_reader, client_writer, "servidor->cliente")
-    )
-    # Wait for both directions to finish
-    await asyncio.gather(client_to_server, server_to_client, return_exceptions=True)
-    # Close both sockets cleanly
-    for w in (server_writer, client_writer):
-        with contextlib.suppress(Exception):
-            w.close()
-            await w.wait_closed()
-
-
-async def run_proxy(port: int) -> None:
-    """Start the MultiFlow proxy on the specified port.
-
-    Binds an IPv6 socket configured for dual‑stack operation and
-    dispatches each incoming connection to :func:`handle_client`.
-    """
-    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-    try:
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-    except AttributeError:
-        pass
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    # Enable keepalive on the listening socket so that accepted sockets
-    # may inherit these settings (if the OS supports it)
-    with contextlib.suppress(OSError):
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    sock.bind(("::", port))
-    sock.listen(512)
-    server = await asyncio.start_server(handle_client, sock=sock)
-    addr_list = ", ".join(str(s.getsockname()) for s in server.sockets or [])
-    logging.info("Iniciando MultiFlow em %s", addr_list)
-    async with server:
-        await server.serve_forever()
-
-
-# ---------------------------------------------------------------------------
-# Systemd service and menu helpers
-# ---------------------------------------------------------------------------
-
-# File used to record active proxy ports.  Each line contains a port
-# number for which a systemd service has been created.
-PORTS_FILE = Path("/opt/multiflow/ports")
-
-
-def is_port_in_use(port: int) -> bool:
-    """Return True if the given TCP port is already bound locally."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.5)
-        result = sock.connect_ex(("127.0.0.1", port))
-        return result == 0
-
-
-def add_proxy_port(port: int) -> None:
-    """Create and start a systemd service running the proxy on ``port``."""
-    if is_port_in_use(port):
-        print(f"A porta {port} já está em uso.")
-        return
-    script_path = Path(__file__).resolve()
-    command = f"{sys.executable} {script_path} --port {port}"
-    service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
-    service_content = f"""[Unit]
-Description=MultiFlow{port}
-After=network.target
-
-[Service]
-LimitNOFILE=infinity
-LimitNPROC=infinity
-LimitMEMLOCK=infinity
-LimitSTACK=infinity
-LimitCORE=0
-LimitAS=infinity
-LimitRSS=infinity
-LimitCPU=infinity
-LimitFSIZE=infinity
-Type=simple
-ExecStart={command}
-Restart=always
-RestartSec=1
-
-[Install]
-WantedBy=multi-user.target
-"""
-    service_file_path.write_text(service_content)
-    subprocess.run(["systemctl", "daemon-reload"], check=False)
-    subprocess.run(["systemctl", "enable", f"proxy{port}.service"], check=False)
-    subprocess.run(["systemctl", "start", f"proxy{port}.service"], check=False)
-    PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with PORTS_FILE.open("a") as f:
-        f.write(f"{port}\n")
-    print(f"Porta {port} aberta com sucesso.")
-
-
-def del_proxy_port(port: int) -> None:
-    """Stop and remove the systemd service for the specified port."""
-    subprocess.run(["systemctl", "disable", f"proxy{port}.service"], check=False)
-    subprocess.run(["systemctl", "stop", f"proxy{port}.service"], check=False)
-    service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
-    if service_file_path.exists():
-        service_file_path.unlink()
-    subprocess.run(["systemctl", "daemon-reload"], check=False)
-    if PORTS_FILE.exists():
-        lines = [l.strip() for l in PORTS_FILE.read_text().splitlines() if l.strip()]
-        lines = [l for l in lines if l != str(port)]
-        PORTS_FILE.write_text("\n".join(lines) + ("\n" if lines else ""))
-    print(f"Porta {port} fechada com sucesso.")
-
-
-def toggle_http_status_menu() -> None:
-    """Interactive menu to enable/disable HTTP status codes."""
-    while True:
-        os.system("clear")
-        print("------------------------------------------------")
-        print(f"|{'HTTP STATUS DO PROXY':^47}|")
-        print("------------------------------------------------")
-        enabled = load_enabled_statuses()
-        all_codes = sorted(HTTP_STATUS.keys())
-        for idx, code in enumerate(all_codes, start=1):
-            flag = "ativo" if code in enabled else "inativo"
-            print(f"{idx}. {code} - {flag}")
-        print("0. Voltar")
-        print("------------------------------------------------")
-        sel = input("Digite qual deseja alterar: ").strip()
-        if sel == "0":
-            break
-        if not sel.isdigit():
-            input("Opção inválida. Pressione Enter para voltar.")
-            continue
-        idx = int(sel)
-        if not (1 <= idx <= len(all_codes)):
-            input("Opção inválida. Pressione Enter para voltar.")
-            continue
-        code = all_codes[idx - 1]
-        if code == 101:
-            print("> O status 101 não pode ser desativado.")
-        else:
-            if code in enabled:
-                enabled.remove(code)
-                print(f"> Status {code} desativado.")
-            else:
-                enabled.add(code)
-                print(f"> Status {code} ativado.")
-            save_enabled_statuses(enabled)
-        input("Pressione Enter para continuar...")
-
-
-def show_menu() -> None:
-    """Interactive menu for managing proxy instances and status codes."""
-    if not PORTS_FILE.exists():
-        PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        PORTS_FILE.touch()
-    while True:
-        os.system("clear")
-        print("------------------------------------------------")
-        print(f"|{'MULTIFLOW PROXY':^47}|")
-        print("------------------------------------------------")
-        if PORTS_FILE.stat().st_size == 0:
-            print(f"| Portas(s): {'nenhuma':<34}|")
-        else:
-            with PORTS_FILE.open() as f:
-                ports = [line.strip() for line in f if line.strip()]
-            active_ports = ' '.join(ports)
-            print(f"| Portas(s):{active_ports:<35}|")
-        print("------------------------------------------------")
-        print("| 1 - Abrir Porta                     |")
-        print("| 2 - Fechar Porta                    |")
-        print("| 3 - Ativar/Desativar HTTP Status    |")
-        print("| 0 - Sair                            |")
-        print("------------------------------------------------")
-        option = input(" --> Selecione uma opção: ").strip()
-        if option == '1':
-            port_input = input("Digite a porta: ").strip()
-            while not port_input.isdigit():
-                print("Digite uma porta válida.")
-                port_input = input("Digite a porta: ").strip()
-            port = int(port_input)
-            add_proxy_port(port)
-            input(
-                "> Porta ativada com sucesso. Pressione Enter para voltar ao menu."
-            )
-        elif option == '2':
-            port_input = input("Digite a porta: ").strip()
-            while not port_input.isdigit():
-                print("Digite uma porta válida.")
-                port_input = input("Digite a porta: ").strip()
-            port = int(port_input)
-            del_proxy_port(port)
-            input(
-                "> Porta desativada com sucesso. Pressione Enter para voltar ao menu."
-            )
-        elif option == '3':
-            toggle_http_status_menu()
-        elif option == '0':
-            sys.exit(0)
-        else:
-            input("Opção inválida. Pressione Enter para voltar ao menu.")
-
-
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Implementação Python do MultiFlow com menu corrigido"
-    )
-    parser.add_argument("--port", type=int, help="Porta de escuta")
-    return parser.parse_args()
-
-
-def main() -> None:
-    """Program entry point.
-
-    If ``--port`` is provided the proxy runs on that port.  Otherwise the
-    interactive menu is shown.  Logging is configured when running in
-    proxy mode to aid in debugging.
-    """
-    args = parse_args()
-    if args.port is not None:
-        logging.basicConfig(
-            level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-        )
-        try:
-            asyncio.run(run_proxy(args.port))
-        except KeyboardInterrupt:
-            logging.info("Proxy encerrado pelo usuário")
-    else:
-        if os.geteuid() != 0:
-            print("Este script deve ser executado como root para o menu.")
-            sys.exit(1)
-        show_menu()
-
-
-if __name__ == "__main__":
-    main()
+    fi
+    local CLIENT_TO_REVOKE="${clients[$((choice - 1))]}"
+    echo -ne "${YELLOW}Tem certeza que deseja revogar '${CLIENT_TO_REVOKE}'? [s/N]: ${SCOLOR}"
+    read -r confirmation
+    if [[ "$confirmation" =~ ^[sS]$ ]]; then
+        echo -e "${CYAN}Revogando o cliente...${SCOLOR}"
+        echo "yes" | ./easyrsa revoke "$CLIENT_TO_REVOKE" || die "Falha ao revogar cliente."
+        ./easyrsa gen-crl || die "Falha ao gerar CRL."
+        cp pki/crl.pem /etc/openvpn/crl.pem || die "Falha ao atualizar CRL."
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart openvpn@server || die "Falha ao reiniciar serviço."
+        else
+            service openvpn@server restart || die "Falha ao reiniciar serviço sem systemd."
+        fi
+        rm -f ~/ovpn-clients/"$CLIENT_TO_REVOKE".ovpn
+        success "Cliente '${CLIENT_TO_REVOKE}' revogado."
+    else
+        warn "Operação cancelada."
+    fi
+}
+uninstall_openvpn() {
+    echo -ne "${RED}Tem CERTEZA que deseja remover o OpenVPN? [s/N]: ${SCOLOR}"
+    read -r confirmation
+    if [[ "$confirmation" =~ ^[sS]$ ]]; then
+        echo -e "${RED}Removendo o OpenVPN...${SCOLOR}"
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop openvpn@server 2>/dev/null
+            systemctl disable openvpn@server 2>/dev/null
+        else
+            service openvpn@server stop 2>/dev/null
+        fi
+        if [[ "$OS" = "debian" ]]; then
+            fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y"
+            local iface=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\\S+)' | head -1)
+            iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -j MASQUERADE 2>/dev/null
+            iptables -D INPUT -i tun+ -j ACCEPT 2>/dev/null
+            iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null
+            iptables -D FORWARD -i "$iface" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null
+            netfilter-persistent save 2>/dev/null
+        elif [[ "$OS" = "centos" ]]; then
+            fun_bar "yum remove -y openvpn easy-rsa firewalld lsof"
+            firewall-cmd --remove-service=openvpn --permanent 2>/dev/null
+            firewall-cmd --remove-masquerade --permanent 2>/dev/null
+            firewall-cmd --reload 2>/dev/null
+        fi
+        rm -rf /etc/openvpn ~/ovpn-clients
+        success "OpenVPN removido com sucesso."
+    else
+        warn "Remoção cancelada."
+    fi
+}
+main() {
+    clear
+    check_root
+    check_bash
+    echo -e "${CYAN}O OpenVPN irá instalar com as seguintes configuraçoes: porta 1194, tcp, dns do google.${SCOLOR}"
+    echo -e "${CYAN}Caso queira trocar configure no menu interativo.${SCOLOR}"
+    echo
+    echo -e "${WHITE}Deseja iniciar a instalação do openvpn?${SCOLOR}"
+    echo -e "${YELLOW}1.${SCOLOR} sim"
+    echo -e "${YELLOW}0.${SCOLOR} voltar"
+    read -r opt
+    case "$opt" in
+        1)
+            cleanup_previous_installations
+            detect_os
+            check_dependencies
+            install_openvpn
+            ;;
+        *)
+            warn "Instalação cancelada."
+            exit 0
+            ;;
+    esac
+}
+main
