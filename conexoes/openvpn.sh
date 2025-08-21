@@ -1,8 +1,7 @@
 #!/bin/bash
 # =================================================================
 # OpenVPN Installer & Manager
-# Baseado no script original do SSH-PRO @TMYCOMNECTVPN
-# Versão Revisada, Refatorada e Aprimorada (Corrigida para demora em dependências)
+# mycroft rasqui
 # =================================================================
 # --- Variáveis de Cor ---
 readonly RED='\e[1;31m'
