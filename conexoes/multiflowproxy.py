@@ -14,10 +14,9 @@ from typing import Tuple, Set
 # HTTP status management
 # ---------------------------------------------------------------------------
 
-# Table of supported HTTP status codes and their reason phrases.  These
-# are sent in the order defined by sorted(enabled) when performing the
-# initial handshake with a client.  Users can toggle which codes are
-# active via the interactive menu.
+# Map of status codes to reason phrases.  Only 101 and 200 are used in
+# the handshake, but other codes can be toggled in the menu for
+# completeness.
 HTTP_STATUS = {
     100: "Continue",
     101: "Switching Protocols",
@@ -30,32 +29,31 @@ HTTP_STATUS = {
     503: "Service Unavailable",
 }
 
-# Location of the file that stores active status codes.  On first
-# launch, all statuses except 200 are enabled by default.
+# File that records which status codes are enabled.  The proxy will
+# always send 101; if 200 is enabled it will send that after 101.  All
+# other enabled codes are ignored by the handshake routine.
 STATUS_FILE = Path("/opt/multiflow/http_status")
-# Default set of enabled codes; exclude 200 so that only a 101 is sent
-# unless the user explicitly enables 200.
-DEFAULT_ENABLED: Set[int] = set(HTTP_STATUS.keys()) - {200}
+
+# Default enabled statuses include 200 to satisfy clients that expect
+# both 101 and 200 responses.  Status 101 is always treated as enabled
+# regardless of this set.
+DEFAULT_ENABLED: Set[int] = {101, 200}
 
 
 def load_enabled_statuses() -> Set[int]:
     """Load the set of active HTTP status codes from ``STATUS_FILE``.
 
-    If the file does not exist or is empty/invalid, all codes except
-    200 are enabled by default.  The returned set is always a subset
-    of ``HTTP_STATUS.keys()``.
+    If the file does not exist or cannot be read, the default set is
+    returned.  Only codes present in ``HTTP_STATUS`` are retained.
     """
-    # Ensure the parent directory exists.
-    # Attempt to ensure the directory exists.  If we lack permission
-    # (e.g. running as an unprivileged user during testing), fall back
-    # to the default set without persisting anything.
     try:
         STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     except PermissionError:
+        # Fall back silently if we cannot create the directory
         return set(DEFAULT_ENABLED)
     if not STATUS_FILE.exists() or STATUS_FILE.stat().st_size == 0:
         enabled = set(DEFAULT_ENABLED)
-        # Persist the default set if possible; ignore errors
+        # Persist defaults if possible
         with contextlib.suppress(Exception):
             save_enabled_statuses(enabled)
         return enabled
@@ -70,7 +68,6 @@ def load_enabled_statuses() -> Set[int]:
             continue
         if code in HTTP_STATUS:
             enabled.add(code)
-    # If nothing valid was loaded, fall back to defaults
     if not enabled:
         enabled = set(DEFAULT_ENABLED)
         save_enabled_statuses(enabled)
@@ -78,8 +75,12 @@ def load_enabled_statuses() -> Set[int]:
 
 
 def save_enabled_statuses(enabled: Set[int]) -> None:
-    """Persist the set of active status codes to ``STATUS_FILE``."""
-    # Try to write the file; ignore failures in unprivileged environments
+    """Persist the set of active status codes to ``STATUS_FILE``.
+
+    Failures to write are silently ignored so that the proxy can run in
+    unprivileged environments.  Codes are saved in ascending order,
+    one per line.
+    """
     with contextlib.suppress(Exception):
         STATUS_FILE.write_text("\n".join(str(c) for c in sorted(enabled)) + "\n")
 
@@ -98,10 +99,9 @@ def apply_tcp_keepalive(
 ) -> None:
     """Configure aggressive TCP keepalive settings on a socket.
 
-    This enables SO_KEEPALIVE and, where supported, sets the idle time
-    before the first probe, the interval between probes and the number
-    of failed probes before the connection is considered dead.  It
-    also enables TCP_NODELAY to reduce latency.
+    The options set here mirror those in the original multiflowproxy
+    implementation and its Rust analogue.  If a given option is not
+    supported on the platform it is silently ignored.
     """
     if not sock:
         return
@@ -127,25 +127,16 @@ def apply_tcp_keepalive(
 
 
 # ---------------------------------------------------------------------------
-# Proxy core logic
+# Backend selection
 # ---------------------------------------------------------------------------
 
 async def probe_backend_from_data(initial_data: bytes) -> Tuple[str, int]:
     """Decide which backend to use based on the initial bytes received.
 
-    The MultiFlow protocol allows connecting either to an SSH backend
-    (port 22) or to an OpenVPN backend (port 1194).  This helper
-    examines the provided data; if it is empty or contains the
-    substring ``"SSH"`` (case insensitive), it selects the SSH
-    backend.  Otherwise it selects the OpenVPN backend.  Both
-    selections default to the localhost address (127.0.0.1) so that
-    systemd services can bind on all interfaces.
-
-    Args:
-        initial_data: Bytes already read from the client.
-
-    Returns:
-        A tuple ``(host, port)`` representing the backend.
+    If the data is empty or contains the substring ``"SSH"`` (case
+    insensitive) then port 22 (SSH) is selected; otherwise port 1194
+    (OpenVPN) is selected.  The host is always ``127.0.0.1`` so that
+    services can be bound on all interfaces via systemd units.
     """
     default_backend = ("127.0.0.1", 22)
     alt_backend = ("127.0.0.1", 1194)
@@ -159,22 +150,27 @@ async def probe_backend_from_data(initial_data: bytes) -> Tuple[str, int]:
 
 
 async def handle_client(
-    client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
 ) -> None:
     """Handle a single client connection.
 
-    Upon accepting a connection the proxy immediately sends all active
-    HTTP status lines to the client.  It then reads up to 8 KiB of
-    request data to parse custom headers and decide the backend
-    destination.  If ``X-Real-Host`` is present the proxy connects to
-    that host:port; otherwise it calls
-    :func:`probe_backend_from_data` to choose between SSH and OpenVPN.
-    Finally, it establishes a connection to the backend and shuttles
-    data asynchronously between the client and server.  Half‑closures
-    are honoured so that one direction can finish without killing the
-    other.
+    This coroutine performs the following steps:
+
+    #. Enables TCP keepalive on the client socket.
+    #. Sends the handshake status lines (101 and, if enabled, 200) to
+       the client before reading any payload.
+    #. Reads up to 8 KiB of data from the client to parse custom
+       headers ``X‑Real‑Host`` and ``X‑Split``.
+    #. Determines the backend address either from ``X‑Real‑Host`` or by
+       analysing the initial data via :func:`probe_backend_from_data`.
+    #. Optionally consumes a second request if ``X‑Split`` was
+       specified.
+    #. Establishes a connection to the selected backend and shuttles
+       data bidirectionally between the client and server, honouring
+       half‑closures.
     """
-    # Apply TCP keepalive to the client socket if possible
+    # Apply keepalive on the accepted client socket
     with contextlib.suppress(Exception):
         csock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
         apply_tcp_keepalive(csock)
@@ -182,9 +178,20 @@ async def handle_client(
     # Send handshake status lines before reading any payload
     try:
         enabled = load_enabled_statuses()
-        for code in sorted(enabled):
+        # Always include 101 in the handshake
+        handshake_codes = []
+        if 101 not in enabled:
+            handshake_codes.append(101)
+        else:
+            handshake_codes.append(101)
+        # Send 200 only if it is enabled
+        if 200 in enabled:
+            handshake_codes.append(200)
+        for code in handshake_codes:
             reason = HTTP_STATUS.get(code, "OK")
-            client_writer.write(f"HTTP/1.1 {code} {reason}\r\n\r\n".encode())
+            # Compose a proper HTTP response line.  No extra newlines.
+            line = f"HTTP/1.1 {code} {reason}\r\n\r\n"
+            client_writer.write(line.encode())
             await client_writer.drain()
     except Exception as exc:
         logging.error("Falha no handshake com o cliente: %s", exc)
@@ -192,7 +199,7 @@ async def handle_client(
         await client_writer.wait_closed()
         return
 
-    # Now read up to 8KiB of initial data for header parsing
+    # Read up to 8 KiB of initial data for header parsing
     try:
         initial_data = await client_reader.read(8192)
     except Exception as exc:
@@ -240,7 +247,7 @@ async def handle_client(
         except Exception:
             backend_host, backend_port = ("127.0.0.1", 22)
 
-    # If X-Split is present, consume another chunk from the client
+    # If X‑Split is present, consume another chunk from the client
     if x_split_header:
         with contextlib.suppress(Exception):
             await client_reader.read(8192)
@@ -250,7 +257,7 @@ async def handle_client(
         server_reader, server_writer = await asyncio.open_connection(
             backend_host, backend_port
         )
-        # Apply keepalive to the backend socket
+        # Apply keepalive on the backend socket
         with contextlib.suppress(Exception):
             ssock: socket.socket = server_writer.get_extra_info("socket")  # type: ignore
             apply_tcp_keepalive(ssock)
@@ -266,9 +273,15 @@ async def handle_client(
         return
 
     async def forward(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        direction: str,
     ) -> None:
-        """Forward bytes from reader to writer until EOF or error."""
+        """Forward bytes from reader to writer until EOF or error.
+
+        When EOF is seen on the reader, a half‑close is performed on
+        the writer so that the other direction can continue sending.
+        """
         try:
             while True:
                 data = await reader.read(65536)
@@ -310,8 +323,8 @@ async def handle_client(
 async def run_proxy(port: int) -> None:
     """Start the MultiFlow proxy on the specified port.
 
-    Binds an IPv6 socket with dual‑stack enabled (so IPv4 clients can
-    connect) and dispatches each connection to :func:`handle_client`.
+    Binds an IPv6 socket configured for dual‑stack operation and
+    dispatches each incoming connection to :func:`handle_client`.
     """
     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     try:
@@ -319,7 +332,8 @@ async def run_proxy(port: int) -> None:
     except AttributeError:
         pass
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    # Enable keepalive on the listening socket so accepted sockets may inherit it
+    # Enable keepalive on the listening socket so that accepted sockets
+    # may inherit these settings (if the OS supports it)
     with contextlib.suppress(OSError):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     sock.bind(("::", port))
@@ -428,13 +442,16 @@ def toggle_http_status_menu() -> None:
             input("Opção inválida. Pressione Enter para voltar.")
             continue
         code = all_codes[idx - 1]
-        if code in enabled:
-            enabled.remove(code)
-            print(f"> Status {code} desativado.")
+        if code == 101:
+            print("> O status 101 não pode ser desativado.")
         else:
-            enabled.add(code)
-            print(f"> Status {code} ativado.")
-        save_enabled_statuses(enabled)
+            if code in enabled:
+                enabled.remove(code)
+                print(f"> Status {code} desativado.")
+            else:
+                enabled.add(code)
+                print(f"> Status {code} ativado.")
+            save_enabled_statuses(enabled)
         input("Pressione Enter para continuar...")
 
 
@@ -493,7 +510,7 @@ def show_menu() -> None:
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Implementação Python do MultiFlow com menu"
+        description="Implementação Python do MultiFlow com menu corrigido"
     )
     parser.add_argument("--port", type=int, help="Porta de escuta")
     return parser.parse_args()
@@ -502,10 +519,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Program entry point.
 
-    If a port is specified via ``--port`` then the proxy is run on
-    that port; otherwise the interactive menu is shown.  The menu
-    requires root privileges because it manipulates systemd units.
-    Logging is enabled when running as a proxy to aid in debugging.
+    If ``--port`` is provided the proxy runs on that port.  Otherwise the
+    interactive menu is shown.  Logging is configured when running in
+    proxy mode to aid in debugging.
     """
     args = parse_args()
     if args.port is not None:
