@@ -71,59 +71,72 @@ REPO_URL="https://github.com/mycroft440/multiflow.git"
 INSTALL_DIR="/opt/multiflow"
 TMP_DIR="/tmp/multiflow-install-$$"
 
-# 2. Verificação do Sistema Operacional
-if [ ! -f /etc/os-release ]; then
-    error_exit "Não foi possível identificar o sistema operacional."
-fi
-source /etc/os-release
-if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
-    log_warn "Este script é otimizado para Debian/Ubuntu. Alguns pacotes podem variar."
-    if [ -t 0 ]; then
-        read -p "Deseja continuar mesmo assim? (s/n): " -n 1 -r; echo
-        if [[ ! $REPLY =~ ^[Ss]$ ]]; then
-            log_info "Instalação cancelada."
-            exit 0
-        fi
-    else
-        log_warn "A executar em modo não interativo. A continuar automaticamente."
+UPDATE_ONLY=false
+for arg in "$@"; do
+    if [ "$arg" == "--update-only" ]; then
+        UPDATE_ONLY=true
+        log_info "Modo de atualização (--update-only) ativado."
+        break
     fi
+done
+
+if [ "$UPDATE_ONLY" = false ]; then
+    # 2. Verificação do Sistema Operacional
+    if [ ! -f /etc/os-release ]; then
+        error_exit "Não foi possível identificar o sistema operacional."
+    fi
+    source /etc/os-release
+    if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+        log_warn "Este script é otimizado para Debian/Ubuntu. Alguns pacotes podem variar."
+        if [ -t 0 ]; then
+            read -p "Deseja continuar mesmo assim? (s/n): " -n 1 -r; echo
+            if [[ ! $REPLY =~ ^[Ss]$ ]]; then
+                log_info "Instalação cancelada."
+                exit 0
+            fi
+        else
+            log_warn "A executar em modo não interativo. A continuar automaticamente."
+        fi
+    fi
+
+    # 3. Atualização e Instalação de Dependências
+    log_info "A iniciar atualização e limpeza do sistema..."
+    wait_for_apt
+    $SUDO apt-get update -y
+    $SUDO apt-get upgrade -y --with-new-pkgs
+    $SUDO apt-get --fix-broken install -y
+    $SUDO dpkg --configure -a
+
+    log_info "A instalar dependências essenciais..."
+    $SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential
+    $SUDO apt-get autoremove -y
+    $SUDO apt-get clean
+
+    # 4. Clonar o Repositório
+    log_info "A baixar o projeto Multiflow de $REPO_URL..."
+    git clone --depth 1 "$REPO_URL" "$TMP_DIR"
+    cd "$TMP_DIR"
+
+    # 5. Instalação do Multiflow
+    log_info "A iniciar a instalação do Multiflow..."
+    if [ -d "$INSTALL_DIR" ]; then
+        log_warn "Instalação anterior detetada em $INSTALL_DIR. A remover..."
+        $SUDO rm -rf "$INSTALL_DIR"
+    fi
+    $SUDO mkdir -p "$INSTALL_DIR"
+    $SUDO cp -a . "$INSTALL_DIR/"
+
+    # 6. Compilação dos Binários
+    log_info "Etapa de compilação C ignorada (não é mais necessária)."
+
+    cd "$INSTALL_DIR"
+else
+    # Se for --update-only, apenas garantir que estamos no diretório correto
+    if [ ! -d "$INSTALL_DIR" ]; then
+        error_exit "Diretório de instalação ($INSTALL_DIR) não encontrado no modo --update-only."
+    fi
+    cd "$INSTALL_DIR"
 fi
-
-# 3. Atualização e Instalação de Dependências
-log_info "A iniciar atualização e limpeza do sistema..."
-wait_for_apt
-$SUDO apt-get update -y
-$SUDO apt-get upgrade -y --with-new-pkgs
-$SUDO apt-get --fix-broken install -y
-$SUDO dpkg --configure -a
-
-log_info "A instalar dependências essenciais..."
-# REMOVIDO: build-essential, automake, autoconf, libtool, gcc, pois badvpn.c não é mais compilado.
-# REMOVIDO: python3-requests, pois não parece ser usado. Adicionado python3-psutil.
-$SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential
-$SUDO apt-get autoremove -y
-$SUDO apt-get clean
-
-# 4. Clonar o Repositório
-log_info "A baixar o projeto Multiflow de $REPO_URL..."
-git clone --depth 1 "$REPO_URL" "$TMP_DIR"
-cd "$TMP_DIR"
-
-# 5. Instalação do Multiflow
-log_info "A iniciar a instalação do Multiflow..."
-if [ -d "$INSTALL_DIR" ]; then
-    log_warn "Instalação anterior detetada em $INSTALL_DIR. A remover..."
-    $SUDO rm -rf "$INSTALL_DIR"
-fi
-$SUDO mkdir -p "$INSTALL_DIR"
-$SUDO cp -a . "$INSTALL_DIR/"
-
-# 6. Compilação dos Binários
-# REMOVIDO: Bloco de compilação do badvpn.c foi completamente removido, pois o arquivo não existe mais.
-# O projeto agora usa badvpn.sh.
-log_info "Etapa de compilação C ignorada (não é mais necessária)."
-
-cd "$INSTALL_DIR"
 
 # 7. Configuração de Permissões e Shebangs
 log_info "A configurar permissões de execução para os scripts..."
@@ -185,8 +198,10 @@ $SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/h
 $SUDO ln -sf "$INSTALL_DIR/multiflow.py" /usr/local/bin/menu
 
 # 10. Limpeza
-log_info "A limpar ficheiros de instalação temporários..."
-rm -rf "$TMP_DIR"
+if [ "$UPDATE_ONLY" = false ]; then
+    log_info "A limpar ficheiros de instalação temporários..."
+    rm -rf "$TMP_DIR"
+fi
 
 # --- Finalização ---
 echo
@@ -203,12 +218,14 @@ log_info "A instalação do OpenVPN e do BadVPN pode ser feita através dos menu
 echo
 
 # Pergunta se o utilizador deseja iniciar a aplicação
-if [ -t 0 ]; then
-    read -p "Deseja iniciar o Multiflow agora? (s/n): " -n 1 -r; echo
-    if [[ $REPLY =~ ^[Ss]$ ]]; then
-        log_info "A iniciar Multiflow..."
-        /usr/local/bin/multiflow
+if [ "$UPDATE_ONLY" = false ]; then
+    if [ -t 0 ]; then
+        read -p "Deseja iniciar o Multiflow agora? (s/n): " -n 1 -r; echo
+        if [[ $REPLY =~ ^[Ss]$ ]]; then
+            log_info "A iniciar Multiflow..."
+            /usr/local/bin/multiflow
+        fi
+    else
+        log_info "Instalação concluída. Para iniciar, execute \'multiflow\'."
     fi
-else
-    log_info "Instalação concluída. Para iniciar, execute \'multiflow\'."
 fi
