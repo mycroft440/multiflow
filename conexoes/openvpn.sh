@@ -4,6 +4,7 @@
 # Baseado no script original do SSH-PRO @TMYCOMNECTVPN
 # Versão Revisada, Refatorada e Aprimorada (Corrigida para demora em dependências)
 # =================================================================
+
 # --- Variáveis de Cor ---
 readonly RED=$'\e[1;31m'
 readonly GREEN=$'\e[1;32m'
@@ -12,29 +13,33 @@ readonly BLUE=$'\e[1;34m'
 readonly CYAN=$'\e[1;36m'
 readonly WHITE=$'\e[1;37m'
 readonly SCOLOR=$'\e[0m'
+
 # --- Funções de Utilidade ---
 die() {
     echo -e "${RED}[ERRO] $1${SCOLOR}" >&2
     exit "${2:-1}"
 }
+
 warn() {
     echo -e "${YELLOW}[AVISO] $1${SCOLOR}"
 }
+
 success() {
     echo -e "${GREEN}[SUCESSO] $1${SCOLOR}"
 }
+
 fun_bar() {
     local cmd="$1"
     local spinner="/-\\|"
     local i=0
     local timeout=300  # 5min timeout em segundos
-   
-    eval "$cmd" &  # Removido >/dev/null 2>&1 para mostrar outputs reais
+
+    eval "$cmd" &  # Permite outputs reais para monitorar
     local pid=$!
-   
+
     tput civis
     echo -ne "${YELLOW}Aguarde... [${SCOLOR}"
-   
+
     local start_time=$(date +%s)
     while ps -p "$pid" > /dev/null; do
         current_time=$(date +%s)
@@ -47,15 +52,17 @@ fun_bar() {
         sleep 0.2
         echo -ne "\b"
     done
-   
+
     echo -e "${YELLOW}]${SCOLOR} - ${GREEN}Concluído!${SCOLOR}"
     tput cnorm
     wait "$pid" || die "Comando falhou: $cmd"
 }
+
 # --- Verificações Iniciais ---
 check_root() {
     [[ "$EUID" -ne 0 ]] && die "Este script precisa ser executado como ROOT."
 }
+
 check_bash() {
     readlink /proc/$$/exe | grep -q "bash" || die "Execute este script com bash, não com sh."
 }
@@ -64,28 +71,25 @@ check_dependencies() {
     local missing=()
     local packages=("openvpn" "easy-rsa" "iptables" "lsof")
     local checks=("command -v openvpn" "[ -d /usr/share/easy-rsa ] || [ -d /usr/lib/easy-rsa ] || [ -d /usr/lib64/easy-rsa ]" "command -v iptables" "command -v lsof")
-   
-    if [[ "$OS" == "debian" ]]; then
+
+    if [[ "$OS" == "debian" || "$OS" == "ubuntu" ]]; then
         packages+=("iptables-persistent")
         checks+=("command -v iptables-save")
     fi
-   
+
     for i in "${!packages[@]}"; do
         if ! eval "${checks[$i]}"; then
             missing+=("${packages[$i]}")
         fi
     done
-   
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo -e "${YELLOW}Dependências em falta: ${missing[*]}${SCOLOR}"
         echo -ne "${WHITE}Deseja instalá-las automaticamente? [s/N]: ${SCOLOR}"
         read -r install_choice
         if [[ "$install_choice" =~ ^[sS]$ ]]; then
             echo -e "${CYAN}Instalando dependências faltantes... (outputs visíveis para monitorar)${SCOLOR}"
-            if [[ "$OS" == "debian" ]]; then
-                fun_bar "apt update -qq && apt install -y -qq ${missing[*]}"  # -qq para menos verbose, mas outputs ainda visíveis
-
-            fi
+            fun_bar "apt update -qq && apt install -y -qq ${missing[*]}"
            
             local still_missing=()
             for i in "${!packages[@]}"; do
@@ -106,17 +110,19 @@ check_dependencies() {
         warn "Versão do OpenVPN ($ovpn_version) é antiga. Recomendo atualizar para 2.5+ para compatibilidade."
     fi
 }
+
 # --- Detecção de Sistema Operacional ---
 detect_os() {
     [[ -f /etc/os-release ]] || die "Não foi possível detectar o sistema operacional."
     source /etc/os-release
     OS_ID="$ID"
-    OS="debian"
+    OS="$ID"  # Usa o ID real (debian ou ubuntu)
     GROUPNAME="nogroup"
     if [[ "$OS_ID" != "ubuntu" && "$OS_ID" != "debian" ]]; then
         die "Sistema operacional '$OS_ID' não suportado. Este script suporta apenas Debian/Ubuntu."
     fi
 }
+
 cleanup_previous_installation() {
     echo -e "${CYAN}Verificando e limpando instalações anteriores do OpenVPN...${SCOLOR}"
 
@@ -127,13 +133,13 @@ cleanup_previous_installation() {
         service openvpn@server stop 2>/dev/null
     fi
 
-    fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y" 2>/dev/null
+    fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y"
 
-    # Remove iptables rules
+    # Remove regras do iptables
     iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -j MASQUERADE 2>/dev/null
     iptables -D INPUT -i tun+ -j ACCEPT 2>/dev/null
     iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null
-    iptables -D FORWARD -i "$(ip -4 route ls | grep default | grep -Po \'(?<=dev )(\S+)\' | head -1)" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -i "$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
     iptables-save > /etc/iptables/rules.v4 2>/dev/null
     netfilter-persistent save 2>/dev/null
 
@@ -183,6 +189,7 @@ install_openvpn() {
     echo -e "\n${CYAN}Pressione ENTER para voltar ao menu...${SCOLOR}"
     read -r
 }
+
 configure_server() {
     echo -e "${CYAN}A configurar o servidor OpenVPN...${SCOLOR}"
    
@@ -247,21 +254,21 @@ EOF
     chown root:root /etc/openvpn/crl.pem
     chmod 644 /etc/openvpn/crl.pem
 }
+
 configure_firewall() {
     echo -e "${CYAN}A configurar o firewall...${SCOLOR}"
     sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
     sysctl -p >/dev/null || die "Falha ao ativar encaminhamento de IP."
-    if [[ "$OS" = "debian" ]]; then
-        local IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-        [[ -z "$IFACE" ]] && die "Não foi possível determinar a interface de rede."
-        iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE
-        iptables -A INPUT -i tun+ -j ACCEPT
-        iptables -A FORWARD -i tun+ -j ACCEPT
-        iptables -A FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT
-        iptables-save > /etc/iptables/rules.v4 || die "Falha ao salvar regras iptables."
-        netfilter-persistent save || die "Falha ao persistir regras (verifique iptables-persistent)."
-
+    local IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+    [[ -z "$IFACE" ]] && die "Não foi possível determinar a interface de rede."
+    iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE
+    iptables -A INPUT -i tun+ -j ACCEPT
+    iptables -A FORWARD -i tun+ -j ACCEPT
+    iptables -A FORWARD -i "$IFACE" -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT
+    iptables-save > /etc/iptables/rules.v4 || die "Falha ao salvar regras iptables."
+    netfilter-persistent save || die "Falha ao persistir regras (verifique iptables-persistent)."
 }
+
 create_client() {
     local CLIENT_NAME="$1"
    
@@ -314,6 +321,7 @@ $(cat /etc/openvpn/ta.key)
 EOF
     success "Configuração do cliente salva em: ${OVPN_DIR}/${CLIENT_NAME}.ovpn"
 }
+
 revoke_client() {
     cd /etc/openvpn/easy-rsa/ || die "Diretório easy-rsa não encontrado."
    
@@ -358,6 +366,7 @@ revoke_client() {
         warn "Operação cancelada."
     fi
 }
+
 uninstall_openvpn() {
     echo -ne "${RED}Tem CERTEZA que deseja remover o OpenVPN? [s/N]: ${SCOLOR}"
     read -r confirmation
@@ -372,16 +381,13 @@ uninstall_openvpn() {
             service openvpn@server stop 2>/dev/null
         fi
        
-        if [[ "$OS" = "debian" ]]; then
-            fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y"
-            iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -j MASQUERADE 2>/dev/null
-            iptables -D INPUT -i tun+ -j ACCEPT 2>/dev/null
-            iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null
-            iptables -D FORWARD -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
-            iptables-save > /etc/iptables/rules.v4 2>/dev/null
-            netfilter-persistent save 2>/dev/null
-
-        fi
+        fun_bar "apt remove --purge -y openvpn easy-rsa iptables iptables-persistent lsof && apt autoremove -y"
+        iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -j MASQUERADE 2>/dev/null
+        iptables -D INPUT -i tun+ -j ACCEPT 2>/dev/null
+        iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null
+        iptables -D FORWARD -o tun+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null
+        netfilter-persistent save 2>/dev/null
        
         rm -rf /etc/openvpn ~/ovpn-clients
         success "OpenVPN removido com sucesso."
@@ -389,6 +395,7 @@ uninstall_openvpn() {
         warn "Remoção cancelada."
     fi
 }
+
 # --- Menus de Gestão ---
 main_menu() {
     while true; do
@@ -432,14 +439,15 @@ main_menu() {
         [[ -n "$choice" && "$choice" != "0" ]] && echo -e "\n${CYAN}Pressione ENTER para continuar...${SCOLOR}" && read -r
     done
 }
+
 # --- Ponto de Entrada ---
 main() {
     clear
     check_root
     check_bash
-
     detect_os
     check_dependencies
     main_menu
 }
+
 main
