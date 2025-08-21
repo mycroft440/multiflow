@@ -1,168 +1,140 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
-# Script para instalar e configurar o BadVPN, com tratamento de erros aprimorado.
-# Corrigido para listen-addr 0.0.0.0 (acesso externo) e uso de make install.
+# Script para instalação e configuração otimizada do badvpn-udpgw
+# Baseado no guia de Alta Performance e Baixa Latência.
+# ATENÇÃO: Execute este script como root ou com sudo.
 
-# --- Configurações de Segurança e Cores ---
-set -Eeuo pipefail  # Fail-fast: erro em comandos, pipelines, variáveis não definidas; herda ERR em funções
-set -o errtrace     # Herda traps em subshells e funções
+# --- Configurações ---
+MAX_CLIENTS=5000
+MAX_CONN_PER_CLIENT=100
+LISTEN_PORT=7300
+FILE_DESCRIPTOR_LIMIT=65536
 
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-NC="\033[0m"
+# --- Início do Script ---
 
-# --- Funções de Log ---
-function log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+# Garante que o script pare se algum comando falhar
+set -e
 
-function log_error() {
-    echo -e "${RED}[ERRO]${NC} $1" >&2
-}
-
-# --- Tratamento de Erros ---
-# Função chamada no evento ERR: captura código, comando, fonte e linha
-function _on_err() {
-    local exit_code=$?
-    local cmd="${BASH_COMMAND}"
-    local src="${BASH_SOURCE[1]:-$0}"
-    local line="${BASH_LINENO[0]:-$LINENO}"
-    log_error "Erro ($exit_code) em $src:$line => Comando: '$cmd'"
-    log_error "A instalação falhou. Removendo diretório temporário..."
-    # Garante que TMP_DIR existe antes de remover (evita erro unbound)
-    [ -n "${TMP_DIR:-}" ] && [ -d "${TMP_DIR:-}" ] && rm -rf "$TMP_DIR" || true
-    exit "$exit_code"
-}
-
-# Registra o trap com aspas simples para evitar expansão prematura
-trap '_on_err' ERR
-
-# --- Verificação de Root ---
-if [[ $EUID -ne 0 ]]; then
-   log_error "Este script deve ser executado como root!"
-   exit 1
+# Verifica se o script está sendo executado como root
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Este script precisa ser executado como root. Use: sudo ./script.sh" >&2
+  exit 1
 fi
 
-# ==============================================================================
-# 1. Instalação e Configuração Base
-# ==============================================================================
+echo "--- [Iniciando a instalação e configuração do Badvpn-udpgw] ---"
 
-log_info "Iniciando a instalação e configuração do BadVPN..."
+# --- Passo 1: Instalação a Partir do Código-Fonte ---
+echo "--> Passo 1: Instalando dependências e compilando o Badvpn..."
+apt-get update
+apt-get install -y cmake build-essential libnss3-dev libssl-dev git
 
-# Instalar dependências para compilação e execução
-log_info "Instalando dependências (git, cmake, build-essential, screen, pkg-config, libssl-dev, libnspr4-dev, libnss3-dev)..."
-apt-get update -y > /tmp/badvpn_install.log 2>&1
-apt-get install -y git cmake build-essential screen pkg-config libssl-dev libnspr4-dev libnss3-dev >> /tmp/badvpn_install.log 2>&1
+# Clona o repositório (remove o diretório antigo se existir)
+if [ -d "badvpn" ]; then
+  echo "Diretório 'badvpn' encontrado. Removendo para uma clonagem limpa."
+  rm -rf badvpn
+fi
+git clone https://github.com/ambrop72/badvpn.git
 
-# Compilar badvpn-udpgw
-log_info "Compilando badvpn-udpgw a partir do código-fonte..."
-TMP_DIR="/tmp/badvpn-src-$$"
-
-log_info "Clonando o repositório do BadVPN..."
-git clone https://github.com/ambrop72/badvpn.git "$TMP_DIR"
-cd "$TMP_DIR"
-
-log_info "Criando diretório de build..."
-mkdir -p build
-cd build
-
-log_info "Configurando o ambiente de compilação com CMake (somente udpgw)..."
-cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
-
-log_info "Compilando o BadVPN com 'make'..."
+cd badvpn
+mkdir -p build && cd build
+cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_TUN2SOCKS=1 -DBUILD_UDPGW=1
 make
-
-log_info "Instalando o binário com 'make install'..."
 make install
+cd ../.. # Volta para o diretório original
 
-# Verifica se a instalação foi bem-sucedida
-if [[ -f "/usr/local/bin/badvpn-udpgw" ]]; then
-    log_info "badvpn-udpgw instalado com sucesso em /usr/local/bin/badvpn-udpgw"
+echo "Badvpn compilado e instalado com sucesso em /usr/local/bin/"
+
+# --- Passo 2 & 3: Criação e Otimização do Serviço systemd ---
+echo "--> Passo 2 & 3: Criando e otimizando o serviço systemd..."
+
+# Cria o usuário do sistema para o serviço
+if ! id "badvpn" &>/dev/null; then
+  useradd -r -s /bin/false badvpn
+  echo "Usuário 'badvpn' criado."
 else
-    log_error "O binário 'badvpn-udpgw' não foi encontrado. A instalação falhou."
-    exit 1
+  echo "Usuário 'badvpn' já existe."
 fi
 
-# Limpa os arquivos de código-fonte
-log_info "Limpando arquivos de compilação..."
-rm -rf "$TMP_DIR"
-cd / # Retorna para um diretório seguro
-
-# Aplicar ajustes no kernel Linux (sysctl)
-log_info "Aplicando otimizações no kernel Linux (sysctl) para UDP..."
-SYSCTL_CONFIG="/etc/sysctl.conf"
-if ! grep -q "net.core.rmem_max" "$SYSCTL_CONFIG" || true; then  # Evita disparar ERR se grep falhar (saída 1 esperada)
-    echo -e "\n# Otimizações para BadVPN UDP" >> "$SYSCTL_CONFIG"
-    echo "net.core.rmem_max = 4194304" >> "$SYSCTL_CONFIG"
-    echo "net.core.wmem_max = 4194304" >> "$SYSCTL_CONFIG"
-    echo "net.ipv4.udp_mem = 1048576 4194304 8388608" >> "$SYSCTL_CONFIG"
-    log_info "Configurações sysctl adicionadas."
-fi
-sysctl -p > /dev/null 2>&1
-log_info "Configurações sysctl aplicadas."
-
-# Cria o arquivo de serviço systemd para badvpn-udpgw
-SERVICE_FILE="/etc/systemd/system/badvpn-udpgw.service"
-log_info "Criando ou atualizando o serviço systemd para o BadVPN..."
-cat <<EOF > "$SERVICE_FILE"
+# Cria o arquivo de serviço systemd usando um Here Document
+cat <<EOF > /etc/systemd/system/badvpn-udpgw.service
 [Unit]
 Description=BadVPN UDP Gateway
-After=network-online.target
-Wants=network-online.target
+After=network.target
 
 [Service]
-Type=simple
-ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 10000 --client-socket-sndbuf 1048576
+User=badvpn
+Group=badvpn
+ExecStart=/usr/local/bin/badvpn-udpgw \\
+  --listen-addr 127.0.0.1:${LISTEN_PORT} \\
+  --max-clients ${MAX_CLIENTS} \\
+  --max-connections-for-client ${MAX_CONN_PER_CLIENT}
 Restart=always
-RestartSec=2
-User=root
+RestartSec=3
+
+# Aumenta o limite de descritores de arquivos para o serviço. ESSENCIAL!
+LimitNOFILE=${FILE_DESCRIPTOR_LIMIT}
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+echo "Arquivo de serviço '/etc/systemd/system/badvpn-udpgw.service' criado."
+
+# --- Passo 4: Otimização para Latência Ultrabaixa (Kernel) ---
+echo "--> Passo 4: Aplicando otimizações de kernel (sysctl)..."
+
+# Cria o arquivo de configuração do sysctl
+cat <<EOF > /etc/sysctl.d/99-badvpn-optimizations.conf
+# Otimizações para Badvpn-udpgw
+net.core.rmem_max=8388608
+net.core.wmem_max=8388608
+net.core.netdev_max_backlog=250000
+net.core.somaxconn=4096
+net.ipv4.tcp_low_latency=1
+net.ipv4.tcp_timestamps=0
+net.ipv4.tcp_sack=1
+EOF
+
+# Aplica as configurações
+sysctl -p /etc/sysctl.d/99-badvpn-optimizations.conf
+
+echo "Otimizações de kernel aplicadas."
+
+echo "--> Configurando o governador da CPU para 'performance'..."
+apt-get install -y cpufrequtils
+echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils
+systemctl restart cpufrequtils || echo "Não foi possível reiniciar cpufrequtils, pode não ser necessário."
+
+# --- Passo 5: Fortalecimento da Segurança (Firewall com UFW) ---
+echo "--> Passo 5: Configurando o firewall (UFW)..."
+apt-get install -y ufw
+
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow ssh
+ufw allow in on lo to any port ${LISTEN_PORT} proto tcp
+
+# Ativa o UFW de forma não interativa
+ufw --force enable
+
+echo "Firewall UFW configurado e ativado."
+
+# --- Passo 6: Ativação e Início do Serviço ---
+echo "--> Passo 6: Ativando e iniciando o serviço badvpn-udpgw..."
 systemctl daemon-reload
-systemctl enable badvpn-udpgw > /dev/null 2>&1
-log_info "Serviço badvpn-udpgw criado e habilitado para iniciar no boot."
+systemctl enable badvpn-udpgw.service
+systemctl start badvpn-udpgw.service
 
-# ==============================================================================
-# 2. Lógica de Reconfiguração da Porta e Inicialização
-# ==============================================================================
-
-# Se um argumento de porta ($1) for passado, reconfigure e reinicie o serviço.
-if [ ! -z "$1" ]; then
-    NEW_PORT="$1"
-    
-    # Validação simples da porta
-    if ! [[ "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
-        log_error "Porta inválida: $NEW_PORT. Forneça um número entre 1 e 65535."
-        exit 1
-    fi
-    
-    log_info "Reconfigurando a porta do BadVPN para $NEW_PORT..."
-    # Sed melhorado: usa ERE, escapa pontos e limita a porta (2-5 dígitos)
-    sed -E -i "s/--listen-addr 0\.0\.0\.0:[0-9]{2,5}/--listen-addr 0.0.0.0:$NEW_PORT/g" "$SERVICE_FILE"
-    systemctl daemon-reload
-    systemctl restart badvpn-udpgw
-    log_info "Porta do BadVPN alterada para $NEW_PORT e serviço reiniciado."
-else
-    # Se nenhuma porta for passada, apenas garante que o serviço está rodando
-    log_info "Iniciando o serviço BadVPN na porta padrão..."
-    systemctl start badvpn-udpgw
-fi
-
-# Verifica o status final do serviço
-sleep 2 # Dá um tempo para o serviço iniciar
-if systemctl is-active --quiet badvpn-udpgw; then
-    log_info "Operação do BadVPN concluída com sucesso! O serviço está ativo."
-    log_info "Verifique com 'netstat -tuln | grep 7300' ou 'journalctl -u badvpn-udpgw -f' para logs."
-    log_info "Se usar firewall, abra a porta 7300 (ex.: ufw allow 7300)."
-else
-    log_error "O serviço BadVPN falhou ao iniciar. Verifique os logs com: journalctl -u badvpn-udpgw.service -l"
-fi
-
-# --- Checklist de Validação (como comentário para depuração) ---
-# - Verifique trap com: bash -x script.sh (para traçar comandos)
-# - Teste falha intencional: adicione 'false' em algum lugar e veja o handler
-# - Valide sed: echo o SERVICE_FILE antes/depois da substituição
-# - Systemd: systemctl cat badvpn-udpgw.service para inspecionar
+echo ""
+echo "--- [ Instalação e Configuração Concluídas! ] ---"
+echo ""
+echo "O serviço badvpn-udpgw foi instalado, configurado e iniciado."
+echo "Para verificar o status, use o comando:"
+echo "  sudo systemctl status badvpn-udpgw.service"
+echo ""
+echo "Para verificar se está escutando na porta correta (127.0.0.1:${LISTEN_PORT}), use:"
+echo "  ss -tulpn | grep badvpn"
+echo ""
+echo "Para monitorar perdas de pacotes UDP (importante!), use:"
+echo "  netstat -su | grep 'packet receive errors'"
+echo ""
