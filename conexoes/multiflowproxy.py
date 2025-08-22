@@ -121,7 +121,7 @@ def apply_tcp_keepalive(
 # Headers/utilidades HTTP (parse genérico e seleção de backend)
 # ---------------------------------------------------------------------------
 
-def parse_headers(text: str) -> Dict[str, str]:
+def parse_headers(text: str, data: bytes) -> Dict[str, str]:  # Adicionado data para precisão bytes
     """Parse tolerante de cabeçalhos (case-insensitive)."""
     headers: Dict[str, str] = {}
     # isola somente o cabeçalho (até CRLF-CRLF)
@@ -139,8 +139,8 @@ def parse_headers(text: str) -> Dict[str, str]:
     # guarda também quantos bytes do corpo já vieram no initial_data
     headers["_body_offset_bytes"] = str(0)
     if head_end != -1:
-        # bytes do corpo já presentes em initial (após separador)
-        headers["_body_offset_bytes"] = str(len(text) - (head_end + sep_len))
+        # bytes do corpo já presentes em initial (após separador) - use len(data) para precisão
+        headers["_body_offset_bytes"] = str(len(data) - (head_end + sep_len))
     return headers
 
 
@@ -236,7 +236,7 @@ async def handle_client(
 
     # 3) Parse geral de headers a partir do probe
     header_text = probe_data.decode("utf-8", errors="ignore")
-    headers = parse_headers(header_text)
+    headers = parse_headers(header_text, probe_data)  # Passa probe_data para fix len bytes
 
     # 3a) Ajuste opcional de keepalive com base em "Keep-Alive: timeout=X"
     ka = headers.get("keep-alive", "")
