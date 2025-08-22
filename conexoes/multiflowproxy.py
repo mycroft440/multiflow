@@ -180,35 +180,8 @@ def choose_backend_from_headers(h: Dict[str, str]) -> Tuple[str, int]:
     return ("", -1)
 
 
-async def consume_request_body_if_needed(
-    initial: bytes,
-    headers: Dict[str, str],
-    reader: asyncio.StreamReader,
-    *,
-    max_extra: int = 64 * 1024,
-) -> None:
-    """Se houver Content-Length, consome o corpo restante (limitado a max_extra)."""
-    cl = headers.get("content-length")
-    if not cl:
-        return
-    try:
-        total = int(cl)
-    except ValueError:
-        return
-    already_in_initial = 0
-    try:
-        already_in_initial = int(headers.get("_body_offset_bytes", "0"))
-    except ValueError:
-        already_in_initial = 0
-    remaining = max(0, total - max(0, already_in_initial))
-    if remaining <= 0:
-        return
-    to_read = min(remaining, max_extra)
-    if to_read <= 0:
-        return
-    with contextlib.suppress(Exception):
-        await reader.readexactly(to_read)
-
+# Removido: consume_request_body_if_needed – para alinhar ao Rust, não consumimos body extra; assumimos que dados reais são forwardados após probe.
+# Isso previne descarte de payload do protocolo.
 
 # ---------------------------------------------------------------------------
 # Backend selection heuristics
@@ -241,7 +214,7 @@ async def handle_client(
         csock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
         apply_tcp_keepalive(csock)
 
-    # === HANDSHAKE (lógica corrigida): 101 imediato -> sonda -> demais status ===
+    # === HANDSHAKE alinhado ao Rust: 101 imediato -> leitura inicial (descartada) -> 200/outros -> probe (leitura com timeout, forwardada) ===
     # 1) Envia 101 Switching Protocols imediatamente (antes de ler qualquer payload)
     try:
         # 101 é sempre enviado primeiro
@@ -254,23 +227,20 @@ async def handle_client(
         await client_writer.wait_closed()
         return
 
-    # 2) Leitura "sonda" curta com timeout (até 8 KiB) para parse de headers/heurísticas
+    # 2) Leitura inicial curta (como no Rust: lê e descarta, assumindo request falso)
     try:
-        try:
-            initial_data = await asyncio.wait_for(client_reader.read(8192), timeout=1.0)
-        except asyncio.TimeoutError:
-            initial_data = b""
+        initial_data = await client_reader.read(1024)  # Alinhado ao buffer de 1024 no Rust
     except Exception as exc:
         logging.error("Falha ao ler dados iniciais: %s", exc)
         client_writer.close()
         await client_writer.wait_closed()
         return
 
-    # 3) Parse geral de headers a partir da sonda
+    # 3) Parse geral de headers a partir da leitura inicial (mantido para features extras)
     header_text = initial_data.decode("utf-8", errors="ignore")
     headers = parse_headers(header_text)
 
-    # 3a) Ajuste opcional de keepalive com base em "Keep-Alive: timeout=X"
+    # 3a) Ajuste opcional de keepalive com base em "Keep-Alive: timeout=X" (mantido)
     ka = headers.get("keep-alive", "")
     if ka and csock:
         timeout_val: Optional[int] = None
@@ -284,10 +254,10 @@ async def handle_client(
         if isinstance(timeout_val, int):
             apply_tcp_keepalive(csock, idle=timeout_val)
 
-    # 4) Envio dos demais status após a sonda:
+    # 4) Envio dos demais status após a leitura inicial:
     #    - 100 Continue se (a) habilitado OU (b) cliente enviou "Expect: 100-continue"
     #    - 200 Connection Established se habilitado
-    #    - Demais códigos habilitados (ascendentes), exceto 101/200/100 já enviados
+    #    - Demais códigos habilitados (ascendentes), exceto 101
     try:
         enabled = load_enabled_statuses()
 
@@ -299,7 +269,7 @@ async def handle_client(
         if send_100:
             to_send.append(100)
 
-        # 200 Connection Established (se habilitado)
+        # 200 Connection Established (se habilitado) – alinhado ao envio de 200 no Rust
         if 200 in enabled:
             to_send.append(200)
 
@@ -322,17 +292,21 @@ async def handle_client(
         await client_writer.wait_closed()
         return
 
-    # 5) Marcadores de split: X-Split e/ou [split]/[delay_split] no cabeçalho
-    marker_found = ("[split]" in header_text) or ("[delay_split]" in header_text)
-    if headers.get("x-split") or marker_found:
-        with contextlib.suppress(Exception):
-            await client_reader.read(8192)
+    # 5) Probe com timeout para inspecionar dados reais sem consumir permanentemente (leitura, mas forward depois)
+    # Alinhado ao peek com timeout no Rust: lê dados subsequentes para detecção, mas forwarda para backend
+    try:
+        probe_data = await asyncio.wait_for(client_reader.read(8192), timeout=1.0)
+    except asyncio.TimeoutError:
+        probe_data = b""
+    except Exception as exc:
+        logging.error("Falha ao probe dados: %s", exc)
+        client_writer.close()
+        await client_writer.wait_closed()
+        return
 
-    # 6) Se houver Content-Length, consome o corpo residual (sem repassar ao backend)
-    with contextlib.suppress(Exception):
-        await consume_request_body_if_needed(initial_data, headers, client_reader)
+    # Removido: marcadores de split e consume body – para alinhar ao Rust, não consumimos extra; forwardamos probe_data e resto diretamente.
 
-    # 7) Determina backend por cabeçalho preferencial; fallback para heurística
+    # 6) Determina backend por cabeçalho preferencial; fallback para heurística no probe_data (mantido feature extra, mas probe em probe_data como peek)
     backend_host: str
     backend_port: int
     host_from_hdr, port_from_hdr = choose_backend_from_headers(headers)
@@ -340,11 +314,11 @@ async def handle_client(
         backend_host, backend_port = host_from_hdr, port_from_hdr
     else:
         try:
-            backend_host, backend_port = await probe_backend_from_data(initial_data)
+            backend_host, backend_port = await probe_backend_from_data(probe_data)  # Usar probe_data em vez de initial_data
         except Exception:
             backend_host, backend_port = ("127.0.0.1", 22)
 
-    # 8) Conecta ao backend
+    # 7) Conecta ao backend
     try:
         server_reader, server_writer = await asyncio.open_connection(backend_host, backend_port)
         with contextlib.suppress(Exception):
@@ -355,6 +329,11 @@ async def handle_client(
         client_writer.close()
         await client_writer.wait_closed()
         return
+
+    # 8) Forward dos dados probed para o backend (alinhado ao peek não-consumidor no Rust: garante que dados inspecionados sejam enviados)
+    if probe_data:
+        server_writer.write(probe_data)
+        await server_writer.drain()
 
     # 9) Encaminhamento bidirecional (túnel)
     async def forward(
@@ -418,10 +397,6 @@ async def run_proxy(port: int) -> None:
     async with server:
         await server.serve_forever()
 
-
-# ---------------------------------------------------------------------------
-# Systemd service and menu helpers
-# ---------------------------------------------------------------------------
 
 PORTS_FILE = Path("/opt/multiflow/ports")
 
