@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+MultiFlow proxy server with flexible handshake ordering and extended header support.
+
+This script implements a tunelling proxy similar to the MultiFlow project. It can
+listen on a specified port and forward traffic to a backend (typically SSH
+on port 22 or OpenVPN on port 1194) after performing an HTTP‑style handshake.
+The handshake sends HTTP status codes (101 and optionally 200) to satisfy
+clients expecting a proxy or WebSocket upgrade. The order of the handshake is
+dynamic per connection: clients can indicate preference via the custom
+``HandShake‑First`` header (``1`` to receive handshake after sending data,
+``0`` to receive handshake before sending data). If the header is absent,
+the proxy uses automatic detection: if the client sends data immediately,
+the handshake is sent afterwards; otherwise, it is sent first.
+
+This version adds support for additional headers and markers to better parse
+complex payloads used by some MultiFlow scripts. Specifically:
+
+* ``Host`` and ``X‑Online‑Host`` headers are now recognised as alternatives
+  to ``X‑Real‑Host`` when determining the backend address. If any of
+  these headers is present, the first non‑empty one is used. Hosts may be
+  specified with an optional ``:port`` suffix and may include full URLs
+  (``http://...``), in which case only the hostname is extracted. When
+  multiple hosts are separated by spaces or semicolons, the first is taken.
+* Presence of the ``X‑Split`` header still triggers an extra read of 8192
+  bytes from the client to consume additional payload segments. In addition,
+  the proxy now scans the initial request for special markers ``[split]``
+  or ``[delay_split]``. If either marker is found, another 8192 bytes are
+  read from the client to consume delayed segments before connecting to the
+  backend.
+
+The script also includes a menu for managing multiple proxy instances via
+``systemd`` services. Run this script as root without arguments to access
+the menu; run with ``--port <PORT>`` to start a proxy directly on a port.
+"""
 
 import argparse
 import asyncio
@@ -15,7 +49,8 @@ from typing import Tuple, Set
 # HTTP status management
 # ---------------------------------------------------------------------------
 
-# Mapa de códigos HTTP usados no handshake
+# Map of status codes to reason phrases. 101 and 200 are used in
+# the handshake, but other codes can be toggled in the menu for completeness.
 HTTP_STATUS = {
     100: "Continue",
     101: "Switching Protocols",
@@ -28,14 +63,22 @@ HTTP_STATUS = {
     503: "Service Unavailable",
 }
 
-# Arquivo que armazena quais status estão habilitados
+# File that records which status codes are enabled. The proxy always sends 101;
+# if 200 is enabled it will send that after 101. All other enabled codes are
+# ignored by the handshake routine.
 STATUS_FILE = Path("/opt/multiflow/http_status")
-# Conjunto padrão de status habilitados (101 sempre habilitado)
+# Default enabled statuses include 200 to satisfy clients that expect both
+# 101 and 200 responses. Status 101 is always treated as enabled regardless
+# of this set.
 DEFAULT_ENABLED: Set[int] = {101, 200}
 
+
 def load_enabled_statuses() -> Set[int]:
-    """Carrega o conjunto de códigos HTTP ativos a partir de STATUS_FILE.
-    Se o arquivo não existir ou estiver vazio, retorna o conjunto padrão."""
+    """Load the set of active HTTP status codes from ``STATUS_FILE``.
+
+    If the file does not exist or cannot be read, the default set is returned.
+    Only codes present in ``HTTP_STATUS`` are retained.
+    """
     try:
         STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     except PermissionError:
@@ -61,14 +104,17 @@ def load_enabled_statuses() -> Set[int]:
         save_enabled_statuses(enabled)
     return enabled
 
+
 def save_enabled_statuses(enabled: Set[int]) -> None:
-    """Salva os códigos HTTP ativos em STATUS_FILE."""
+    """Save the HTTP status codes into ``STATUS_FILE``."""
     with contextlib.suppress(Exception):
         STATUS_FILE.write_text("\n".join(str(c) for c in sorted(enabled)) + "\n")
+
 
 # ---------------------------------------------------------------------------
 # TCP keepalive tuning
 # ---------------------------------------------------------------------------
+
 
 def apply_tcp_keepalive(
     sock: socket.socket,
@@ -78,7 +124,11 @@ def apply_tcp_keepalive(
     count: int = 3,
     nodelay: bool = True,
 ) -> None:
-    """Configura opções agressivas de keepalive em um socket TCP."""
+    """Configure aggressive TCP keepalive on a socket.
+
+    Enable SO_KEEPALIVE and, if available, set idle time, interval, and count.
+    Also set TCP_NODELAY to disable Nagle's algorithm for more immediate sends.
+    """
     if not sock:
         return
     with contextlib.suppress(OSError):
@@ -99,13 +149,18 @@ def apply_tcp_keepalive(
         with contextlib.suppress(OSError):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
+
 # ---------------------------------------------------------------------------
-# Seleção do backend
+# Backend selection
 # ---------------------------------------------------------------------------
 
+
 async def probe_backend_from_data(initial_data: bytes) -> Tuple[str, int]:
-    """Decide o backend (host, porta) com base nos primeiros bytes recebidos.
-    Vazio ou contendo 'SSH' escolhe porta 22; caso contrário porta 1194."""
+    """Decide backend (host, port) based on the first bytes received.
+
+    If the initial data is empty or contains "SSH", default to port 22.
+    Otherwise default to port 1194. The host defaults to 127.0.0.1.
+    """
     default_backend = ("127.0.0.1", 22)
     alt_backend = ("127.0.0.1", 1194)
     try:
@@ -116,92 +171,175 @@ async def probe_backend_from_data(initial_data: bytes) -> Tuple[str, int]:
         return default_backend
     return alt_backend
 
+
 # ---------------------------------------------------------------------------
-# Tratamento de conexões de clientes
+# Helpers for headers and handshake
 # ---------------------------------------------------------------------------
+
+
+def find_header(text: str, header: str) -> str:
+    """Find an HTTP header (case-insensitive) and return its value.
+
+    The header name should not include the trailing colon. If multiple headers
+    of the same name exist, the first one encountered is returned.
+    """
+    for line in text.split("\r\n"):
+        if line.lower().startswith(header.lower() + ":"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+async def send_handshake(writer: asyncio.StreamWriter) -> None:
+    """Send HTTP status codes 101 and (optionally) 200 to the client."""
+    enabled = load_enabled_statuses()
+    codes = [101] + ([200] if 200 in enabled else [])
+    for code in codes:
+        reason = HTTP_STATUS.get(code, "OK")
+        writer.write(f"HTTP/1.1 {code} {reason}\r\n\r\n".encode())
+    await writer.drain()
+
+
+# ---------------------------------------------------------------------------
+# Client connection handling
+# ---------------------------------------------------------------------------
+
+# Time in seconds to wait for client data before assuming handshake-first mode
+HANDSHAKE_TIMEOUT = 0.5
+
 
 async def handle_client(
     client_reader: asyncio.StreamReader,
     client_writer: asyncio.StreamWriter,
 ) -> None:
-    """Rotina para tratar cada cliente conectado."""
-    # Aplicar keepalive no socket do cliente
+    """Handle an incoming client connection.
+
+    Uses dynamic handshake ordering based on the ``HandShake-First`` header
+    and automatic detection of clients that start sending data immediately.
+    Supports multiple header names (``X-Real-Host``, ``Host``,
+    ``X-Online-Host``) for specifying the backend, and honours special
+    markers ``[split]`` and ``[delay_split]`` to read additional data
+    segments.
+    """
+    # Apply keepalive options on client socket
     with contextlib.suppress(Exception):
         csock: socket.socket = client_writer.get_extra_info("socket")  # type: ignore
         apply_tcp_keepalive(csock)
 
-    # Enviar handshake: sempre 101 e, opcionalmente, 200
+    # Attempt to read initial data quickly to detect client behaviour
+    initial_data = b""
+    data_received = False
     try:
-        enabled = load_enabled_statuses()
-        handshake_codes = [101]
-        if 200 in enabled:
-            handshake_codes.append(200)
-        for code in handshake_codes:
-            reason = HTTP_STATUS.get(code, "OK")
-            line = f"HTTP/1.1 {code} {reason}\r\n\r\n"
-            client_writer.write(line.encode())
-        await client_writer.drain()
-    except Exception as exc:
-        logging.error("Falha no handshake com o cliente: %s", exc)
-        client_writer.close()
-        await client_writer.wait_closed()
-        return
+        initial_data = await asyncio.wait_for(
+            client_reader.read(8192), timeout=HANDSHAKE_TIMEOUT
+        )
+        data_received = bool(initial_data)
+    except asyncio.TimeoutError:
+        data_received = False
 
-    # Ler até 8 KiB de dados iniciais para extrair cabeçalhos
-    try:
-        initial_data = await client_reader.read(8192)
-    except Exception as exc:
-        logging.error("Falha ao ler dados iniciais: %s", exc)
-        client_writer.close()
-        await client_writer.wait_closed()
-        return
+    # Decide whether to send handshake before or after reading payload
+    handshake_after = False  # False -> send handshake before reading payload
+    header_text = ""
+    if data_received:
+        header_text = initial_data.decode("utf-8", errors="ignore")
+        hs_header = find_header(header_text, "HandShake-First")
+        if hs_header:
+            # If header present, obey its value ("1" or "0")
+            handshake_after = (hs_header == "1")
+        else:
+            # No explicit header, but client sent data; assume handshake after
+            handshake_after = True
+    else:
+        # Client didn't send data within timeout; send handshake immediately
+        handshake_after = False
 
-    # Extrair texto para buscar cabeçalhos X‑Real‑Host e X‑Split
-    header_text = initial_data.decode("utf-8", errors="ignore")
+    # If handshake should be sent before reading payload
+    if not handshake_after:
+        await send_handshake(client_writer)
+        # If we haven't read any data yet, read now to process headers
+        if not data_received:
+            try:
+                initial_data = await client_reader.read(8192)
+                header_text = initial_data.decode("utf-8", errors="ignore")
+            except Exception as exc:
+                logging.error("Falha ao ler dados iniciais: %s", exc)
+                client_writer.close()
+                await client_writer.wait_closed()
+                return
+    else:
+        # Handshake will be sent after reading payload; header_text already set
+        pass
 
-    def find_header(text: str, header: str) -> str:
-        idx = text.find(header + ": ")
-        if idx == -1:
-            return ""
-        idx = text.find(":", idx)
-        value = text[idx + 2 :]
-        end = value.find("\r\n")
-        if end == -1:
-            return ""
-        return value[:end]
+    # Parse headers for backend selection. Recognise multiple header names.
+    x_real_host = find_header(header_text, "X-Real-Host")
+    host_header = find_header(header_text, "Host")
+    xonline_header = find_header(header_text, "X-Online-Host")
 
-    host_port_header = find_header(header_text, "X-Real-Host")
-    x_split_header = find_header(header_text, "X-Split")
+    # Determine which header to use: X-Real-Host > Host > X-Online-Host
+    header_candidate = ""
+    for candidate in (x_real_host, host_header, xonline_header):
+        if candidate:
+            header_candidate = candidate
+            break
 
-    # Determinar endereço de backend
-    if host_port_header:
-        if ":" in host_port_header:
-            hp_host, hp_port_str = host_port_header.rsplit(":", 1)
+    backend_host: str
+    backend_port: int
+    if header_candidate:
+        # Some payloads include full URLs or multiple hosts separated by spaces or semicolons.
+        # Take the first token and strip schema and path.
+        # e.g. "http://example.com:8080/index" -> "example.com:8080"
+        #       "example.com:22 some.other" -> "example.com:22"
+        token = header_candidate.split(";", 1)[0].split()[0]
+        # Remove URL scheme if present
+        if token.lower().startswith("http://"):
+            token = token[7:]
+        elif token.lower().startswith("https://"):
+            token = token[8:]
+        # Remove path after '/' if present
+        if "/" in token:
+            token = token.split("/", 1)[0]
+        # Now split into host and port if colon exists
+        if ":" in token:
+            hp_host, hp_port_str = token.rsplit(":", 1)
             try:
                 backend_port = int(hp_port_str)
             except ValueError:
                 backend_port = 22
             backend_host = hp_host
         else:
-            backend_host = host_port_header
+            backend_host = token
             backend_port = 22
     else:
+        # Fallback to dynamic probe based on initial data
         try:
             backend_host, backend_port = await probe_backend_from_data(initial_data)
         except Exception:
             backend_host, backend_port = ("127.0.0.1", 22)
 
-    # Se X‑Split estiver presente, consome outro pedaço de dados
-    if x_split_header:
+    # Check for X-Split header or special [split]/[delay_split] markers
+    x_split_header = find_header(header_text, "X-Split")
+    # Determine if markers appear in header text
+    marker_found = ("[split]" in header_text) or ("[delay_split]" in header_text)
+    if x_split_header or marker_found:
+        # Consume another chunk of data to align streams with client expectations
         with contextlib.suppress(Exception):
             await client_reader.read(8192)
 
-    # Conectar ao backend
+    # If handshake was deferred, send it now
+    if handshake_after:
+        try:
+            await send_handshake(client_writer)
+        except Exception as exc:
+            logging.error("Falha no handshake com o cliente: %s", exc)
+            client_writer.close()
+            await client_writer.wait_closed()
+            return
+
+    # Connect to the selected backend
     try:
         server_reader, server_writer = await asyncio.open_connection(
             backend_host, backend_port
         )
-        # Aplicar keepalive no socket do backend
+        # Apply keepalive on backend socket
         with contextlib.suppress(Exception):
             ssock: socket.socket = server_writer.get_extra_info("socket")  # type: ignore
             apply_tcp_keepalive(ssock)
@@ -221,50 +359,40 @@ async def handle_client(
         writer: asyncio.StreamWriter,
         direction: str,
     ) -> None:
-        """Encaminha bytes do reader para o writer até EOF ou erro."""
+        """Forward bytes from reader to writer until EOF or error."""
         try:
             while True:
                 data = await reader.read(65536)
                 if not data:
-                    # Half close
-                    try:
-                        if writer.can_write_eof():
-                            writer.write_eof()
-                            await writer.drain()
-                        else:
-                            wsock: socket.socket = writer.get_extra_info("socket")  # type: ignore
-                            if wsock:
-                                with contextlib.suppress(OSError):
-                                    wsock.shutdown(socket.SHUT_WR)
-                    except Exception as exc:
-                        logging.debug("Half-close %s: %s", direction, exc)
                     break
                 writer.write(data)
                 await writer.drain()
         except Exception as exc:
             logging.debug("Erro no fluxo %s: %s", direction, exc)
 
-    # Criar tarefas para encaminhar dados nos dois sentidos
+    # Create tasks to forward data in both directions concurrently
     client_to_server = asyncio.create_task(
         forward(client_reader, server_writer, "cliente->servidor")
     )
     server_to_client = asyncio.create_task(
         forward(server_reader, client_writer, "servidor->cliente")
     )
-    # Aguardar ambas as direções
     await asyncio.gather(client_to_server, server_to_client, return_exceptions=True)
-    # Fechar sockets
+
+    # Close connections
     for w in (server_writer, client_writer):
         with contextlib.suppress(Exception):
             w.close()
             await w.wait_closed()
 
+
 # ---------------------------------------------------------------------------
-# Inicialização do proxy
+# Proxy startup and systemd integration
 # ---------------------------------------------------------------------------
 
+
 async def run_proxy(port: int) -> None:
-    """Inicia o proxy MultiFlow na porta especificada."""
+    """Start the proxy on the specified port, listening on IPv4 and IPv6."""
     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
@@ -282,20 +410,22 @@ async def run_proxy(port: int) -> None:
         await server.serve_forever()
 
 # ---------------------------------------------------------------------------
-# Helpers de systemd e menu interativo
+# Helpers for systemd and menu management
 # ---------------------------------------------------------------------------
 
 PORTS_FILE = Path("/opt/multiflow/ports")
 
+
 def is_port_in_use(port: int) -> bool:
-    """Retorna True se a porta estiver em uso localmente."""
+    """Check if the given port is already in use locally."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.5)
         result = sock.connect_ex(("127.0.0.1", port))
         return result == 0
 
+
 def add_proxy_port(port: int) -> None:
-    """Cria e inicia um serviço systemd rodando o proxy na porta especificada."""
+    """Create and enable a systemd service for running the proxy on this port."""
     if is_port_in_use(port):
         print(f"A porta {port} já está em uso.")
         return
@@ -333,8 +463,9 @@ WantedBy=multi-user.target
         f.write(f"{port}\n")
     print(f"Porta {port} aberta com sucesso.")
 
+
 def del_proxy_port(port: int) -> None:
-    """Para e remove o serviço systemd da porta especificada."""
+    """Stop and remove the systemd service associated with the port."""
     subprocess.run(["systemctl", "disable", f"proxy{port}.service"], check=False)
     subprocess.run(["systemctl", "stop", f"proxy{port}.service"], check=False)
     service_file_path = Path(f"/etc/systemd/system/proxy{port}.service")
@@ -347,8 +478,9 @@ def del_proxy_port(port: int) -> None:
         PORTS_FILE.write_text("\n".join(lines) + ("\n" if lines else ""))
     print(f"Porta {port} fechada com sucesso.")
 
+
 def toggle_http_status_menu() -> None:
-    """Menu interativo para ativar/desativar códigos HTTP do handshake."""
+    """Interactive menu for toggling HTTP status codes used in the handshake."""
     while True:
         os.system("clear")
         print("------------------------------------------------")
@@ -384,8 +516,9 @@ def toggle_http_status_menu() -> None:
             save_enabled_statuses(enabled)
         input("Pressione Enter para continuar...")
 
+
 def show_menu() -> None:
-    """Menu interativo para gerenciar instâncias de proxy e códigos HTTP."""
+    """Interactive menu to manage proxy instances and HTTP status codes."""
     if not PORTS_FILE.exists():
         PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
         PORTS_FILE.touch()
@@ -431,21 +564,26 @@ def show_menu() -> None:
         else:
             input("Opção inválida. Pressione Enter para voltar ao menu.")
 
+
 # ---------------------------------------------------------------------------
-# Ponto de entrada
+# Entry point
 # ---------------------------------------------------------------------------
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Implementação Python do MultiFlow com menu corrigido"
+        description=(
+            "Implementação Python do MultiFlow com detecção de handshake e suporte a múltiplos cabeçalhos"
+        )
     )
     parser.add_argument("--port", type=int, help="Porta de escuta")
     return parser.parse_args()
 
+
 def main() -> None:
     args = parse_args()
     if args.port is not None:
-        # Executa o proxy diretamente na porta fornecida
+        # Run directly on the specified port
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s [%(levelname)s] %(message)s",
@@ -455,11 +593,12 @@ def main() -> None:
         except KeyboardInterrupt:
             logging.info("Proxy encerrado pelo usuário")
     else:
-        # Sem --port, mostra o menu (requer privilégios de root)
+        # Without --port, show the interactive menu (requires root)
         if os.geteuid() != 0:
             print("Este script deve ser executado como root para o menu.")
             sys.exit(1)
         show_menu()
+
 
 if __name__ == "__main__":
     main()
