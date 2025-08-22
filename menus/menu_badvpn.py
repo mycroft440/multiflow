@@ -203,16 +203,32 @@ def main_menu():
                     status = "Porta inválida"
             
             elif choice == "2" and manager.is_installed():
+                # Ativar BBR se não estiver ativo
+                if bbr_manager.check_status() != 'bbr':
+                    success, msg = bbr_manager.enable()
+                    if not success:
+                        status = f"Erro ao ativar BBR: {msg}. Serviço iniciado mesmo assim."
+                    else:
+                        status = "BBR ativado e Serviço iniciado."
+                else:
+                    status = "Serviço iniciado."
                 subprocess.run(['systemctl', 'start', 'badvpn-udpgw'], check=False)
-                status = "Serviço iniciado"
             
             elif choice == "3" and manager.is_installed():
                 subprocess.run(['systemctl', 'stop', 'badvpn-udpgw'], check=False)
                 status = "Serviço parado"
             
             elif choice == "4" and manager.is_installed():
+                # Ativar BBR se não estiver ativo
+                if bbr_manager.check_status() != 'bbr':
+                    success, msg = bbr_manager.enable()
+                    if not success:
+                        status = f"Erro ao ativar BBR: {msg}. Serviço reiniciado mesmo assim."
+                    else:
+                        status = "BBR ativado e Serviço reiniciado."
+                else:
+                    status = "Serviço reiniciado."
                 subprocess.run(['systemctl', 'restart', 'badvpn-udpgw'], check=False)
-                status = "Serviço reiniciado"
             
             elif choice == "5":
                 # Submenu BBR
