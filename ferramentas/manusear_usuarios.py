@@ -10,7 +10,7 @@ import random
 import time
 import json
 from datetime import datetime, timedelta
-import readline  # Adicionado para pré-preencher o input da senha
+import readline  # Para pré-preencher inputs (senha e dias)
 
 # Path setup
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,9 +28,11 @@ except ImportError as e:
 DB_FILE = '/root/ssh_users.db'
 CREDENTIALS_FILE = '/root/.ssh_credentials.json'  # Arquivo para armazenar credenciais temporariamente
 
+
 def generate_random_password():
     """Gera uma senha aleatória de 4 dígitos."""
     return str(random.randint(1000, 9999))
+
 
 def save_credentials(username, password):
     """Salva as credenciais em arquivo JSON para exibição posterior"""
@@ -54,6 +56,7 @@ def save_credentials(username, password):
     # Define permissões restritivas para o arquivo
     os.chmod(CREDENTIALS_FILE, 0o600)
 
+
 def get_saved_password(username):
     """Recupera a senha salva de um usuário"""
     if os.path.exists(CREDENTIALS_FILE):
@@ -64,6 +67,7 @@ def get_saved_password(username):
         except:
             pass
     return 'N/A'
+
 
 def remove_saved_credentials(username):
     """Remove as credenciais salvas de um usuário"""
@@ -80,11 +84,14 @@ def remove_saved_credentials(username):
         except:
             pass
 
+
 def validar_username(username):
     return re.match(r'^[a-z][a-z0-9_-]{2,31}$', username) is not None
 
+
 def validar_senha(senha):
     return len(senha) >= 4
+
 
 def usuario_existe(username):
     try:
@@ -92,6 +99,7 @@ def usuario_existe(username):
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
+
 
 def verify_user_password(username):
     """Verifica se o usuário tem senha configurada corretamente"""
@@ -118,6 +126,7 @@ def verify_user_password(username):
     except:
         return False, "Erro ao verificar"
 
+
 def get_ssh_users():
     """Retorna lista de usuários SSH gerenciáveis ordenada alfabeticamente"""
     users = []
@@ -134,9 +143,11 @@ def get_ssh_users():
     
     return sorted(users)  # Retorna lista ordenada alfabeticamente
 
+
 def get_total_users():
     """Conta o total de usuários SSH gerenciáveis"""
     return len(get_ssh_users())
+
 
 def get_active_users():
     """Conta usuários ativos (não bloqueados)"""
@@ -149,6 +160,7 @@ def get_active_users():
         except:
             pass
     return active
+
 
 def build_main_frame(status_msg=""):
     s = []
@@ -179,6 +191,7 @@ def build_main_frame(status_msg=""):
     
     s.append(footer_line(status_msg))
     return "".join(s)
+
 
 def build_user_selection_frame(title, action_color=MC.YELLOW_GRADIENT):
     """Frame genérico para seleção de usuários"""
@@ -233,6 +246,7 @@ def build_user_selection_frame(title, action_color=MC.YELLOW_GRADIENT):
     s.append(footer_line())
     return "".join(s), users
 
+
 def build_confirm_removal_frame(username):
     s = []
     s.append(simple_header("CONFIRMAR REMOÇÃO"))
@@ -283,6 +297,7 @@ def build_confirm_removal_frame(username):
     s.append(footer_line("Aguardando confirmação..."))
     return "".join(s)
 
+
 def build_expiry_change_frame(username):
     """Frame para alterar data de expiração de um usuário específico"""
     s = []
@@ -299,12 +314,12 @@ def build_expiry_change_frame(username):
         info.append(f"{MC.CYAN_LIGHT}Expiração atual:{MC.RESET} {MC.WHITE}{current_expiry}{MC.RESET}")
         info.append("")
         info.append(f"{MC.WHITE}Digite o número de dias de validade a partir de hoje{MC.RESET}")
-        info.append(f"{MC.WHITE}Deixe vazio para remover a expiração (nunca expira){MC.RESET}")
+        info.append(f"{MC.WHITE}Pressione Enter para aceitar 30 ou digite 'x' para nunca expirar (permanente){MC.RESET}")
         info.append("")
         info.append(f"{MC.YELLOW_GRADIENT}Exemplos:{MC.RESET}")
         info.append(f"  • 30 = expira em 30 dias")
         info.append(f"  • 90 = expira em 90 dias")
-        info.append(f"  • (vazio) = nunca expira")
+        info.append(f"  • x = permanente (nunca expira)")
         
     except Exception as e:
         info.append(f"{MC.RED_GRADIENT}Erro ao obter informações: {e}{MC.RESET}")
@@ -312,6 +327,7 @@ def build_expiry_change_frame(username):
     s.append(modern_box("NOVA DATA DE EXPIRAÇÃO", info, "", MC.YELLOW_GRADIENT, MC.YELLOW_LIGHT))
     s.append(footer_line())
     return "".join(s)
+
 
 def build_create_user_frame():
     s = []
@@ -323,26 +339,33 @@ def build_create_user_frame():
         f"{MC.WHITE}• Começar com letra minúscula{MC.RESET}",
         f"{MC.WHITE}• Usar apenas: a-z, 0-9, _, -{MC.RESET}",
         "",
-        f"{MC.CYAN_LIGHT}A senha será gerada automaticamente, mas pode ser editada no input{MC.RESET}"
+        f"{MC.CYAN_LIGHT}A senha será gerada automaticamente, mas pode ser editada no input{MC.RESET}",
+        f"{MC.CYAN_LIGHT}Dias virão pré-preenchidos com 30; use 'x' para permanente{MC.RESET}",
     ], "", MC.GREEN_GRADIENT, MC.GREEN_LIGHT))
     s.append(footer_line())
     return "".join(s)
 
+
 def build_user_created_frame(username, password, limite, expiracao, dias):
     s = []
     s.append(simple_header("USUÁRIO CRIADO COM SUCESSO"))
+
+    # exibe "permanente" quando aplicável
+    dias_info = dias if isinstance(dias, str) else f"{dias} dias"
+
     s.append(modern_box("DADOS DO NOVO USUÁRIO", [
         f"{MC.GREEN_GRADIENT}✓ Usuário criado e configurado com sucesso!{MC.RESET}",
         "",
         f"{MC.CYAN_LIGHT}Login:{MC.RESET} {MC.YELLOW_GRADIENT}{username}{MC.RESET}",
         f"{MC.CYAN_LIGHT}Senha:{MC.RESET} {MC.YELLOW_GRADIENT}{password}{MC.RESET}",
         f"{MC.CYAN_LIGHT}Conexões:{MC.RESET} {MC.WHITE}{limite}{MC.RESET}",
-        f"{MC.CYAN_LIGHT}Expiração:{MC.RESET} {MC.WHITE}{expiracao} ({dias} dias){MC.RESET}",
+        f"{MC.CYAN_LIGHT}Expiração:{MC.RESET} {MC.WHITE}{expiracao} ({dias_info}){MC.RESET}",
         "",
         f"{MC.RED_GRADIENT}IMPORTANTE: Anote a senha! Ela foi salva temporariamente.{MC.RESET}"
     ], "", MC.GREEN_GRADIENT, MC.GREEN_LIGHT))
     s.append(footer_line("Usuário criado com sucesso!"))
     return "".join(s)
+
 
 def build_list_users_frame():
     s = []
@@ -377,13 +400,13 @@ def build_list_users_frame():
             limite = limites.get(username, "1")
             
             users_data.append(f"{MC.CYAN_LIGHT}•{MC.RESET} {MC.WHITE}{username:<15}{MC.RESET} "
-                            f"{MC.GRAY}Limite: {limite:<3}{MC.RESET} "
-                            f"{MC.GRAY}Exp: {expiracao:<12}{MC.RESET} "
-                            f"{status}")
+                              f"{MC.GRAY}Limite: {limite:<3}{MC.RESET} "
+                              f"{MC.GRAY}Exp: {expiracao:<12}{MC.RESET} "
+                              f"{status}")
             
         except subprocess.CalledProcessError:
             users_data.append(f"{MC.CYAN_LIGHT}•{MC.RESET} {MC.WHITE}{username:<15}{MC.RESET} "
-                            f"{MC.RED_GRADIENT}Erro ao obter informações{MC.RESET}")
+                              f"{MC.RED_GRADIENT}Erro ao obter informações{MC.RESET}")
 
     if users_data:
         users_data.append("")
@@ -398,6 +421,7 @@ def build_list_users_frame():
     
     s.append(footer_line())
     return "".join(s)
+
 
 def build_credentials_frame():
     s = []
@@ -438,6 +462,7 @@ def build_credentials_frame():
     s.append(footer_line())
     return "".join(s)
 
+
 def criar_usuario():
     TerminalManager.render(build_create_user_frame())
     TerminalManager.before_input()
@@ -476,29 +501,44 @@ def criar_usuario():
         TerminalManager.after_input()
         return False, "Limite inválido"
     
+    # Dias de validade: pré-preencher "30" e aceitar 'x' para permanente
+    readline.set_startup_hook(lambda: readline.insert_text("30"))
     try:
-        dias_input = input(f"{MC.CYAN_GRADIENT}Dias de validade [30]: {MC.RESET}") or "30"
-        dias = int(dias_input)
-        if dias < 1: raise ValueError()
-    except ValueError:
-        TerminalManager.after_input()
-        return False, "Número de dias inválido"
+        dias_input = input(f"{MC.CYAN_GRADIENT}Dias de validade [30 | x=permanente]: {MC.RESET}").strip()
+    finally:
+        readline.set_startup_hook(None)
+
+    if not dias_input:
+        dias_input = "30"
+    
+    permanente = dias_input.lower() == 'x'
+    
+    if permanente:
+        expiracao = None             # sem data (permanente)
+        dias_display = "permanente"  # para exibição
+    else:
+        try:
+            dias = int(dias_input)
+            if dias < 1: raise ValueError()
+        except ValueError:
+            TerminalManager.after_input()
+            return False, "Número de dias inválido"
+        expiracao = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
+        dias_display = dias
     
     TerminalManager.after_input()
     
-    expiracao = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
-    
     try:
-        # Cria o usuário
-        result = subprocess.run(
-            ["useradd", "-m", "-s", "/bin/bash", "-e", expiracao, username],
-            check=True,
-            capture_output=True,
-            text=True
-        )
+        # Monta comando useradd; só passa -e se houver expiração
+        useradd_cmd = ["useradd", "-m", "-s", "/bin/bash"]
+        if not permanente:
+            useradd_cmd += ["-e", expiracao]
+        useradd_cmd.append(username)
+        
+        subprocess.run(useradd_cmd, check=True, capture_output=True, text=True)
         
         # Define a senha usando chpasswd
-        result = subprocess.run(
+        subprocess.run(
             ["chpasswd"],
             input=f"{username}:{password}",
             text=True,
@@ -507,7 +547,7 @@ def criar_usuario():
         )
         
         # Verifica se a senha foi definida corretamente
-        has_password, pwd_status = verify_user_password(username)
+        has_password, _ = verify_user_password(username)
         if not has_password:
             # Tenta definir a senha novamente usando passwd
             subprocess.run(
@@ -517,6 +557,10 @@ def criar_usuario():
                 check=False,
                 capture_output=True
             )
+        
+        # Se permanente, força "nunca expira"
+        if permanente:
+            subprocess.run(["chage", "-E", "-1", username], check=True, capture_output=True, text=True)
         
         # Salva as credenciais
         save_credentials(username, password)
@@ -531,12 +575,14 @@ def criar_usuario():
     with open(DB_FILE, 'a') as f:
         f.write(f"{username} {limite}\n")
     
-    TerminalManager.render(build_user_created_frame(username, password, limite, expiracao, dias))
+    expiracao_display = "Nunca" if permanente else expiracao
+    TerminalManager.render(build_user_created_frame(username, password, limite, expiracao_display, dias_display))
     TerminalManager.before_input()
     input(f"\n{MC.BOLD}Pressione Enter para continuar...{MC.RESET}")
     TerminalManager.after_input()
     
     return True, f"Usuário {username} criado com sucesso"
+
 
 def remover_usuario():
     # Renderiza a lista de usuários
@@ -599,6 +645,7 @@ def remover_usuario():
     
     return True, f"Usuário {username} removido com sucesso"
 
+
 def alterar_senha():
     TerminalManager.before_input()
     username = input(f"\n{MC.CYAN_GRADIENT}Nome do usuário: {MC.RESET}")
@@ -636,6 +683,7 @@ def alterar_senha():
     
     return True, f"Senha alterada. Nova senha: {password}"
 
+
 def alterar_data_expiracao():
     # Renderiza a lista de usuários
     frame_content, users = build_user_selection_frame("ALTERAR DATA DE EXPIRAÇÃO", MC.YELLOW_GRADIENT)
@@ -666,11 +714,19 @@ def alterar_data_expiracao():
     # Mostra tela de alteração de expiração
     TerminalManager.render(build_expiry_change_frame(username))
     TerminalManager.before_input()
-    dias_input = input(f"\n{MC.YELLOW_GRADIENT}Dias de validade (vazio=nunca): {MC.RESET}")
+
+    # Pré-preenche "30" e permite 'x' para permanente
+    readline.set_startup_hook(lambda: readline.insert_text("30"))
+    try:
+        dias_input = input(f"\n{MC.YELLOW_GRADIENT}Dias de validade [30 | x=permanente]: {MC.RESET}").strip()
+    finally:
+        readline.set_startup_hook(None)
+    if not dias_input:
+        dias_input = "30"
     TerminalManager.after_input()
     
-    if not dias_input:
-        expiracao_param = "never"
+    if dias_input.lower() == 'x':
+        expiracao_param = "-1"          # -1 = nunca expira
         expiracao_display = "Nunca"
     else:
         try:
@@ -687,6 +743,7 @@ def alterar_data_expiracao():
         return False, f"Erro ao alterar expiração: {e}"
     
     return True, f"Expiração de {username} alterada para: {expiracao_display}"
+
 
 def alterar_limite_conexoes():
     TerminalManager.before_input()
@@ -723,6 +780,7 @@ def alterar_limite_conexoes():
     
     return True, f"Limite alterado para {limite} conexões"
 
+
 def listar_usuarios():
     TerminalManager.render(build_list_users_frame())
     TerminalManager.before_input()
@@ -730,12 +788,14 @@ def listar_usuarios():
     TerminalManager.after_input()
     return True, "Listagem concluída"
 
+
 def ver_credenciais():
     TerminalManager.render(build_credentials_frame())
     TerminalManager.before_input()
     input(f"\n{MC.BOLD}Pressione Enter para voltar...{MC.RESET}")
     TerminalManager.after_input()
     return True, "Credenciais exibidas"
+
 
 def main():
     if os.geteuid() != 0:
@@ -782,6 +842,7 @@ def main():
     
     finally:
         TerminalManager.leave_alt_screen()
+
 
 if __name__ == "__main__":
     main()
