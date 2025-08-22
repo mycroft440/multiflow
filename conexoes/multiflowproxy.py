@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-MultiFlow proxy com handshake dividido:
-- Handshake-primeiro: envia **apenas 101** antes de ler a payload; o restante (ex.: 200) é enviado depois de ler/processar.
-- Handshake-depois: lê a payload primeiro e só então envia todos os códigos (101 e, se habilitado, 200).
+MultiFlow proxy – compatibilidade para clientes “security”:
+
+- Handshake-primeiro (cliente espera status antes): envia **somente**
+  `HTTP/1.0 200 Connection established` imediatamente; não envia mais status depois.
+- Handshake-depois (cliente fala primeiro): lê payload e então envia
+  os status padrão (101 e, se habilitado, 200).
 
 Inclui:
 - Detecção automática (timeout curto).
 - Cabeçalho HandShake-First: 1 (ler antes) / 0 (enviar antes).
 - Suporte a X-Real-Host, Host e X-Online-Host para escolher backend.
-- Consumo de marcadores [split]/[delay_split] e cabeçalho X-Split.
+- Consumo de [split]/[delay_split] e cabeçalho X-Split.
 - Encaminhamento bidirecional e menu via systemd.
 """
 
@@ -73,18 +76,22 @@ def save_enabled_statuses(enabled: Set[int]) -> None:
         STATUS_FILE.write_text("\n".join(str(c) for c in sorted(enabled)) + "\n")
 
 def get_handshake_codes() -> list[int]:
-    """Retorna a lista de códigos a usar no handshake (apenas 101 e, opcionalmente, 200)."""
+    """Lista de códigos padrão para o handshake “depois” (101 e, opcional, 200)."""
     enabled = load_enabled_statuses()
     codes = [101]
     if 200 in enabled:
         codes.append(200)
     return codes
 
+def build_status_line(code: int, *, http10: bool = False, reason_override: str | None = None) -> bytes:
+    version = "HTTP/1.0" if http10 else "HTTP/1.1"
+    reason = reason_override if reason_override is not None else HTTP_STATUS.get(code, "OK")
+    return f"{version} {code} {reason}\r\n\r\n".encode()
+
 async def send_statuses(writer: asyncio.StreamWriter, codes: list[int]) -> None:
-    """Envia exatamente os códigos informados, na ordem fornecida."""
+    """Envia os códigos informados (HTTP/1.1, razões do mapa)."""
     for code in codes:
-        reason = HTTP_STATUS.get(code, "OK")
-        writer.write(f"HTTP/1.1 {code} {reason}\r\n\r\n".encode())
+        writer.write(build_status_line(code))
     await writer.drain()
 
 # ---------------------------------------------------------------------------
@@ -169,7 +176,7 @@ async def handle_client(
         data_received = False
 
     header_text = ""
-    handshake_after = False  # False => enviar 101 antes; True => ler antes
+    handshake_after = False  # False => enviar status antes; True => ler antes
 
     if data_received:
         header_text = initial_data.decode("utf-8", errors="ignore")
@@ -183,20 +190,20 @@ async def handle_client(
         # Sem dados no timeout => cliente espera status
         handshake_after = False
 
-    # Conjunto de códigos do handshake
-    all_codes = get_handshake_codes()
-    codes_after = [c for c in all_codes if c != 101]
-
-    # 2) Fluxo: handshake-primeiro => envia **só 101**, depois lê payload
+    # 2) Handshake-primeiro: envia apenas 200 (HTTP/1.0) e não envia mais status depois
     if not handshake_after:
         try:
-            await send_statuses(client_writer, [101])  # <--- APENAS 101 ANTES
+            # Formato mais aceito por clientes “security”
+            line = build_status_line(200, http10=True, reason_override="Connection established")
+            client_writer.write(line)
+            await client_writer.drain()
         except Exception as exc:
-            logging.error("Falha ao enviar 101 inicial: %s", exc)
+            logging.error("Falha ao enviar 200 inicial: %s", exc)
             client_writer.close()
             await client_writer.wait_closed()
             return
-        # Agora ler payload inicial
+
+        # Agora ler payload inicial para extrair cabeçalhos/marcadores
         try:
             initial_data = await client_reader.read(8192)
             header_text = initial_data.decode("utf-8", errors="ignore")
@@ -205,7 +212,7 @@ async def handle_client(
             client_writer.close()
             await client_writer.wait_closed()
             return
-    # 3) Fluxo: handshake-depois => já temos initial_data/header_text
+    # 3) Handshake-depois: já temos initial_data/header_text
 
     # Extrair possíveis cabeçalhos/markers
     x_real_host = find_header(header_text, "X-Real-Host")
@@ -245,18 +252,16 @@ async def handle_client(
         with contextlib.suppress(Exception):
             await client_reader.read(8192)
 
-    # 4) Se o handshake foi adiado (handshake-depois), envia tudo agora;
-    #    se foi “antes”, envia **o restante** (ex.: 200) agora.
-    try:
-        if handshake_after:
-            await send_statuses(client_writer, all_codes)   # 101 e, se ativo, 200
-        elif codes_after:
-            await send_statuses(client_writer, codes_after) # restante (ex.: 200) depois da leitura
-    except Exception as exc:
-        logging.error("Falha ao enviar status de handshake: %s", exc)
-        client_writer.close()
-        await client_writer.wait_closed()
-        return
+    # 4) Se o modo for handshake-depois, envia agora os status padrão (101 e, se ativo, 200)
+    if handshake_after:
+        try:
+            await send_statuses(client_writer, get_handshake_codes())
+        except Exception as exc:
+            logging.error("Falha ao enviar status (modo handshake-depois): %s", exc)
+            client_writer.close()
+            await client_writer.wait_closed()
+            return
+    # (No modo handshake-primeiro não enviamos mais status para evitar travas/erros)
 
     # 5) Conexão ao backend e encaminhamento
     try:
@@ -457,7 +462,7 @@ def show_menu() -> None:
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="MultiFlow com handshake 101-antes e restante-depois")
+    p = argparse.ArgumentParser(description="MultiFlow compatível com clientes 'security' (200 antes)")
     p.add_argument("--port", type=int, help="Porta de escuta")
     return p.parse_args()
 
