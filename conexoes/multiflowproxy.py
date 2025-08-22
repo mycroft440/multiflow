@@ -528,4 +528,77 @@ def toggle_http_status_menu() -> None:
 
 
 def show_menu() -> None:
-    
+    """Menu interativo para gerenciar portas e status HTTP."""
+    if not PORTS_FILE.exists():
+        PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PORTS_FILE.touch()
+    while True:
+        os.system("clear")
+        print("------------------------------------------------")
+        print(f"|{'MULTIFLOW PROXY':^47}|")
+        print("------------------------------------------------")
+        if PORTS_FILE.stat().st_size == 0:
+            print(f"| Portas(s): {'nenhuma':<34}|")
+        else:
+            with PORTS_FILE.open() as f:
+                ports = [line.strip() for line in f if line.strip()]
+            active_ports = ' '.join(ports)
+            print(f"| Portas(s):{active_ports:<35}|")
+        print("------------------------------------------------")
+        print("| 1 - Abrir Porta                     |")
+        print("| 2 - Fechar Porta                    |")
+        print("| 3 - Ativar/Desativar HTTP Status    |")
+        print("| 0 - Sair                            |")
+        print("------------------------------------------------")
+        option = input(" --> Selecione uma opção: ").strip()
+        if option == '1':
+            port_input = input("Digite a porta: ").strip()
+            while not port_input.isdigit():
+                print("Digite uma porta válida.")
+                port_input = input("Digite a porta: ").strip()
+            port = int(port_input)
+            add_proxy_port(port)
+            input("> Porta ativada com sucesso. Pressione Enter para voltar ao menu.")
+        elif option == '2':
+            port_input = input("Digite a porta: ").strip()
+            while not port_input.isdigit():
+                print("Digite uma porta válida.")
+                port_input = input("Digite a porta: ").strip()
+            port = int(port_input)
+            del_proxy_port(port)
+            input("> Porta desativada com sucesso. Pressione Enter para voltar ao menu.")
+        elif option == '3':
+            toggle_http_status_menu()
+        elif option == '0':
+            sys.exit(0)
+        else:
+            input("Opção inválida. Pressione Enter para voltar ao menu.")
+
+
+def parse_args() -> argparse.Namespace:
+    """Argumentos de linha de comando."""
+    parser = argparse.ArgumentParser(
+        description="MultiFlow Proxy – handshake 101 imediato + sequência de status pós-sonda"
+    )
+    parser.add_argument("--port", type=int, help="Porta de escuta")
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Entrada do programa (modo proxy com --port, senão menu)."""
+    args = parse_args()
+    if args.port is not None:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+        try:
+            asyncio.run(run_proxy(args.port))
+        except KeyboardInterrupt:
+            logging.info("Proxy encerrado pelo usuário")
+    else:
+        if os.geteuid() != 0:
+            print("Este script deve ser executado como root para o menu.")
+            sys.exit(1)
+        show_menu()
+
+
+if __name__ == "__main__":
+    main()
