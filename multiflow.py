@@ -460,14 +460,18 @@ def build_connections_frame(status_msg=""):
     s.append("\n")
     s.append(modern_box("GERENCIAR CONEXÕES", [], Icons.NETWORK, MC.CYAN_GRADIENT, MC.CYAN_LIGHT))
     s.append("\n")
-    # Ao construir o menu de conexões, removemos os ícones das opções e
-    # ajustamos a ordem das entradas conforme solicitado. Agora a
-    # segunda posição é "MultiFlow Proxy" e a terceira é "ProxySocks".
-    s.append(menu_option("1", "Openvpn", "", MC.GREEN_GRADIENT))
-    s.append(menu_option("2", "MultiFlow Proxy", "", MC.BLUE_GRADIENT))
-    s.append(menu_option("3", "ProxySocks", "", MC.PURPLE_GRADIENT))
+    s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}Protocolos{MC.RESET}\n")
+    s.append(menu_option("1", "OpenVPN", "", MC.GREEN_GRADIENT))
+    s.append(menu_option("2", "SlowDNS", "", MC.GREEN_GRADIENT))
+    s.append(menu_option("3", "Hysteria", "", MC.GREEN_GRADIENT))
+    s.append(menu_option("4", "V2ray", "", MC.GREEN_GRADIENT))
+    s.append(menu_option("5", "Xray", "", MC.GREEN_GRADIENT))
     s.append("\n")
-    # Para a opção de voltar ao menu principal, removemos o ícone
+    s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}Proxys Multiprotocolo{MC.RESET}\n")
+    s.append(menu_option("6", "Multi-Flow Proxy", "", MC.BLUE_GRADIENT))
+    s.append(menu_option("7", "Rusty Proxy", "", MC.PURPLE_GRADIENT))
+    s.append(menu_option("8", "DragonCore Proxy", "", MC.PURPLE_GRADIENT))
+    s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", "", MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
     return "".join(s)
@@ -554,7 +558,6 @@ def conexoes_menu():
         TerminalManager.after_input()
 
         if choice == "1":
-            # Mantemos a opção 1 para OpenVPN
             TerminalManager.leave_alt_screen()
             try:
                 menu_openvpn.main_menu()
@@ -562,29 +565,82 @@ def conexoes_menu():
                 TerminalManager.enter_alt_screen()
             status = "OpenVPN: operação concluída."
         elif choice == "2":
-            # A opção 2 agora executa MultiFlow Proxy
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                slowdns_path = os.path.join(root, 'conexoes', 'slowdns.py')
+                subprocess.run([sys.executable, slowdns_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar SlowDNS: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "SlowDNS: operação concluída."
+        elif choice == "3":
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                hysteria_path = os.path.join(root, 'conexoes', 'hysteria.py')
+                subprocess.run([sys.executable, hysteria_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar Hysteria: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "Hysteria: operação concluída."
+        elif choice == "4":
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                v2ray_path = os.path.join(root, 'conexoes', 'v2ray.py')
+                subprocess.run([sys.executable, v2ray_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar V2ray: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "V2ray: operação concluída."
+        elif choice == "5":
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                xray_path = os.path.join(root, 'conexoes', 'xray.py')
+                subprocess.run([sys.executable, xray_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar Xray: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "Xray: operação concluída."
+        elif choice == "6":
             TerminalManager.leave_alt_screen()
             try:
                 root = _find_multiflow_root()
                 multiflowproxy_path = os.path.join(root, 'conexoes', 'multiflowproxy.py')
                 subprocess.run([sys.executable, multiflowproxy_path], check=True)
             except Exception as e:
-                print(f"Erro ao executar MultiFlow Proxy: {e}")
+                print(f"Erro ao executar Multi-Flow Proxy: {e}")
             finally:
                 TerminalManager.enter_alt_screen()
-            status = "MultiFlow Proxy: operação concluída."
-        elif choice == "3":
-            # A opção 3 passa a executar ProxySocks
+            status = "Multi-Flow Proxy: operação concluída."
+        elif choice == "7":
             TerminalManager.leave_alt_screen()
             try:
                 root = _find_multiflow_root()
-                proxysocks_path = os.path.join(root, 'conexoes', 'proxysocks.py')
-                subprocess.run([sys.executable, proxysocks_path], check=True)
+                rustyproxy_path = os.path.join(root, 'conexoes', 'rustyproxy.py')
+                subprocess.run([sys.executable, rustyproxy_path], check=True)
             except Exception as e:
-                print(f"Erro ao executar ProxySocks: {e}")
+                print(f"Erro ao executar Rusty Proxy: {e}")
             finally:
                 TerminalManager.enter_alt_screen()
-            status = "ProxySocks: operação concluída."
+            status = "Rusty Proxy: operação concluída."
+        elif choice == "8":
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                dragoncoreproxy_path = os.path.join(root, 'conexoes', 'dragoncoreproxy.py')
+                subprocess.run([sys.executable, dragoncoreproxy_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar DragonCore Proxy: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "DragonCore Proxy: operação concluída."
         elif choice == "0":
             return
         else:
@@ -728,4 +784,3 @@ def main_menu():
 # ==================== EXECUÇÃO ====================
 if __name__ == "__main__":
     main_menu()
-
