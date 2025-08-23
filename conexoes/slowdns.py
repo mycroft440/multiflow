@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-DNS‑AGN Python Manager
+DNS-AGN Python Manager
 ======================
 
-This module provides a Python re‑implementation of the original
-DNS‑AGN project.  The upstream repository is a collection of bash
+This module provides a Python re-implementation of the original
+DNS-AGN project.  The upstream repository is a collection of bash
 scripts used to install and manage a DNSTT (SlowDNS) server.  Those
-scripts download a pre‑built `dns-server` binary, configure
+scripts download a pre-built `dns-server` binary, configure
 dependencies, open firewall ports, update `resolv.conf` to use
 Cloudflare, generate or import key pairs, and start the DNS tunnel in
 screen sessions.  They also provide an interactive menu that allows
@@ -15,9 +15,9 @@ Dropbear and SOCKS), start/stop/restart the tunnel, inspect
 configuration information and remove or update the installation.  For
 example, the bash installer downloads a number of helper scripts and
 the `dns-server` binary into ``/etc/slowdns`` and marks them as
-executable《294821352446467】 L46-L65《.  It also opens ports in
-firewalld for the various services《294821352446467】 L73-L79《 and
-temporarily sets Cloudflare DNS by editing ``/etc/resolv.conf``《294821352446467】 L84-L89《.
+executable[294821352446467 L46-L65].  It also opens ports in
+firewalld for the various services[294821352446467 L73-L79] and
+temporarily sets Cloudflare DNS by editing ``/etc/resolv.conf``[294821352446467 L84-L89].
 
 This Python module attempts to replicate that behaviour in a more
 structured way.  All interactive input/output is handled via the
@@ -35,7 +35,7 @@ The original bash project was created by @Laael and modified by
 @KhaledAGN.  This Python rewrite was prepared by **@mycroftchat**, as
 requested by the user.  The logic closely follows the upstream
 scripts such as ``install``, ``slowdns``, ``slowdns-ssh`` and the
-``startdns`` helpers《294821352446467】 L46-L65《《508339094020233】 L72-L122《《88752286916456】 L28-L33《.
+``startdns`` helpers[294821352446467 L46-L65][508339094020233 L72-L122][88752286916456 L28-L33].
 
 """
 
@@ -50,7 +50,7 @@ from typing import Optional
 
 
 class DNSAGNManager:
-    """A Python re‑implementation of the DNS‑AGN management scripts.
+    """A Python re-implementation of the DNS-AGN management scripts.
 
     Each instance of this class exposes methods to install the core
     manager, install service flavours (SSH, SSL, Dropbear and SOCKS),
@@ -99,7 +99,7 @@ class DNSAGNManager:
             # When not root we only print the command to avoid
             # accidental modifications to the host.
             if os.geteuid() != 0:
-                print("[DRY‑RUN]", " ".join(command))
+                print("[DRY-RUN]", " ".join(command))
                 return subprocess.CompletedProcess(command, returncode=0)
             return subprocess.run(command, check=check)
         except FileNotFoundError:
@@ -139,7 +139,7 @@ class DNSAGNManager:
             return
         update_cmd = ["apt", "update"]
         install_cmd = ["apt", "install", "-y"] + packages
-        print("Updating package lists…")
+        print("Updating package lists...")
         self.run_command(update_cmd)
         print(f"Installing packages: {', '.join(packages)}")
         self.run_command(install_cmd)
@@ -147,8 +147,8 @@ class DNSAGNManager:
     def configure_firewall(self) -> None:
         """Open the required ports in firewalld.
 
-        The original bash installer uses a one‑liner to add multiple
-        ports to the public zone《294821352446467】 L73-L79《.  Here we add
+        The original bash installer uses a one-liner to add multiple
+        ports to the public zone[294821352446467 L73-L79].  Here we add
         them sequentially for clarity.  If firewalld is not present
         the commands will be skipped.
         """
@@ -168,19 +168,19 @@ class DNSAGNManager:
 
         This matches the behaviour of the bash installer which backs
         up the current ``resolv.conf``, writes a new nameserver entry
-        and then re‑enables systemd‑resolved《294821352446467】 L84-L89《.
+        and then re-enables systemd-resolved[294821352446467 L84-L89].
         """
         resolv = Path("/etc/resolv.conf")
         backup = Path("/etc/resolv.conf.bkp")
         if os.geteuid() != 0:
-            print("[DRY‑RUN] Backing up and updating /etc/resolv.conf")
+            print("[DRY-RUN] Backing up and updating /etc/resolv.conf")
             return
         try:
             if resolv.exists() and not backup.exists():
                 shutil.copy2(resolv, backup)
             with open(resolv, "w", encoding="utf-8") as fp:
                 fp.write("nameserver 1.1.1.1\n")
-            # Restart systemd‑resolved to apply changes
+            # Restart systemd-resolved to apply changes
             self.run_command(["systemctl", "disable", "systemd-resolved.service"])
             self.run_command(["systemctl", "stop", "systemd-resolved.service"])
             self.run_command(["systemctl", "enable", "systemd-resolved.service"])
@@ -192,12 +192,12 @@ class DNSAGNManager:
         """Restore resolv.conf to a sensible default when removing slowdns.
 
         The original remove script writes ``nameserver 8.8.8.8`` to
-        ``/etc/resolv.conf`` and then re‑enables systemd‑resolved
-        service《985502298734345】 L42-L47《.
+        ``/etc/resolv.conf`` and then re-enables systemd-resolved
+        service[985502298734345 L42-L47].
         """
         resolv = Path("/etc/resolv.conf")
         if os.geteuid() != 0:
-            print("[DRY‑RUN] Restoring DNS resolver to 8.8.8.8")
+            print("[DRY-RUN] Restoring DNS resolver to 8.8.8.8")
             return
         with open(resolv, "w", encoding="utf-8") as fp:
             fp.write("nameserver 8.8.8.8\n")
@@ -208,8 +208,8 @@ class DNSAGNManager:
         """Launch the dns-server binary in a detached screen session.
 
         This mirrors the ``startdns`` helper scripts which use
-        ``screen -dmS slowdns dns-server -udp :5300 -privkey-file …``,
-        substituting the appropriate local port for SSH/SSL/Dropbear/SOCKS《88752286916456】 L28-L33《.
+        ``screen -dmS slowdns dns-server -udp :5300 -privkey-file ...``,
+        substituting the appropriate local port for SSH/SSL/Dropbear/SOCKS[88752286916456 L28-L33].
         """
         # Build the command exactly as the bash script does
         cmd = [
@@ -227,7 +227,7 @@ class DNSAGNManager:
         """Terminate the running dns-server screen session if any.
 
         The original ``stopdns`` script greps for a screen named
-        ``slowdns`` and sends a kill signal《51916410494299】 L29-L33《.  Here we
+        ``slowdns`` and sends a kill signal[51916410494299 L29-L33].  Here we
         accomplish the same via ``screen -X quit``.
         """
         # Query running screen sessions
@@ -244,7 +244,7 @@ class DNSAGNManager:
 
         This mirrors the behaviour of the ``restartdns`` scripts which
         kill the running session and then start a new one with the
-        correct local port《460523677091378】 L28-L36《.
+        correct local port[460523677091378 L28-L36].
         """
         self.stop_dns_server()
         time.sleep(2)
@@ -260,7 +260,7 @@ class DNSAGNManager:
         installs dependencies, creates the ``/etc/slowdns`` directory,
         downloads helper scripts and the dns-server binary, sets
         permissions, opens firewall ports and configures DNS
-        forwarding《294821352446467】 L46-L65《《294821352446467】 L73-L79《《294821352446467】 L84-L89《.
+        forwarding[294821352446467 L46-L65][294821352446467 L73-L79][294821352446467 L84-L89].
         """
         print("=== Installing SlowDNS Manager ===")
         # Basic dependencies used across all variants
@@ -269,7 +269,7 @@ class DNSAGNManager:
         if os.geteuid() == 0:
             self.SLOWDNS_DIR.mkdir(parents=True, exist_ok=True)
         else:
-            print(f"[DRY‑RUN] Would create directory {self.SLOWDNS_DIR}")
+            print(f"[DRY-RUN] Would create directory {self.SLOWDNS_DIR}")
         # Download core binary and management scripts
         files_to_download = [
             ("dns-server", self.SLOWDNS_DIR / "dns-server"),
@@ -301,12 +301,12 @@ class DNSAGNManager:
         variant:
             One of ``'ssh'``, ``'ssl'``, ``'drop'`` or ``'socks'``.  It
             corresponds to the subdirectory in the upstream repository
-            where the variant‑specific ``startdns`` and ``restartdns``
-            scripts reside《508339094020233】 L72-L90《.
+            where the variant-specific ``startdns`` and ``restartdns``
+            scripts reside[508339094020233 L72-L90].
         local_port:
             The TCP port on localhost to which the dns-server will
             forward connections (22 for SSH, 443 for SSL, 8080 for
-            Dropbear, 80 for SOCKS)《88752286916456】 L28-L33《.
+            Dropbear, 80 for SOCKS)[88752286916456 L28-L33].
         """
         print(f"=== Installing SlowDNS {variant.upper()} ===")
         # Update and install required packages
@@ -328,7 +328,7 @@ class DNSAGNManager:
             with open(infons, "w", encoding="utf-8") as fp:
                 fp.write(nameserver + "\n")
         else:
-            print(f"[DRY‑RUN] Would write nameserver {nameserver} to {self.SLOWDNS_DIR}/infons")
+            print(f"[DRY-RUN] Would write nameserver {nameserver} to {self.SLOWDNS_DIR}/infons")
         # Replace placeholder in the downloaded scripts so they refer to the chosen NS
         for script_path in (start_script, restart_script):
             try:
@@ -353,9 +353,9 @@ class DNSAGNManager:
 
         If both ``server.key`` and ``server.pub`` exist in the root
         directory, the user may choose to reuse them, regenerate them
-        or download a default pair《508339094020233】 L100-L120《.  If they
+        or download a default pair[508339094020233 L100-L120].  If they
         do not exist, the user may generate a new pair or download
-        defaults.  When running in non‑interactive mode the defaults
+        defaults.  When running in non-interactive mode the defaults
         are used.
         """
         key_exists = self.PRIVKEY_PATH.exists() and self.PUBKEY_PATH.exists()
@@ -375,11 +375,11 @@ class DNSAGNManager:
             sys.exit(1)
         # Map interactive options to actions
         if key_exists and choice == "1":
-            print("Using existing key pair…")
+            print("Using existing key pair...")
             return
         if (key_exists and choice == "2") or (not key_exists and choice == "1"):
             # Generate new keys using dns-server binary
-            print("Generating a new key pair…")
+            print("Generating a new key pair...")
             self.run_command([
                 str(self.SLOWDNS_DIR / "dns-server"),
                 "-gen-key",
@@ -388,12 +388,12 @@ class DNSAGNManager:
             ])
         else:
             # Download default keys from upstream
-            print("Downloading default key pair…")
+            print("Downloading default key pair...")
             self.download_file(f"{self.BASE_URL}/server.key", self.PRIVKEY_PATH)
             self.download_file(f"{self.BASE_URL}/server.pub", self.PUBKEY_PATH)
 
     # ------------------------------------------------------------------
-    # High‑level user commands
+    # High-level user commands
     # ------------------------------------------------------------------
     def install_ssh(self) -> None:
         """Install SlowDNS for SSH tunnelling (local port 22)."""
@@ -415,7 +415,7 @@ class DNSAGNManager:
         """Display NS and public key information to the user.
 
         This replicates the ``slowdns-info`` script which prints the
-        nameserver, public key and a Termux command《170030086320778】 L1-L13《.
+        nameserver, public key and a Termux command[170030086320778 L1-L13].
         """
         try:
             ns = (self.SLOWDNS_DIR / "infons").read_text(encoding="utf-8").strip()
@@ -436,7 +436,7 @@ class DNSAGNManager:
 
         This follows the logic of the ``remove-slow`` script: stop the
         service, restore the original rc.local if present, reset
-        resolv.conf and delete the working directory《985502298734345】 L27-L50《.
+        resolv.conf and delete the working directory[985502298734345 L27-L50].
         """
         print("=== Removing SlowDNS ===")
         # Stop the running server
@@ -457,101 +457,50 @@ class DNSAGNManager:
             shutil.rmtree(self.SLOWDNS_DIR, ignore_errors=True)
             print("Removed /etc/slowdns directory")
         else:
-            print(f"[DRY‑RUN] Would remove directory {self.SLOWDNS_DIR}")
+            print(f"[DRY-RUN] Would remove directory {self.SLOWDNS_DIR}")
         print("SlowDNS removed successfully.")
 
     def update(self) -> None:
         """Update the SlowDNS installation.
 
         In the bash implementation, update removes all files and then
-        re-runs the installer《312924233180552】 L34-L54《.  Here we call
+        re-runs the installer[312924233180552 L34-L54].  Here we call
         ``remove`` followed by ``install_manager``.
         """
         print("=== Updating SlowDNS ===")
         print("This will remove the current installation and reinstall.")
         if not self.non_interactive:
-            input("Press [ENTER] to continue or Ctrl+C to cancel…")
+            input("Press [ENTER] to continue or Ctrl+C to cancel...")
         self.remove()
         self.install_manager()
 
     # ------------------------------------------------------------------
-    # Interactive menu (with modern styling)
+    # Interactive menu
     # ------------------------------------------------------------------
-    def _clear_screen(self) -> None:
-        """Clear the terminal screen."""
-        os.system('clear' if os.name == 'posix' else 'cls')
-
-    def _get_status_info(self) -> tuple[str, str]:
-        """Get current service status and nameserver info."""
-        # Check if SlowDNS is running
-        try:
-            result = subprocess.run(["screen", "-ls"], capture_output=True, text=True)
-            status = "🟢 Running" if self.SCREEN_NAME in result.stdout else "🔴 Stopped"
-        except:
-            status = "❓ Unknown"
-        
-        # Get nameserver info
-        try:
-            ns = (self.SLOWDNS_DIR / "infons").read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
-            ns = "Not configured"
-        
-        return status, ns
-
     def menu(self) -> None:
         """Display the interactive menu and dispatch user selections.
 
         This function emulates the original bash ``slowdns`` menu
-        script《330467474699245】 L0-L39《.  It loops until the user
+        script[330467474699245 L0-L39].  It loops until the user
         chooses to exit.  Each option calls the corresponding method
         defined above.
         """
         while True:
-            # Clear screen and show modern header
-            self._clear_screen()
-            
-            # Header
-            print("\033[36m" + "=" * 70 + "\033[0m")
-            print("\033[1;37m" + "{:^70}".format("🚀 DNS-AGN Python Manager") + "\033[0m")
-            print("\033[36m" + "=" * 70 + "\033[0m")
-            print()
-            
-            # Status info
-            status, ns = self._get_status_info()
-            print("\033[1;33m📊 Status:\033[0m")
-            print(f"   Service: {status}")
-            print(f"   Nameserver: \033[32m{ns}\033[0m")
-            print()
-            
-            # Menu options with modern styling
-            print("\033[1;34m🔧 Installation:\033[0m")
-            print("   \033[32m[1]\033[0m Install SlowDNS SSH (port 22)")
-            print("   \033[32m[2]\033[0m Install SlowDNS SSL (port 443)")
-            print("   \033[32m[3]\033[0m Install SlowDNS Dropbear (port 8080)")
-            print("   \033[32m[4]\033[0m Install SlowDNS SOCKS (port 80)")
-            print()
-            
-            print("\033[1;34m⚡ Service Control:\033[0m")
-            print("   \033[32m[5]\033[0m Show information")
-            print("   \033[32m[6]\033[0m Start SlowDNS")
-            print("   \033[32m[7]\033[0m Restart SlowDNS")
-            print("   \033[32m[8]\033[0m Stop SlowDNS")
-            print()
-            
-            print("\033[1;34m📋 Maintenance:\033[0m")
-            print("   \033[32m[9]\033[0m Remove SlowDNS")
-            print("   \033[32m[10]\033[0m Update/Reinstall")
-            print()
-            
-            print("\033[1;34m🚪 Exit:\033[0m")
-            print("   \033[31m[0]\033[0m Exit")
-            print()
-            
-            # Get user choice
-            print("\033[1;36m" + "─" * 70 + "\033[0m")
-            choice = input("\033[1;37m💡 Select an option: \033[0m").strip()
-            
-            # Process choice exactly like original
+            print("\n" + "=" * 60)
+            print("{:^60}".format("SLOWDNS PYTHON MANAGER"))
+            print("=" * 60)
+            print("[1] Install SlowDNS SSH (port 22)")
+            print("[2] Install SlowDNS SSL (port 443)")
+            print("[3] Install SlowDNS Dropbear (port 8080)")
+            print("[4] Install SlowDNS SOCKS (port 80)")
+            print("[5] Show information")
+            print("[6] Start SlowDNS")
+            print("[7] Restart SlowDNS")
+            print("[8] Stop SlowDNS")
+            print("[9] Remove SlowDNS")
+            print("[10] Update/Reinstall")
+            print("[0] Exit")
+            choice = input("Select an option: ").strip()
             if choice == "1":
                 self.install_ssh()
             elif choice == "2":
@@ -562,42 +511,34 @@ class DNSAGNManager:
                 self.install_socks()
             elif choice == "5":
                 self.show_info()
-                input("\n\033[33mPress [ENTER] to continue...\033[0m")
             elif choice == "6":
                 # Start using previously saved NS and port.  Try to infer
                 # port from installed variant by reading startdns script.
                 ns = (self.SLOWDNS_DIR / "infons").read_text().strip() if (self.SLOWDNS_DIR / "infons").exists() else ""
                 port = self._infer_port() or 22
                 self.start_dns_server(ns, port)
-                input("\n\033[33mPress [ENTER] to continue...\033[0m")
             elif choice == "7":
                 ns = (self.SLOWDNS_DIR / "infons").read_text().strip() if (self.SLOWDNS_DIR / "infons").exists() else ""
                 port = self._infer_port() or 22
                 self.restart_dns_server(ns, port)
-                input("\n\033[33mPress [ENTER] to continue...\033[0m")
             elif choice == "8":
                 self.stop_dns_server()
-                input("\n\033[33mPress [ENTER] to continue...\033[0m")
             elif choice == "9":
                 self.remove()
-                input("\n\033[33mPress [ENTER] to continue...\033[0m")
             elif choice == "10":
                 self.update()
-                input("\n\033[33mPress [ENTER] to continue...\033[0m")
             elif choice == "0":
-                print("\n\033[1;36m👋 Thanks for using DNS-AGN Python Manager!\033[0m")
-                print("\033[37mGoodbye!\033[0m\n")
+                print("Exiting.")
                 break
             else:
-                print("\n\033[1;31m❌ Invalid option. Please try again.\033[0m")
-                input("\n\033[33mPress [ENTER] to continue...\033[0m")
+                print("Invalid option. Please try again.")
 
     def _infer_port(self) -> Optional[int]:
         """Attempt to infer the local port from the installed startdns script.
 
         The upstream ``startdns`` scripts embed the local forwarding
         port inside a call to dns-server, e.g. ``127.0.0.1:22`` for
-        SSH《88752286916456】 L28-L33《.  If that script exists we parse the
+        SSH[88752286916456 L28-L33].  If that script exists we parse the
         last component of the command line to determine which port
         should be used when starting or restarting the server.
         """
@@ -625,6 +566,10 @@ def main() -> None:
         cmd = sys.argv[1].lower()
         if cmd == "install":
             manager.install_manager()
+        elif cmd == "ssh":
+            manager.install_ssh()
+        elif cmd == "ssl":
+            manager.install_ssl()
         elif cmd == "drop" or cmd == "dropbear":
             manager.install_dropbear()
         elif cmd == "socks":
@@ -653,8 +598,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main() "ssh":
-            manager.install_ssh()
-        elif cmd == "ssl":
-            manager.install_ssl()
-        elif cmd ==
+    main()
