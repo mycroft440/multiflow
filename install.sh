@@ -108,7 +108,7 @@ if [ "$UPDATE_ONLY" = false ]; then
     $SUDO dpkg --configure -a
 
     log_info "A instalar dependências essenciais..."
-    $SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential
+    $SUDO apt-get install -y python3 python3-pip git python3-psutil lsb-release build-essential net-tools systemd
     $SUDO apt-get autoremove -y
     $SUDO apt-get clean
 
@@ -229,3 +229,14 @@ if [ "$UPDATE_ONLY" = false ]; then
         log_info "Instalação concluída. Para iniciar, execute \'multiflow\'."
     fi
 fi
+
+
+# Instalação do RustyProxy
+log_info "A instalar o binário do RustyProxy..."
+PROXY_DIR="$INSTALL_DIR/conexoes"
+PROXY_BINARY="$PROXY_DIR/proxy"
+
+$SUDO mkdir -p "$PROXY_DIR"
+$SUDO mv /home/ubuntu/upload/proxy "$PROXY_BINARY"
+$SUDO chmod +x "$PROXY_BINARY"
+log_info "Binário do RustyProxy instalado em $PROXY_BINARY"
