@@ -475,25 +475,20 @@ class DNSAGNManager:
         self.install_manager()
 
     # ------------------------------------------------------------------
-    # Interactive menu
+    # Interactive menu (with modern styling)
     # ------------------------------------------------------------------
     def _clear_screen(self) -> None:
         """Clear the terminal screen."""
         os.system('clear' if os.name == 'posix' else 'cls')
 
-    def _print_header(self) -> None:
-        """Print the modern header."""
-        self._clear_screen()
-        print("\033[36m" + "=" * 70 + "\033[0m")  # Cyan border
-        print("\033[1;37m" + "{:^70}".format("🚀 DNS-AGN Python Manager") + "\033[0m")  # Bold white title
-        print("\033[36m" + "=" * 70 + "\033[0m")  # Cyan border
-        print()
-
-    def _print_status(self) -> None:
-        """Print current system status."""
+    def _get_status_info(self) -> tuple[str, str]:
+        """Get current service status and nameserver info."""
         # Check if SlowDNS is running
-        result = subprocess.run(["screen", "-ls"], capture_output=True, text=True)
-        status = "🟢 Running" if self.SCREEN_NAME in result.stdout else "🔴 Stopped"
+        try:
+            result = subprocess.run(["screen", "-ls"], capture_output=True, text=True)
+            status = "🟢 Running" if self.SCREEN_NAME in result.stdout else "🔴 Stopped"
+        except:
+            status = "❓ Unknown"
         
         # Get nameserver info
         try:
@@ -501,59 +496,7 @@ class DNSAGNManager:
         except FileNotFoundError:
             ns = "Not configured"
         
-        print("\033[1;33m📊 Status:\033[0m")
-        print(f"   Service: {status}")
-        print(f"   Nameserver: \033[32m{ns}\033[0m")
-        print()
-
-    def _print_menu_options(self) -> None:
-        """Print the menu options with modern styling."""
-        options = [
-            ("🔧", "Installation", [
-                ("1", "SSH Tunnel (port 22)", "install_ssh"),
-                ("2", "SSL Tunnel (port 443)", "install_ssl"),
-                ("3", "Dropbear Tunnel (port 8080)", "install_dropbear"),
-                ("4", "SOCKS Tunnel (port 80)", "install_socks"),
-            ]),
-            ("⚡", "Service Control", [
-                ("5", "Start Service", "start"),
-                ("6", "Stop Service", "stop"),
-                ("7", "Restart Service", "restart"),
-            ]),
-            ("📋", "Information & Maintenance", [
-                ("8", "Show Information", "info"),
-                ("9", "Update/Reinstall", "update"),
-                ("10", "Remove Installation", "remove"),
-            ]),
-            ("🚪", "Exit", [
-                ("0", "Exit Program", "exit"),
-            ])
-        ]
-
-        for emoji, category, items in options:
-            print(f"\033[1;34m{emoji} {category}:\033[0m")
-            for key, desc, _ in items:
-                if key == "0":
-                    print(f"   \033[31m[{key}]\033[0m {desc}")
-                else:
-                    print(f"   \033[32m[{key}]\033[0m {desc}")
-            print()
-
-    def _get_user_choice(self) -> str:
-        """Get user input with modern styling."""
-        print("\033[1;36m" + "─" * 70 + "\033[0m")
-        choice = input("\033[1;37m💡 Select an option: \033[0m").strip()
-        return choice
-
-    def _show_success_message(self, message: str) -> None:
-        """Show a success message."""
-        print(f"\n\033[1;32m✅ {message}\033[0m")
-        input("\n\033[33mPress [ENTER] to continue...\033[0m")
-
-    def _show_error_message(self, message: str) -> None:
-        """Show an error message."""
-        print(f"\n\033[1;31m❌ {message}\033[0m")
-        input("\n\033[33mPress [ENTER] to continue...\033[0m")
+        return status, ns
 
     def menu(self) -> None:
         """Display the interactive menu and dispatch user selections.
@@ -564,77 +507,90 @@ class DNSAGNManager:
         defined above.
         """
         while True:
-            try:
-                self._print_header()
-                self._print_status()
-                self._print_menu_options()
-                choice = self._get_user_choice()
-
-                if choice == "1":
-                    self.install_ssh()
-                    self._show_success_message("SSH tunnel installation completed!")
-                elif choice == "2":
-                    self.install_ssl()
-                    self._show_success_message("SSL tunnel installation completed!")
-                elif choice == "3":
-                    self.install_dropbear()
-                    self._show_success_message("Dropbear tunnel installation completed!")
-                elif choice == "4":
-                    self.install_socks()
-                    self._show_success_message("SOCKS tunnel installation completed!")
-                elif choice == "5":
-                    # Start using previously saved NS and port
-                    try:
-                        ns = (self.SLOWDNS_DIR / "infons").read_text().strip() if (self.SLOWDNS_DIR / "infons").exists() else ""
-                        port = self._infer_port() or 22
-                        self.start_dns_server(ns, port)
-                        self._show_success_message("SlowDNS service started!")
-                    except Exception as e:
-                        self._show_error_message(f"Failed to start service: {e}")
-                elif choice == "6":
-                    self.stop_dns_server()
-                    self._show_success_message("SlowDNS service stopped!")
-                elif choice == "7":
-                    try:
-                        ns = (self.SLOWDNS_DIR / "infons").read_text().strip() if (self.SLOWDNS_DIR / "infons").exists() else ""
-                        port = self._infer_port() or 22
-                        self.restart_dns_server(ns, port)
-                        self._show_success_message("SlowDNS service restarted!")
-                    except Exception as e:
-                        self._show_error_message(f"Failed to restart service: {e}")
-                elif choice == "8":
-                    print("\n")
-                    self.show_info()
-                    input("\n\033[33mPress [ENTER] to continue...\033[0m")
-                elif choice == "9":
-                    print("\n\033[1;33m⚠️  This will remove and reinstall SlowDNS.\033[0m")
-                    confirm = input("\033[37mContinue? (y/N): \033[0m").strip().lower()
-                    if confirm == 'y':
-                        self.update()
-                        self._show_success_message("SlowDNS updated successfully!")
-                    else:
-                        self._show_success_message("Update cancelled.")
-                elif choice == "10":
-                    print("\n\033[1;31m⚠️  This will completely remove SlowDNS.\033[0m")
-                    confirm = input("\033[37mAre you sure? (y/N): \033[0m").strip().lower()
-                    if confirm == 'y':
-                        self.remove()
-                        self._show_success_message("SlowDNS removed successfully!")
-                    else:
-                        self._show_success_message("Removal cancelled.")
-                elif choice == "0":
-                    print("\n\033[1;36m👋 Thanks for using DNS-AGN Python Manager!\033[0m")
-                    print("\033[37mGoodbye!\033[0m\n")
-                    break
-                else:
-                    self._show_error_message("Invalid option. Please select a valid number.")
-            except KeyboardInterrupt:
-                print("\n\n\033[1;33m⚠️  Operation cancelled by user.\033[0m")
-                print("\033[1;36m👋 Thanks for using DNS-AGN Python Manager!\033[0m")
+            # Clear screen and show modern header
+            self._clear_screen()
+            
+            # Header
+            print("\033[36m" + "=" * 70 + "\033[0m")
+            print("\033[1;37m" + "{:^70}".format("🚀 DNS-AGN Python Manager") + "\033[0m")
+            print("\033[36m" + "=" * 70 + "\033[0m")
+            print()
+            
+            # Status info
+            status, ns = self._get_status_info()
+            print("\033[1;33m📊 Status:\033[0m")
+            print(f"   Service: {status}")
+            print(f"   Nameserver: \033[32m{ns}\033[0m")
+            print()
+            
+            # Menu options with modern styling
+            print("\033[1;34m🔧 Installation:\033[0m")
+            print("   \033[32m[1]\033[0m Install SlowDNS SSH (port 22)")
+            print("   \033[32m[2]\033[0m Install SlowDNS SSL (port 443)")
+            print("   \033[32m[3]\033[0m Install SlowDNS Dropbear (port 8080)")
+            print("   \033[32m[4]\033[0m Install SlowDNS SOCKS (port 80)")
+            print()
+            
+            print("\033[1;34m⚡ Service Control:\033[0m")
+            print("   \033[32m[5]\033[0m Show information")
+            print("   \033[32m[6]\033[0m Start SlowDNS")
+            print("   \033[32m[7]\033[0m Restart SlowDNS")
+            print("   \033[32m[8]\033[0m Stop SlowDNS")
+            print()
+            
+            print("\033[1;34m📋 Maintenance:\033[0m")
+            print("   \033[32m[9]\033[0m Remove SlowDNS")
+            print("   \033[32m[10]\033[0m Update/Reinstall")
+            print()
+            
+            print("\033[1;34m🚪 Exit:\033[0m")
+            print("   \033[31m[0]\033[0m Exit")
+            print()
+            
+            # Get user choice
+            print("\033[1;36m" + "─" * 70 + "\033[0m")
+            choice = input("\033[1;37m💡 Select an option: \033[0m").strip()
+            
+            # Process choice exactly like original
+            if choice == "1":
+                self.install_ssh()
+            elif choice == "2":
+                self.install_ssl()
+            elif choice == "3":
+                self.install_dropbear()
+            elif choice == "4":
+                self.install_socks()
+            elif choice == "5":
+                self.show_info()
+                input("\n\033[33mPress [ENTER] to continue...\033[0m")
+            elif choice == "6":
+                # Start using previously saved NS and port.  Try to infer
+                # port from installed variant by reading startdns script.
+                ns = (self.SLOWDNS_DIR / "infons").read_text().strip() if (self.SLOWDNS_DIR / "infons").exists() else ""
+                port = self._infer_port() or 22
+                self.start_dns_server(ns, port)
+                input("\n\033[33mPress [ENTER] to continue...\033[0m")
+            elif choice == "7":
+                ns = (self.SLOWDNS_DIR / "infons").read_text().strip() if (self.SLOWDNS_DIR / "infons").exists() else ""
+                port = self._infer_port() or 22
+                self.restart_dns_server(ns, port)
+                input("\n\033[33mPress [ENTER] to continue...\033[0m")
+            elif choice == "8":
+                self.stop_dns_server()
+                input("\n\033[33mPress [ENTER] to continue...\033[0m")
+            elif choice == "9":
+                self.remove()
+                input("\n\033[33mPress [ENTER] to continue...\033[0m")
+            elif choice == "10":
+                self.update()
+                input("\n\033[33mPress [ENTER] to continue...\033[0m")
+            elif choice == "0":
+                print("\n\033[1;36m👋 Thanks for using DNS-AGN Python Manager!\033[0m")
                 print("\033[37mGoodbye!\033[0m\n")
                 break
-            except Exception as e:
-                self._show_error_message(f"An unexpected error occurred: {e}")
+            else:
+                print("\n\033[1;31m❌ Invalid option. Please try again.\033[0m")
+                input("\n\033[33mPress [ENTER] to continue...\033[0m")
 
     def _infer_port(self) -> Optional[int]:
         """Attempt to infer the local port from the installed startdns script.
@@ -669,10 +625,6 @@ def main() -> None:
         cmd = sys.argv[1].lower()
         if cmd == "install":
             manager.install_manager()
-        elif cmd == "ssh":
-            manager.install_ssh()
-        elif cmd == "ssl":
-            manager.install_ssl()
         elif cmd == "drop" or cmd == "dropbear":
             manager.install_dropbear()
         elif cmd == "socks":
@@ -701,4 +653,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main() "ssh":
+            manager.install_ssh()
+        elif cmd == "ssl":
+            manager.install_ssl()
+        elif cmd ==
