@@ -623,8 +623,8 @@ def conexoes_menu():
             TerminalManager.leave_alt_screen()
             try:
                 root = _find_multiflow_root()
-                rustyproxy_path = os.path.join(root, 'conexoes', 'rustyproxy.py')
-                subprocess.run([sys.executable, rustyproxy_path], check=True)
+                proxy_path = os.path.join(root, 'conexoes', 'proxy')
+                subprocess.run([proxy_path], check=True)
             except Exception as e:
                 print(f"Erro ao executar Rusty Proxy: {e}")
             finally:
