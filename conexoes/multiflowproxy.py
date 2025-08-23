@@ -44,6 +44,7 @@ async def handle_client(client_reader, client_writer, status):
     print(f"Nova conexão de: {addr}")
 
     status_message = status
+    server_writer = None # Inicializa para o bloco finally
 
     try:
         # 1. Envia a resposta inicial "101 Switching Protocols".
@@ -55,29 +56,32 @@ async def handle_client(client_reader, client_writer, status):
         if not initial_data:
             return
 
-        # 3. Envia a resposta "200 Connection established".
+        # 3. (REINTRODUZIDO) Adiciona um pequeno atraso para simular o comportamento
+        #    do Rust e evitar que o cliente feche a conexão prematuramente.
+        await asyncio.sleep(0.1) # Atraso de 100 milissegundos.
+
+        # 4. (REINTRODUZIDO) Envia a segunda resposta "200 Connection established",
+        #    replicando o comportamento exato do RustyProxy.
         client_writer.write(f"HTTP/1.1 200 {status_message}\r\n\r\n".encode())
         await client_writer.drain()
 
-        # 4. Determina o endereço de destino com base nos dados iniciais.
-        # O comportamento do 'peek' do Rust é simulado lendo o primeiro pacote.
+        # 5. Determina o endereço de destino com base nos dados iniciais.
         data_str = initial_data.decode(errors='ignore')
         if "SSH" in data_str:
             target_host, target_port = "127.0.0.1", 22
         else:
-            # O padrão é encaminhar para OpenVPN, mas pode ser qualquer outro serviço.
             target_host, target_port = "127.0.0.1", 1194
 
         print(f"Encaminhando {addr} para {target_host}:{target_port}")
 
-        # 5. Conecta-se ao servidor de destino.
+        # 6. Conecta-se ao servidor de destino.
         server_reader, server_writer = await asyncio.open_connection(target_host, target_port)
         
-        # 6. Envia os dados iniciais já lidos para o servidor de destino.
+        # 7. Envia os dados iniciais já lidos para o servidor de destino.
         server_writer.write(initial_data)
         await server_writer.drain()
 
-        # 7. Inicia a transferência de dados bidirecional.
+        # 8. Inicia a transferência de dados bidirecional.
         client_to_server = asyncio.create_task(transfer_data(client_reader, server_writer, "cliente->servidor"))
         server_to_client = asyncio.create_task(transfer_data(server_reader, client_writer, "servidor->cliente"))
 
@@ -89,10 +93,13 @@ async def handle_client(client_reader, client_writer, status):
         print(f"Fechando conexão de: {addr}")
         client_writer.close()
         await client_writer.wait_closed()
+        if server_writer:
+            server_writer.close()
+            await server_writer.wait_closed()
+
 
 async def run_proxy_server(port, status):
     """Inicia o servidor TCP na porta especificada."""
-    # Usa uma função lambda para passar o argumento 'status' para o 'handle_client'.
     handler = lambda r, w: handle_client(r, w, status=status)
     server = await asyncio.start_server(handler, '0.0.0.0', port)
     
@@ -114,7 +121,6 @@ def is_port_in_use(port):
     """Verifica se uma porta TCP está em uso."""
     with socket() as s:
         try:
-            # Tenta se vincular à porta. Se falhar, a porta está em uso.
             s.bind(('0.0.0.0', port))
             return False
         except OSError:
@@ -159,6 +165,7 @@ Type=simple
 User=root
 ExecStart={sys.executable} {script_path} --run-proxy --port {port} --status "{status}"
 Restart=always
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
@@ -181,7 +188,6 @@ WantedBy=multi-user.target
 
     except (subprocess.CalledProcessError, IOError) as e:
         print(f"Falha ao criar ou iniciar o serviço: {e}")
-        # Tenta limpar em caso de falha
         if os.path.exists(service_file_path):
             os.remove(service_file_path)
 
@@ -248,7 +254,7 @@ def main_menu():
         try:
             check_root()
             os.makedirs(APP_DIR)
-            open(PORTS_FILE, 'a').close() # Cria o arquivo se não existir
+            open(PORTS_FILE, 'a').close()
         except Exception as e:
             print(f"Não foi possível criar o diretório de configuração {APP_DIR}: {e}")
             sys.exit(1)
@@ -275,11 +281,9 @@ def parse_args():
     parser.add_argument('--run-proxy', action='store_true', help='Executa o servidor proxy em vez do menu.')
     parser.add_argument('--port', type=int, help='Porta para o servidor proxy escutar.')
     parser.add_argument('--status', type=str, default="@PythonProxy", help='Mensagem de status para as respostas HTTP.')
-    # Usa parse_known_args para ignorar argumentos extras do ambiente de execução.
     return parser.parse_known_args()
 
 if __name__ == "__main__":
-    # A tupla retornada contém (argumentos_conhecidos, argumentos_desconhecidos)
     args, _ = parse_args()
 
     if args.run_proxy:
