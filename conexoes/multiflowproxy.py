@@ -1,120 +1,79 @@
 import sys
 import asyncio
 from asyncio import StreamReader, StreamWriter
-from concurrent.futures import ThreadPoolExecutor
+import threading
+
+# Variáveis globais para gerenciamento
+active_servers = {}  # port: asyncio.Server
+lock = threading.Lock()
+loop = None  # Será definido no main
+keep_running = asyncio.Event()  # Para manter o loop rodando indefinidamente
+
+async def start_server(port: int) -> str:
+    with lock:
+        if port in active_servers:
+            return "Porta já aberta"
+    try:
+        server = await asyncio.start_server(handle_client, '::', port, family=asyncio.socket.AF_INET6)
+        with lock:
+            active_servers[port] = server
+        asyncio.create_task(server.serve_forever())
+        return f"Porta {port} aberta com sucesso"
+    except Exception as e:
+        return f"Erro ao abrir porta {port}: {e}"
+
+async def close_server(port: int) -> str:
+    with lock:
+        if port not in active_servers:
+            return "Porta não está aberta"
+        server = active_servers.pop(port)
+    try:
+        server.close()
+        await server.wait_closed()
+        return f"Porta {port} fechada com sucesso"
+    except Exception as e:
+        return f"Erro ao fechar porta {port}: {e}"
+
+def get_running_status() -> str:
+    with lock:
+        ports = list(active_servers.keys())
+    if not ports:
+        return "O proxy não está funcionando"
+    else:
+        return f"O proxy está funcionando nas portas: {', '.join(map(str, ports))}"
+
+def start_server_sync(port: int) -> str:
+    future = asyncio.run_coroutine_threadsafe(start_server(port), loop)
+    return future.result()
+
+def close_server_sync(port: int) -> str:
+    future = asyncio.run_coroutine_threadsafe(close_server(port), loop)
+    return future.result()
+
+def disable_proxy_sync() -> str:
+    with lock:
+        ports = list(active_servers.keys())
+    for port in ports:
+        close_server_sync(port)
+    return "Proxy desativado e todas as portas fechadas"
 
 async def main() -> None:
-    # Dicionário para rastrear servidores ativos por porta
-    servers = {}
-    # Status global de argumentos
-    global_status = get_status()
-
-    # Se --port for fornecido, abra inicialmente essa porta
-    initial_port = get_port()
-    if initial_port:
-        try:
-            server = await asyncio.start_server(
-                lambda r, w: handle_client(r, w, global_status),
-                '::', initial_port, family=asyncio.socket.AF_INET6
-            )
-            servers[initial_port] = server
-            asyncio.create_task(server.serve_forever())
-            print(f"Porta inicial {initial_port} aberta.")
-        except Exception as e:
-            print(f"Erro ao abrir porta inicial {initial_port}: {e}")
-
-    # Loop async para o menu interativo
+    global loop
     loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor(1) as executor:
-        while True:
-            # Exibir status
-            active_ports = sorted(servers.keys())
-            if active_ports:
-                print(f"Status: Ativo na porta {', '.join(map(str, active_ports))}...")
-            else:
-                print("Status: Desativado")
+    initial_port = get_port()
+    result = await start_server(initial_port)
+    print(result)
+    await keep_running.wait()  # Mantém o loop rodando indefinidamente, sem nunca setar
 
-            # Exibir menu
-            print("\n1. Abrir Porta")
-            print("2. Fechar Porta")
-            print("3. Desativar Proxy")
-            print("0. Sair")
-
-            # Ler input de forma async (usando executor para sys.stdin.readline sync)
-            choice = await loop.run_in_executor(executor, sys.stdin.readline).strip()
-
-            if choice == '1':
-                # Abrir Porta
-                port_str = await loop.run_in_executor(executor, sys.stdin.readline).strip()
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    port = 80
-                if port in servers:
-                    print(f"Porta {port} já está ativa.")
-                else:
-                    try:
-                        server = await asyncio.start_server(
-                            lambda r, w: handle_client(r, w, global_status),
-                            '::', port, family=asyncio.socket.AF_INET6
-                        )
-                        servers[port] = server
-                        asyncio.create_task(server.serve_forever())
-                        print(f"Porta {port} aberta.")
-                    except Exception as e:
-                        print(f"Erro ao abrir porta {port}: {e}")
-
-            elif choice == '2':
-                # Fechar Porta
-                port_str = await loop.run_in_executor(executor, sys.stdin.readline).strip()
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    print("Porta inválida.")
-                    continue
-                if port in servers:
-                    server = servers.pop(port)
-                    server.close()
-                    await server.wait_closed()
-                    print(f"Porta {port} fechada.")
-                else:
-                    print(f"Porta {port} não está ativa.")
-
-            elif choice == '3':
-                # Desativar Proxy: fechar todas as portas
-                close_tasks = []
-                for port, server in list(servers.items()):
-                    server.close()
-                    close_tasks.append(server.wait_closed())
-                    print(f"Fechando porta {port}...")
-                if close_tasks:
-                    await asyncio.gather(*close_tasks)
-                servers.clear()
-                print("Proxy desativado completamente.")
-
-            elif choice == '0':
-                # Sair do menu, mas manter proxies ativos em background
-                print("Saindo do menu. Proxies continuam ativos em background.")
-                break
-
-            else:
-                print("Opção inválida.")
-
-    # Após sair do menu, manter o loop rodando indefinidamente para tasks ativas
-    if servers:
-        await asyncio.Event().wait()  # Espera eterna, mantém tasks rodando
-
-async def handle_client(reader: StreamReader, writer: StreamWriter, status: str) -> None:
+async def handle_client(reader: StreamReader, writer: StreamWriter) -> None:
     try:
+        status = get_status()
         await writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
         await writer.drain()
-
         buffer = bytearray(1024)
         await reader.readinto(buffer)
-
         await writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
         await writer.drain()
-
         addr_proxy = "0.0.0.0:22"
         try:
             data = await asyncio.wait_for(peek_stream(reader), timeout=1.0)
@@ -127,17 +86,14 @@ async def handle_client(reader: StreamReader, writer: StreamWriter, status: str)
         except Exception as e:
             print(f"Erro no peek: {e}")
             addr_proxy = "0.0.0.0:22"
-
         try:
             server_reader, server_writer = await asyncio.open_connection(*addr_proxy.split(':'))
         except Exception as e:
             print(f"erro ao iniciar conexão para o proxy: {e}")
             return
-
         # Tasks bidirecionais com gather
         client_to_server = asyncio.create_task(transfer_data(reader, server_writer))
         server_to_client = asyncio.create_task(transfer_data(server_reader, writer))
-
         await asyncio.gather(client_to_server, server_to_client)
     except Exception as e:
         print(f"Erro ao processar cliente: {e}")
@@ -186,4 +142,44 @@ def get_status() -> str:
     return status
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Inicia o loop asyncio em uma thread separada
+    async_thread = threading.Thread(target=asyncio.run, args=(main(),))
+    async_thread.start()
+
+    # Menu interativo no thread principal
+    while True:
+        print("\nMenu Interativo:")
+        print("1. Mostrar o status de funcionamento")
+        print("2. Abrir porta")
+        print("3. Fechar porta")
+        print("4. Desativar proxy")
+        print("0. Sair do menu interativo (deixar proxy em segundo plano)")
+        choice = input("Escolha uma opção: ").strip()
+
+        if choice == '1':
+            print(get_running_status())
+        elif choice == '2':
+            try:
+                new_port = int(input("Digite a porta a ser aberta: "))
+                result = start_server_sync(new_port)
+                print(result)
+            except ValueError:
+                print("Porta inválida. Deve ser um número inteiro.")
+        elif choice == '3':
+            try:
+                close_port = int(input("Digite a porta a ser fechada: "))
+                result = close_server_sync(close_port)
+                print(result)
+            except ValueError:
+                print("Porta inválida. Deve ser um número inteiro.")
+        elif choice == '4':
+            result = disable_proxy_sync()
+            print(result)
+        elif choice == '0':
+            print("Saindo do menu. O proxy continua rodando em segundo plano se houver portas ativas.")
+            break
+        else:
+            print("Opção inválida. Tente novamente.")
+
+    # Após sair do menu, o thread async continua rodando se houver servidores ativos
+    # O programa não termina até que o usuário interrompa manualmente (ex: Ctrl+C)
