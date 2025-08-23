@@ -110,7 +110,8 @@ def main() -> None:
         description="Gerencia o projeto, permitindo um reset completo ou uma atualização via Git.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    group = parser.add_mutually_exclusive_group(required=True)
+    # O grupo de argumentos não é mais obrigatório para evitar o erro na execução sem argumentos
+    group = parser.add_mutually_exclusive_group()
     group.add_argument(
         '--reset',
         action='store_true',
@@ -141,6 +142,11 @@ def main() -> None:
         if ask_for_confirmation(args.yes):
             perform_cleanup(lista_branca)
             run_installation(f'./{INSTALL_SCRIPT}')
+    else:
+        # Se nenhum argumento for fornecido, imprime a ajuda
+        print("Nenhuma ação especificada. Use '--reset' para reinstalar ou '--update' para atualizar.")
+        parser.print_help()
+
 
 if __name__ == "__main__":
     main()
