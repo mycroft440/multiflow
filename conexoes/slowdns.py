@@ -48,6 +48,15 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+# --- Constantes de Cores para o Menu ---
+C_HEADER = '\033[95m'
+C_BLUE = '\033[94m'
+C_GREEN = '\033[92m'
+C_YELLOW = '\033[93m'
+C_RED = '\033[91m'
+C_BOLD = '\033[1m'
+C_RESET = '\033[0m'
+
 
 class DNSAGNManager:
     """A Python re-implementation of the DNS-AGN management scripts.
@@ -475,32 +484,51 @@ class DNSAGNManager:
         self.install_manager()
 
     # ------------------------------------------------------------------
-    # Interactive menu
+    # Interactive menu (IMPROVED VERSION)
     # ------------------------------------------------------------------
     def menu(self) -> None:
         """Display the interactive menu and dispatch user selections.
 
         This function emulates the original bash ``slowdns`` menu
-        script[330467474699245 L0-L39].  It loops until the user
-        chooses to exit.  Each option calls the corresponding method
-        defined above.
+        script, but with an improved visual appearance.
         """
+        
+        def clear_screen():
+            # Limpa a tela do console
+            os.system('cls' if os.name == 'nt' else 'clear')
+
         while True:
-            print("\n" + "=" * 60)
-            print("{:^60}".format("SLOWDNS PYTHON MANAGER"))
-            print("=" * 60)
-            print("[1] Install SlowDNS SSH (port 22)")
-            print("[2] Install SlowDNS SSL (port 443)")
-            print("[3] Install SlowDNS Dropbear (port 8080)")
-            print("[4] Install SlowDNS SOCKS (port 80)")
-            print("[5] Show information")
-            print("[6] Start SlowDNS")
-            print("[7] Restart SlowDNS")
-            print("[8] Stop SlowDNS")
-            print("[9] Remove SlowDNS")
-            print("[10] Update/Reinstall")
-            print("[0] Exit")
-            choice = input("Select an option: ").strip()
+            clear_screen()
+            # --- Cabeçalho ---
+            print(f"{C_BOLD}{C_HEADER}╔{'═' * 62}╗{C_RESET}")
+            print(f"{C_BOLD}{C_HEADER}║{'SLOWDNS PYTHON MANAGER'.center(62)}║{C_RESET}")
+            print(f"{C_BOLD}{C_HEADER}╚{'═' * 62}╝{C_RESET}")
+
+            # --- Opções de Instalação ---
+            print(f"\n{C_YELLOW}--- Instalação de Serviço ---{C_RESET}")
+            print(f"  {C_GREEN}[1]{C_RESET} Instalar SlowDNS SSH (porta 22)")
+            print(f"  {C_GREEN}[2]{C_RESET} Instalar SlowDNS SSL (porta 443)")
+            print(f"  {C_GREEN}[3]{C_RESET} Instalar SlowDNS Dropbear (porta 8080)")
+            print(f"  {C_GREEN}[4]{C_RESET} Instalar SlowDNS SOCKS (porta 80)")
+
+            # --- Opções de Controle ---
+            print(f"\n{C_YELLOW}--- Controle do Serviço ---{C_RESET}")
+            print(f"  {C_GREEN}[6]{C_RESET} Iniciar SlowDNS")
+            print(f"  {C_GREEN}[7]{C_RESET} Reiniciar SlowDNS")
+            print(f"  {C_GREEN}[8]{C_RESET} Parar SlowDNS")
+
+            # --- Opções de Gerenciamento ---
+            print(f"\n{C_YELLOW}--- Gerenciamento ---{C_RESET}")
+            print(f"  {C_GREEN}[5]{C_RESET} Mostrar Informações")
+            print(f"  {C_GREEN}[9]{C_RESET} Remover SlowDNS")
+            print(f"  {C_GREEN}[10]{C_RESET} Atualizar / Reinstalar")
+            
+            # --- Saída ---
+            print(f"\n  {C_RED}[0]{C_RESET} Sair")
+            
+            print("\n" + f"{C_BLUE}{'=' * 64}{C_RESET}")
+            choice = input(f"  {C_BOLD}Selecione uma opção: {C_RESET}").strip()
+
             if choice == "1":
                 self.install_ssh()
             elif choice == "2":
@@ -528,10 +556,16 @@ class DNSAGNManager:
             elif choice == "10":
                 self.update()
             elif choice == "0":
-                print("Exiting.")
+                clear_screen()
+                print("Saindo do gerenciador. Até logo!")
                 break
             else:
-                print("Invalid option. Please try again.")
+                print(f"\n{C_RED}Opção inválida. Pressione ENTER para tentar novamente...{C_RESET}")
+                input() # Pausa para o usuário ler a mensagem de erro
+
+            if choice in "12345678910":
+                 input(f"\n{C_GREEN}Operação concluída. Pressione ENTER para voltar ao menu...{C_RESET}")
+
 
     def _infer_port(self) -> Optional[int]:
         """Attempt to infer the local port from the installed startdns script.
@@ -594,6 +628,11 @@ def main() -> None:
             print(f"Unknown command: {cmd}")
             print("Usage: dns_agn_python.py [install|ssh|ssl|drop|socks|start|stop|restart|info|remove|update]")
     else:
+        # Verifica se o script está sendo executado como root para o menu interativo
+        if os.geteuid() != 0:
+            print(f"{C_RED}Erro: O menu interativo precisa ser executado com privilégios de root.{C_RESET}")
+            print("Por favor, execute o script com 'sudo'.")
+            sys.exit(1)
         manager.menu()
 
 
