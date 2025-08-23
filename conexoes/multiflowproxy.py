@@ -1,9 +1,16 @@
 import sys
 import asyncio
+import signal
 from asyncio import StreamReader, StreamWriter, Task
 
 # Dicionário global para rastrear os servidores ativos e suas tarefas
 active_servers: dict[int, Task] = {}
+# Evento para sinalizar o encerramento gracioso do programa
+shutdown_event = asyncio.Event()
+
+def handle_interrupt_signal() -> None:
+    """Lida com o sinal de interrupção (Ctrl+C) sem encerrar o programa."""
+    print("\nPara encerrar o proxy, por favor, use a opção '3' no menu.")
 
 async def start_proxy_server(port: int) -> None:
     """Inicia um servidor de proxy em uma porta específica."""
@@ -16,6 +23,9 @@ async def start_proxy_server(port: int) -> None:
             await server.serve_forever()
     except OSError as e:
         print(f"Erro ao iniciar o servidor na porta {port}: {e}. A porta pode já estar em uso.")
+    except asyncio.CancelledError:
+        # Isso é esperado quando o servidor é cancelado, não precisa de log
+        pass
     except Exception as e:
         print(f"Um erro inesperado ocorreu no servidor da porta {port}: {e}")
     finally:
@@ -83,7 +93,7 @@ async def transfer_data(reader: StreamReader, writer: StreamWriter) -> None:
                 break
             writer.write(data)
             await writer.drain()
-    except (ConnectionResetError, BrokenPipeError):
+    except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
         pass # Erros esperados quando uma das conexões é fechada
     finally:
         writer.close()
@@ -170,7 +180,7 @@ async def remove_port():
 
 
 async def deactivate_all():
-    """Desativa todos os proxies ativos."""
+    """Desativa todos os proxies ativos e sinaliza o encerramento do programa."""
     if not active_servers:
         print("Nenhum proxy para desativar.")
         return
@@ -183,13 +193,15 @@ async def deactivate_all():
         try:
             await task
         except asyncio.CancelledError:
-            print(f"  - Proxy na porta {port} desativado.")
-    print("Todos os proxies foram desativados.")
+            # Apenas confirma que a tarefa foi cancelada
+            pass
+    print("Todos os proxies foram desativados. Encerrando o programa.")
+    shutdown_event.set() # Sinaliza para a função main que o programa pode encerrar
 
 
 async def interactive_menu():
     """Exibe e gerencia o menu interativo."""
-    while True:
+    while not shutdown_event.is_set():
         # Exibe o status atualizado antes das opções
         if not active_servers:
             status_line = "Status => Desativado"
@@ -201,11 +213,14 @@ async def interactive_menu():
         print("--------------------------------")
         print("1. Abrir Porta")
         print("2. Remover Porta")
-        print("3. Desativar Proxy")
-        print("0. Sair")
+        print("3. Desativar Proxy e Sair")
+        print("0. Sair do Menu")
         print("--------------------------------")
         
-        choice = await asyncio.to_thread(input, "Escolha uma opção: ")
+        try:
+            choice = await asyncio.to_thread(input, "Escolha uma opção: ")
+        except EOFError: # Lida com o caso de entrada ser fechada
+            break
 
         if choice == '1':
             await open_port()
@@ -221,7 +236,12 @@ async def interactive_menu():
 
 
 async def main() -> None:
-    """Função principal que inicia o proxy e o menu."""
+    """Função principal que inicia o proxy, o menu e aguarda o sinal de encerramento."""
+    
+    # Configura o manipulador de sinal para ignorar o Ctrl+C
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, handle_interrupt_signal)
+
     initial_port = get_port()
     
     # Inicia o servidor na porta inicial
@@ -231,12 +251,17 @@ async def main() -> None:
     # Inicia o menu interativo
     menu_task = asyncio.create_task(interactive_menu())
     
-    # Aguarda a conclusão do menu (o que significa que o usuário escolheu sair)
-    await menu_task
+    # Aguarda o evento de encerramento ser disparado pela opção 3 do menu
+    await shutdown_event.wait()
+    
+    # Garante que o menu seja cancelado ao sair
+    menu_task.cancel()
+    try:
+        await menu_task
+    except asyncio.CancelledError:
+        pass
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nEncerrando o programa.")
+    asyncio.run(main())
+    print("Programa encerrado.")
