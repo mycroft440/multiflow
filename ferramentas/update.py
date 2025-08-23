@@ -1,95 +1,146 @@
 import os
 import shutil
 import subprocess
-import sys
+import argparse
+from typing import List
 
-def limpar_e_reinstalar():
-    """
-    Função principal para limpar o diretório do projeto e reinstalar.
+# --- Constantes e Cores ---
 
-    Esta função apaga todos os arquivos e diretórios no local atual,
-    exceto por uma 'lista branca' que contém o próprio script e o
-    script de instalação 'install.sh'.
+class Cores:
+    """Classe para armazenar códigos de cores ANSI para o terminal."""
+    VERMELHO = '\033[91m'
+    VERDE = '\033[92m'
+    AMARELO = '\033[93m'
+    CIANO = '\033[96m'
+    FIM = '\033[0m' # Reseta a cor para o padrão
 
-    Após a limpeza, executa 'install.sh' para configurar o projeto novamente.
-    """
-    # --- 1. Definição da Lista Branca ---
-    # Adicione aqui qualquer outro arquivo ou pasta que NUNCA deve ser apagado.
-    lista_branca = ['install.sh', os.path.basename(__file__)]
-    diretorio_atual = '.' # Representa o diretório atual
+INSTALL_SCRIPT = "install.sh"
+SCRIPT_NOME = os.path.basename(__file__)
+GIT_DIR = ".git"
 
-    print("--- INICIANDO RESET DO PROJETO ---")
-    print(f"Diretório alvo: {os.path.abspath(diretorio_atual)}")
-    print(f"Itens na lista branca (não serão apagados): {lista_branca}\n")
+# --- Funções para o modo RESET ---
 
-    # --- 2. Confirmação do Usuário ---
-    # Este passo é crucial para evitar a exclusão acidental de arquivos.
+def ask_for_confirmation(force: bool) -> bool:
+    """Pede a confirmação do usuário antes de continuar, a menos que a flag 'force' seja True."""
+    if force:
+        print(f"{Cores.AMARELO}A flag '-y' foi usada. A pular a confirmação.{Cores.FIM}")
+        return True
+    
     try:
-        confirmacao = input("ATENÇÃO: Isso apagará todos os arquivos do projeto, exceto os da lista branca. Deseja continuar? (s/n): ")
+        prompt = (f"{Cores.AMARELO}ATENÇÃO:{Cores.FIM} Isso apagará todos os arquivos do projeto, "
+                  "exceto os da lista branca. Deseja continuar? (s/n): ")
+        confirmacao = input(prompt)
         if confirmacao.lower() != 's':
             print("Operação cancelada pelo usuário.")
-            return
+            return False
+        return True
     except KeyboardInterrupt:
         print("\nOperação cancelada.")
-        return
+        return False
 
+def perform_cleanup(whitelist: List[str]) -> None:
+    """Apaga todos os arquivos e diretórios no diretório atual, exceto os da lista branca."""
     print("\nIniciando limpeza do diretório...")
-
-    # --- 3. Processo de Exclusão ---
-    # Itera sobre todos os itens no diretório.
-    for item in os.listdir(diretorio_atual):
-        if item not in lista_branca:
+    itens_removidos = 0
+    for item in os.listdir('.'):
+        if item not in whitelist:
             try:
-                # Remove a pasta e todo o seu conteúdo se for um diretório.
                 if os.path.isdir(item):
                     shutil.rmtree(item)
-                    print(f"  [OK] Diretório removido: {item}")
-                # Remove o arquivo se for um arquivo.
+                    print(f"  {Cores.VERDE}[OK]{Cores.FIM} Diretório removido: {item}")
                 else:
                     os.remove(item)
-                    print(f"  [OK] Arquivo removido: {item}")
+                    print(f"  {Cores.VERDE}[OK]{Cores.FIM} Arquivo removido: {item}")
+                itens_removidos += 1
             except OSError as e:
-                print(f"  [ERRO] Falha ao remover {item}: {e}")
-
+                print(f"  {Cores.VERMELHO}[ERRO]{Cores.FIM} Falha ao remover {item}: {e}")
+    
+    if itens_removidos == 0:
+        print("Nenhum item para remover.")
+    
     print("Limpeza concluída.\n")
 
-    # --- 4. Reinstalação ---
-    # Executa o script 'install.sh' para reinstalar o projeto.
-    script_instalacao = './install.sh'
-    if os.path.exists(script_instalacao):
-        print(f"Executando o script de instalação: {script_instalacao}")
-        try:
-            # Garante que o script tenha permissão de execução.
-            subprocess.run(['chmod', '+x', script_instalacao], check=True)
-            
-            # Executa o script e captura a saída.
-            resultado = subprocess.run(
-                [script_instalacao], 
-                check=True, 
-                text=True, 
-                capture_output=True
-            )
-            
-            print("\n--- Saída do install.sh ---")
-            print(resultado.stdout)
-            if resultado.stderr:
-                print("\n--- Erros do install.sh ---")
-                print(resultado.stderr)
-            print("---------------------------\n")
-            print("Reinstalação concluída com sucesso!")
+def run_installation(script_path: str) -> None:
+    """Executa o script de instalação e mostra a sua saída em tempo real."""
+    if not os.path.exists(script_path):
+        print(f"{Cores.VERMELHO}[ERRO]{Cores.FIM} Script de instalação '{script_path}' não encontrado.")
+        return
 
-        except FileNotFoundError:
-            print(f"[ERRO] O script '{script_instalacao}' não foi encontrado.")
-        except subprocess.CalledProcessError as e:
-            print(f"[ERRO] O script de instalação falhou com o código de saída {e.returncode}.")
-            print("--- Saída do Erro ---")
-            print(e.stdout)
-            print(e.stderr)
-            print("---------------------")
-        except Exception as e:
-            print(f"Ocorreu um erro inesperado ao executar o instalador: {e}")
-    else:
-        print(f"[ERRO] Script de instalação '{script_instalacao}' não encontrado. Não é possível reinstalar.")
+    print(f"Executando o script de instalação: {Cores.CIANO}{script_path}{Cores.FIM}")
+    print("--- INÍCIO DA SAÍDA DO SCRIPT DE INSTALAÇÃO ---")
+    
+    try:
+        subprocess.run(['chmod', '+x', script_path], check=True, capture_output=True)
+        subprocess.run([script_path], check=True)
+        
+        print("--- FIM DA SAÍDA DO SCRIPT DE INSTALAÇÃO ---")
+        print(f"\n{Cores.VERDE}Reinstalação concluída com sucesso!{Cores.FIM}")
+
+    except FileNotFoundError:
+        print(f"{Cores.VERMELHO}[ERRO]{Cores.FIM} O comando '{script_path}' não foi encontrado.")
+    except subprocess.CalledProcessError as e:
+        print(f"\n{Cores.VERMELHO}[ERRO]{Cores.FIM} O script de instalação falhou com o código de saída {e.returncode}.")
+    except Exception as e:
+        print(f"{Cores.VERMELHO}[ERRO]{Cores.FIM} Ocorreu um erro inesperado: {e}")
+
+# --- Função para o modo UPDATE ---
+
+def run_update() -> None:
+    """Atualiza o projeto executando 'git pull'."""
+    if not os.path.isdir(GIT_DIR):
+        print(f"{Cores.VERMELHO}[ERRO]{Cores.FIM} Este não parece ser um repositório Git.")
+        return
+
+    print("--- INICIANDO ATUALIZAÇÃO DO PROJETO ---")
+    print(f"A tentar atualizar o repositório com '{Cores.CIANO}git pull{Cores.FIM}'...")
+    
+    try:
+        subprocess.run(['git', 'pull'], check=True)
+        print(f"\n{Cores.VERDE}[SUCESSO]{Cores.FIM} Projeto atualizado com sucesso!")
+    except FileNotFoundError:
+        print(f"{Cores.VERMELHO}[ERRO]{Cores.FIM} O comando 'git' não foi encontrado. Verifique se o Git está instalado.")
+    except subprocess.CalledProcessError:
+        print(f"\n{Cores.VERMELHO}[ERRO]{Cores.FIM} 'git pull' falhou. Pode ter conflitos ou alterações locais não resolvidas.")
+    except Exception as e:
+        print(f"{Cores.VERMELHO}[ERRO]{Cores.FIM} Ocorreu um erro inesperado: {e}")
+
+def main() -> None:
+    """Função principal para orquestrar a gestão do projeto."""
+    parser = argparse.ArgumentParser(
+        description="Gerencia o projeto, permitindo um reset completo ou uma atualização via Git.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        '--reset',
+        action='store_true',
+        help="Executa o reset completo: apaga tudo e reinstala."
+    )
+    group.add_argument(
+        '--update',
+        action='store_true',
+        help="Executa a atualização: busca as últimas alterações com 'git pull'."
+    )
+    parser.add_argument(
+        '-y', '--yes',
+        action='store_true',
+        help="Pula a confirmação de segurança para o modo reset."
+    )
+    args = parser.parse_args()
+
+    if args.update:
+        run_update()
+    elif args.reset:
+        lista_branca = [INSTALL_SCRIPT, SCRIPT_NOME, GIT_DIR]
+        diretorio_atual = os.path.abspath('.')
+
+        print("--- INICIANDO RESET DO PROJETO ---")
+        print(f"Diretório alvo: {diretorio_atual}")
+        print(f"Itens na lista branca (não serão apagados): {lista_branca}\n")
+
+        if ask_for_confirmation(args.yes):
+            perform_cleanup(lista_branca)
+            run_installation(f'./{INSTALL_SCRIPT}')
 
 if __name__ == "__main__":
-    limpar_e_reinstalar()
+    main()
