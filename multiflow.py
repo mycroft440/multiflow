@@ -510,6 +510,7 @@ def build_connections_frame(status_msg=""):
     s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}Proxys Multiprotocolo{MC.RESET}\n")  # Seção proxys
     s.append(menu_option("6", "Multi-Flow Proxy", "", MC.BLUE_GRADIENT))
     s.append(menu_option("7", "Rusty Proxy", "", MC.PURPLE_GRADIENT))
+    s.append(menu_option("8", "DragonCore Proxy", "", MC.YELLOW_GRADIENT))  # Opção adicionada para DragonCore Proxy
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", "", MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))  # Rodapé
@@ -681,6 +682,17 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "Rusty Proxy: operação concluída."
+        elif choice == "8":  # Adicionado: Chamada para DragonCore Proxy via menu_dragonproxy.py na pasta menus
+            TerminalManager.leave_alt_screen()
+            try:
+                root = _find_multiflow_root()
+                dragonproxy_path = os.path.join(root, 'menus', 'menu_dragonproxy.py')
+                subprocess.run([sys.executable, dragonproxy_path], check=True)
+            except Exception as e:
+                print(f"Erro ao executar DragonCore Proxy: {e}")
+            finally:
+                TerminalManager.enter_alt_screen()
+            status = "DragonCore Proxy: operação concluída."
         elif choice == "0":
             return  # Volta ao menu anterior
         else:
