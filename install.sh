@@ -231,12 +231,40 @@ if [ "$UPDATE_ONLY" = false ]; then
 fi
 
 
+########################################
 # Instalação do RustyProxy
-log_info "A instalar o binário do RustyProxy..."
-PROXY_DIR="$INSTALL_DIR/conexoes"
-PROXY_BINARY="$PROXY_DIR/proxy"
+#
+# A partir de versões recentes, o binário do proxy é chamado
+# "rustyproxy" e reside em um diretório dedicado (/conexoes).
+# Esta etapa garante que o binário correto esteja disponível
+# na máquina. Se o arquivo já existir e estiver executável,
+# nada é feito. Caso contrário, ele é copiado a partir do
+# diretório de instalação para a pasta global /conexoes.
 
-$SUDO mkdir -p "$PROXY_DIR"
-$SUDO mv /home/ubuntu/upload/proxy "$PROXY_BINARY"
-$SUDO chmod +x "$PROXY_BINARY"
-log_info "Binário do RustyProxy instalado em $PROXY_BINARY"
+log_info "A verificar se o binário do RustyProxy está instalado..."
+
+# Diretório e nome do binário de destino.  A pasta "/conexoes" é
+# utilizada por scripts em runtime (por exemplo, multiflowproxy.py)
+# para armazenar o ficheiro de portas e o binário do proxy.
+DEST_DIR="/conexoes"
+DEST_BIN="$DEST_DIR/rustyproxy"
+
+if [ -x "$DEST_BIN" ]; then
+    log_info "O binário do RustyProxy já está instalado em $DEST_BIN."
+else
+    # Cria o diretório de destino se ainda não existir
+    $SUDO mkdir -p "$DEST_DIR"
+
+    # Determina a origem do binário.  Durante a instalação, o
+    # executável é distribuído no diretório conexoes do projeto.
+    SRC_BIN="$INSTALL_DIR/conexoes/rustyproxy"
+
+    if [ ! -f "$SRC_BIN" ]; then
+        log_error "Arquivo de origem $SRC_BIN não encontrado. Não é possível instalar o RustyProxy."
+    else
+        log_info "A copiar o binário do RustyProxy para $DEST_DIR..."
+        $SUDO cp "$SRC_BIN" "$DEST_BIN"
+        $SUDO chmod +x "$DEST_BIN"
+        log_info "Binário do RustyProxy instalado em $DEST_BIN"
+    fi
+fi
