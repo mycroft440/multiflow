@@ -242,7 +242,7 @@ class Icons:
     EXIT = "🚪 "
     CLOCK = "🕐 "
     SYSTEM = "💻 "
-    UPDATE = "� "
+    UPDATE = "🔄 "  # Corrigido de "� " para um ícone válido de atualização
     DOWNLOAD = "📥 "
     KEY = "🔑 "
     LOCK = "🔒 "
@@ -470,7 +470,6 @@ def build_connections_frame(status_msg=""):
     s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}Proxys Multiprotocolo{MC.RESET}\n")
     s.append(menu_option("6", "Multi-Flow Proxy", "", MC.BLUE_GRADIENT))
     s.append(menu_option("7", "Rusty Proxy", "", MC.PURPLE_GRADIENT))
-    s.append(menu_option("8", "DragonCore Proxy", "", MC.PURPLE_GRADIENT))
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", "", MC.YELLOW_GRADIENT))
     s.append(footer_line(status_msg))
@@ -632,17 +631,6 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "Rusty Proxy: operação concluída."
-        elif choice == "8":
-            TerminalManager.leave_alt_screen()
-            try:
-                root = _find_multiflow_root()
-                dragoncoreproxy_path = os.path.join(root, 'conexoes', 'dragoncoreproxy.py')
-                subprocess.run([sys.executable, dragoncoreproxy_path], check=True)
-            except Exception as e:
-                print(f"Erro ao executar DragonCore Proxy: {e}")
-            finally:
-                TerminalManager.enter_alt_screen()
-            status = "DragonCore Proxy: operação concluída."
         elif choice == "0":
             return
         else:
