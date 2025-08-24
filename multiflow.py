@@ -508,8 +508,9 @@ def build_connections_frame(status_msg=""):
     s.append(menu_option("5", "Xray", "", MC.GREEN_GRADIENT))
     s.append("\n")
     s.append(f"{MC.CYAN_GRADIENT}{MC.BOLD}Proxys Multiprotocolo{MC.RESET}\n")  # Seção proxys
-    s.append(menu_option("6", "Multi-Flow Proxy", "", MC.BLUE_GRADIENT))
-    s.append(menu_option("7", "Rusty Proxy", "", MC.PURPLE_GRADIENT))
+    # As posições foram trocadas: opção 6 agora é Rusty Proxy e opção 7 é Multi-Flow Proxy
+    s.append(menu_option("6", "Rusty Proxy", "", MC.PURPLE_GRADIENT))
+    s.append(menu_option("7", "Multi-Flow Proxy", "", MC.BLUE_GRADIENT))
     # Removido: opção 8 (DragonCore Proxy)
     s.append("\n")
     s.append(menu_option("0", "Voltar ao Menu Principal", "", MC.YELLOW_GRADIENT))
@@ -658,7 +659,7 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "Xray: operação concluída."
-        elif choice == "6":
+        elif choice == "7":
             TerminalManager.leave_alt_screen()
             try:
                 root = _find_multiflow_root()
@@ -669,7 +670,7 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "Multi-Flow Proxy: operação concluída."
-        elif choice == "7":
+        elif choice == "6":
             TerminalManager.leave_alt_screen()
             try:
                 # Encontra a raiz do projeto MultiFlow
@@ -850,3 +851,4 @@ def main_menu():
 
 if __name__ == "__main__":
     main_menu()  # Chama menu principal
+
