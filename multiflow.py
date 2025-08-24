@@ -91,6 +91,7 @@ def bootstrap_imports():
         "menu_bloqueador": "menus.menu_bloqueador",
         "menu_servidor_download": "menus.menu_servidor_download",
         "menu_openvpn": "menus.menu_openvpn",
+        "menu_dragonproxy": "menus.menu_dragonproxy",  # Adicionado para importar o novo menu
     }
 
     imported = {}
@@ -135,7 +136,7 @@ bootstrap_imports()
 
 # Importando módulos do projeto (já resolvidos pelo bootstrap)
 from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
-from menus import menu_badvpn, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
+from menus import menu_badvpn, menu_bloqueador, menu_servidor_download, menu_openvpn, menu_dragonproxy  # noqa: F401  # Adicionado menu_dragonproxy
 
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
@@ -633,9 +634,7 @@ def conexoes_menu():
         elif choice == "8":
             TerminalManager.leave_alt_screen()
             try:
-                root = _find_multiflow_root()
-                dragoncoreproxy_path = os.path.join(root, 'conexoes', 'dragoncoreproxy.py')
-                subprocess.run([sys.executable, dragoncoreproxy_path], check=True)
+                menu_dragonproxy.main_menu()  # Modificado para chamar menu_dragonproxy.main_menu() de /menus
             except Exception as e:
                 print(f"Erro ao executar DragonCore Proxy: {e}")
             finally:
