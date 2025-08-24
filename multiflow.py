@@ -91,7 +91,6 @@ def bootstrap_imports():
         "menu_bloqueador": "menus.menu_bloqueador",
         "menu_servidor_download": "menus.menu_servidor_download",
         "menu_openvpn": "menus.menu_openvpn",
-        "menu_dragonproxy": "menus.menu_dragonproxy",  # Adicionado para importar o novo menu
     }
 
     imported = {}
@@ -136,7 +135,7 @@ bootstrap_imports()
 
 # Importando módulos do projeto (já resolvidos pelo bootstrap)
 from ferramentas import manusear_usuarios  # noqa: F401  (já no globals)
-from menus import menu_badvpn, menu_bloqueador, menu_servidor_download, menu_openvpn, menu_dragonproxy  # noqa: F401  # Adicionado menu_dragonproxy
+from menus import menu_badvpn, menu_bloqueador, menu_servidor_download, menu_openvpn  # noqa: F401
 
 # ==================== GERENCIAMENTO DE TERMINAL/RENDER ====================
 class TerminalManager:
@@ -624,6 +623,8 @@ def conexoes_menu():
             TerminalManager.leave_alt_screen()
             try:
                 root = _find_multiflow_root()
+                rustyproxy_path = os.path.join(root, 'conexoes', 'rustyproxy.py')
+                subprocess.run([sys.executable, rustyproxy_path], check=True)
                 proxy_path = os.path.join(root, 'conexoes', 'proxy')
                 subprocess.run([proxy_path], check=True)
             except Exception as e:
@@ -632,14 +633,11 @@ def conexoes_menu():
                 TerminalManager.enter_alt_screen()
             status = "Rusty Proxy: operação concluída."
         elif choice == "8":
-            # Correção: Alterado para executar via subprocess o arquivo em /menus/menu_dragonproxy.py,
-            # para consistência com outras opções de conexões e evitar dependência de import direto.
-            # Isso permite isolamento e execução independente do script.
             TerminalManager.leave_alt_screen()
             try:
                 root = _find_multiflow_root()
-                dragonproxy_path = os.path.join(root, 'menus', 'menu_dragonproxy.py')
-                subprocess.run([sys.executable, dragonproxy_path], check=True)
+                dragoncoreproxy_path = os.path.join(root, 'conexoes', 'dragoncoreproxy.py')
+                subprocess.run([sys.executable, dragoncoreproxy_path], check=True)
             except Exception as e:
                 print(f"Erro ao executar DragonCore Proxy: {e}")
             finally:
