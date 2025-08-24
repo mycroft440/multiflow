@@ -1,63 +1,107 @@
 import sys
 import asyncio
-import signal
+import socket  # Adicionado para corrigir o family no start_server (não altera lógica do proxy)
 
-# Dicionário global para rastrear os servidores ativos e suas tarefas.
-active_servers: dict[int, asyncio.Task] = {}
-# Evento para sinalizar o encerramento gracioso do programa.
-shutdown_event = asyncio.Event()
-
-# Função para lidar com o sinal de interrupção (Ctrl+C) sem encerrar o programa.
-def handle_interrupt_signal() -> None:
-    print("\nPara encerrar o proxy, por favor, use a opção '3' no menu.")
-
-# Função principal que inicia o proxy.
-# Ela obtém a porta inicial, configura o signal handler, inicia o server inicial e o menu.
+# Função principal que inicia o menu interativo para gerenciar proxies.
 async def main() -> None:
-    # Configura o manipulador de sinal para ignorar Ctrl+C.
-    loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGINT, handle_interrupt_signal)
+    # Dicionário para rastrear servidores ativos por porta (adicionado para o menu).
+    active_servers = {}
 
-    # Obtém a porta inicial a partir dos argumentos.
-    initial_port = get_port()
-    
-    # Inicia o servidor na porta inicial e adiciona à lista de ativos.
-    server_task = asyncio.create_task(start_proxy_server(initial_port))
-    active_servers[initial_port] = server_task
-    
-    # Inicia o menu interativo.
-    menu_task = asyncio.create_task(interactive_menu())
-    
-    # Aguarda o evento de encerramento ser disparado pela opção 3 do menu.
-    await shutdown_event.wait()
-    
-    # Garante que o menu seja cancelado ao sair.
-    menu_task.cancel()
-    try:
-        await menu_task
-    except asyncio.CancelledError:
-        pass
+    # Loop do menu interativo.
+    while True:
+        # Exibe portas ativas.
+        print("Portas ativas:")
+        if active_servers:
+            for port in sorted(active_servers.keys()):
+                print(f"- {port}")
+        else:
+            print("Nenhuma porta ativa.")
+
+        # Exibe opções do menu.
+        print("\n1. Abrir Porta")
+        print("2. Fechar Porta")
+        print("0. Voltar")
+
+        # Obtém escolha do usuário de forma assíncrona (não bloqueia o loop).
+        loop = asyncio.get_event_loop()
+        try:
+            choice = (await loop.run_in_executor(None, input, "Escolha: ")).strip()
+        except EOFError:
+            print("Entrada terminada (EOF detectado). Saindo do menu.")
+            break
+
+        if choice == '1':
+            # Abrir porta: pede a porta e inicia o servidor.
+            try:
+                port_str = (await loop.run_in_executor(None, input, "Porta para abrir: ")).strip()
+            except EOFError:
+                print("Entrada terminada (EOF detectado). Saindo do menu.")
+                break
+            try:
+                port = int(port_str)
+                if port in active_servers:
+                    print(f"Porta {port} já está aberta.")
+                else:
+                    # Inicia o servidor e roda serve_forever em uma task de background.
+                    server = await start_proxy_server(port)
+                    asyncio.create_task(server.serve_forever())
+                    active_servers[port] = server
+                    print(f"Porta {port} aberta com sucesso.")
+            except ValueError:
+                print("Porta inválida (deve ser um número inteiro).")
+            except Exception as e:
+                print(f"Erro ao abrir porta {port}: {e}")
+
+        elif choice == '2':
+            # Fechar porta: pede a porta e fecha o servidor.
+            try:
+                port_str = (await loop.run_in_executor(None, input, "Porta para fechar: ")).strip()
+            except EOFError:
+                print("Entrada terminada (EOF detectado). Saindo do menu.")
+                break
+            try:
+                port = int(port_str)
+                if port in active_servers:
+                    active_servers[port].close()
+                    await active_servers[port].wait_closed()
+                    del active_servers[port]
+                    print(f"Porta {port} fechada com sucesso.")
+                else:
+                    print(f"Porta {port} não está aberta.")
+            except ValueError:
+                print("Porta inválida (deve ser um número inteiro).")
+            except Exception as e:
+                print(f"Erro ao fechar porta {port}: {e}")
+
+        elif choice == '0':
+            # Voltar: fecha todos os servidores ativos e sai.
+            print("Fechando todas as portas ativas...")
+            for port, server in list(active_servers.items()):
+                server.close()
+                await server.wait_closed()
+            print("Saindo do menu.")
+            break
+
+        else:
+            print("Opção inválida. Tente novamente.")
 
 # Função que inicia o servidor de proxy em uma porta específica.
-async def start_proxy_server(port: int) -> None:
+# Modificado ligeiramente para retornar o server em vez de rodar serve_forever internamente (necessário para múltiplos servidores).
+async def start_proxy_server(port: int) -> asyncio.Server:
     try:
         # Tenta iniciar o servidor escutando em todos os endereços IPv6 (e consequentemente IPv4).
-        server = await asyncio.start_server(handle_client, '::', port, family=asyncio.socket.AF_INET6)
+        server = await asyncio.start_server(handle_client, '::', port, family=socket.AF_INET6)
         # Imprime uma mensagem indicando que o serviço está iniciando.
         print(f"Iniciando serviço na porta: {port}")
-        async with server:
-            await server.serve_forever()
+        return server  # Retorna o server para gerenciamento externo.
     except OSError as e:
         # Imprime erro se falhar ao iniciar (ex: porta em uso).
         print(f"Erro ao iniciar o servidor na porta {port}: {e}")
+        raise  # Propaga o erro para o menu tratar.
     except Exception as e:
         # Imprime erro inesperado.
         print(f"Um erro inesperado ocorreu no servidor da porta {port}: {e}")
-    finally:
-        # Garante que o servidor seja removido da lista de ativos se parar.
-        if port in active_servers:
-            del active_servers[port]
-            print(f"Servidor na porta {port} foi encerrado e removido da lista de ativos.")
+        raise  # Propaga o erro.
 
 # Função que lida com uma conexão de cliente individual.
 # Ela envia respostas HTTP, detecta o tipo de tráfego e redireciona para o proxy apropriado.
@@ -95,7 +139,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             addr_proxy = "0.0.0.0:22"
 
         # Conecta-se ao serviço de destino.
-        server_reader, server_writer = await asyncio.open_connection(*addr_proxy.split(':'))
+        host, port_str = addr_proxy.split(':')
+        server_reader, server_writer = await asyncio.open_connection(host, int(port_str))
 
         # Inicia transferências de dados em ambas as direções.
         client_to_server = asyncio.create_task(transfer_data(reader, server_writer))
@@ -139,7 +184,7 @@ async def transfer_data(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 # Retorna os dados como string.
 async def peek_stream(reader: asyncio.StreamReader) -> str:
     # Espia os bytes disponíveis.
-    data = await reader.peek(8192)
+    data = reader.peek(8192)
     # Converte para string, permitindo perda de dados UTF-8 inválidos.
     return data.decode(errors='replace')
 
@@ -176,100 +221,5 @@ def get_status() -> str:
         i += 1
     return status
 
-# --- Seção do Menu Interativo ---
-
-# Função para abrir uma nova porta para o proxy.
-async def open_port():
-    try:
-        port_str = await asyncio.to_thread(input, "Digite a porta que deseja abrir: ")
-        port = int(port_str)
-        if port <= 0 or port > 65535:
-            print("Porta inválida. Por favor, insira um número entre 1 e 65535.")
-            return
-        if port in active_servers:
-            print(f"A porta {port} já está em uso.")
-        else:
-            task = asyncio.create_task(start_proxy_server(port))
-            active_servers[port] = task
-            print(f"Tentando iniciar o proxy na porta {port}...")
-    except ValueError:
-        print("Entrada inválida. Por favor, digite um número de porta válido.")
-    except Exception as e:
-        print(f"Erro ao abrir a porta: {e}")
-
-# Função para fechar (remover) uma porta específica do proxy.
-async def remove_port():
-    if not active_servers:
-        print("Nenhum proxy para remover.")
-        return
-    try:
-        port_str = await asyncio.to_thread(input, "Digite a porta que deseja remover: ")
-        port = int(port_str)
-        if port in active_servers:
-            task = active_servers.pop(port)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                print(f"Proxy na porta {port} foi desativado.")
-        else:
-            print(f"Nenhum proxy encontrado na porta {port}.")
-    except ValueError:
-        print("Entrada inválida. Por favor, digite um número de porta válido.")
-
-# Função para desativar todos os proxies ativos e sinalizar o encerramento do programa.
-async def deactivate_all():
-    if not active_servers:
-        print("Nenhum proxy para desativar.")
-        return
-    
-    print("Desativando todos os proxies...")
-    ports = list(active_servers.keys())
-    for port in ports:
-        task = active_servers.pop(port)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    print("Todos os proxies foram desativados. Encerrando o programa.")
-    shutdown_event.set()  # Sinaliza para a função main que o programa pode encerrar
-
-# Função que exibe e gerencia o menu interativo.
-async def interactive_menu():
-    while not shutdown_event.is_set():
-        # Exibe o status atualizado antes das opções.
-        if not active_servers:
-            status_line = "Status => Desativado"
-        else:
-            ports_str = ", ".join(map(str, sorted(active_servers.keys())))
-            status_line = f"Status => Ativo na(s) porta(s) {ports_str}"
-        
-        print(f"\n{status_line}")
-        print("--------------------------------")
-        print("1. Abrir Porta")
-        print("2. Remover Porta")
-        print("3. Desativar Proxy e Sair")
-        print("0. Sair do Menu")
-        print("--------------------------------")
-        
-        try:
-            choice = await asyncio.to_thread(input, "Escolha uma opção: ")
-        except EOFError:  # Lida com o caso de entrada ser fechada.
-            break
-
-        if choice == '1':
-            await open_port()
-        elif choice == '2':
-            await remove_port()
-        elif choice == '3':
-            await deactivate_all()
-        elif choice == '0':
-            print("Saindo do menu. O proxy continuará funcionando em segundo plano.")
-            break
-        else:
-            print("Opção inválida. Tente novamente.")
-
 if __name__ == "__main__":
     asyncio.run(main())
-    print("Programa encerrado.")
