@@ -669,22 +669,37 @@ def conexoes_menu():
             finally:
                 TerminalManager.enter_alt_screen()
             status = "Multi-Flow Proxy: operação concluída."
-        elif choice == "7":
-            TerminalManager.leave_alt_screen()
-            try:
-                # Encontra a raiz do projeto MultiFlow
-                root = _find_multiflow_root()
-                # Caminho para o binário `rustyproxy` dentro da pasta 'conexoes'
-                rustyproxy_bin = os.path.join(root, 'conexoes', 'rustyproxy')
-                # Executa o binário diretamente. Caso o arquivo não exista ou não tenha permissão de execução,
-                # uma exceção será lançada e tratada no bloco except.
-                subprocess.run([rustyproxy_bin], check=True)
-            except Exception as e:
-                print(f"Erro ao executar Rusty Proxy: {e}")
-            finally:
-                # Sempre retorna à tela alternativa independentemente do sucesso da execução
-                TerminalManager.enter_alt_screen()
-            status = "Rusty Proxy: operação concluída."
+            elif choice == "7":
+                TerminalManager.leave_alt_screen()
+                try:
+                    # Encontra a raiz do projeto MultiFlow
+                    root = _find_multiflow_root()
+                    # Defina caminhos possíveis para o binário do RustyProxy.
+                    # Em instalações antigas o binário é chamado "proxy",
+                    # enquanto versões mais recentes usam "rustyproxy".
+                    candidates = [
+                        os.path.join(root, 'conexoes', 'rustyproxy'),
+                        os.path.join(root, 'conexoes', 'proxy'),
+                    ]
+                    # Selecione o primeiro executável existente
+                    bin_path = None
+                    for path in candidates:
+                        if os.path.isfile(path) and os.access(path, os.X_OK):
+                            bin_path = path
+                            break
+                    if not bin_path:
+                        raise FileNotFoundError(
+                            "Nenhum binário RustyProxy válido encontrado em 'conexoes'. "
+                            "Certifique-se de que o arquivo exista e tenha permissão de execução."
+                        )
+                    # Executa o binário selecionado.
+                    subprocess.run([bin_path], check=True)
+                except Exception as e:
+                    print(f"Erro ao executar Rusty Proxy: {e}")
+                finally:
+                    # Sempre retorna à tela alternativa independentemente do sucesso da execução
+                    TerminalManager.enter_alt_screen()
+                status = "Rusty Proxy: operação concluída."
         elif choice == "0":
             return  # Volta ao menu anterior
         else:
@@ -835,3 +850,4 @@ def main_menu():
 
 if __name__ == "__main__":
     main_menu()  # Chama menu principal
+
