@@ -632,9 +632,14 @@ def conexoes_menu():
                 TerminalManager.enter_alt_screen()
             status = "Rusty Proxy: operação concluída."
         elif choice == "8":
+            # Correção: Alterado para executar via subprocess o arquivo em /menus/menu_dragonproxy.py,
+            # para consistência com outras opções de conexões e evitar dependência de import direto.
+            # Isso permite isolamento e execução independente do script.
             TerminalManager.leave_alt_screen()
             try:
-                menu_dragonproxy.main_menu()  # Modificado para chamar menu_dragonproxy.main_menu() de /menus
+                root = _find_multiflow_root()
+                dragonproxy_path = os.path.join(root, 'menus', 'menu_dragonproxy.py')
+                subprocess.run([sys.executable, dragonproxy_path], check=True)
             except Exception as e:
                 print(f"Erro ao executar DragonCore Proxy: {e}")
             finally:
