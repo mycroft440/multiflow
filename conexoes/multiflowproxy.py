@@ -1,113 +1,152 @@
 import sys
 import asyncio
 import signal
-from asyncio import StreamReader, StreamWriter, Task
 
-# Dicionário global para rastrear os servidores ativos e suas tarefas
-active_servers: dict[int, Task] = {}
-# Evento para sinalizar o encerramento gracioso do programa
+# Dicionário global para rastrear os servidores ativos e suas tarefas.
+active_servers: dict[int, asyncio.Task] = {}
+# Evento para sinalizar o encerramento gracioso do programa.
 shutdown_event = asyncio.Event()
 
+# Função para lidar com o sinal de interrupção (Ctrl+C) sem encerrar o programa.
 def handle_interrupt_signal() -> None:
-    """Lida com o sinal de interrupção (Ctrl+C) sem encerrar o programa."""
     print("\nPara encerrar o proxy, por favor, use a opção '3' no menu.")
 
-async def start_proxy_server(port: int) -> None:
-    """Inicia um servidor de proxy em uma porta específica."""
+# Função principal que inicia o proxy.
+# Ela obtém a porta inicial, configura o signal handler, inicia o server inicial e o menu.
+async def main() -> None:
+    # Configura o manipulador de sinal para ignorar Ctrl+C.
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, handle_interrupt_signal)
+
+    # Obtém a porta inicial a partir dos argumentos.
+    initial_port = get_port()
+    
+    # Inicia o servidor na porta inicial e adiciona à lista de ativos.
+    server_task = asyncio.create_task(start_proxy_server(initial_port))
+    active_servers[initial_port] = server_task
+    
+    # Inicia o menu interativo.
+    menu_task = asyncio.create_task(interactive_menu())
+    
+    # Aguarda o evento de encerramento ser disparado pela opção 3 do menu.
+    await shutdown_event.wait()
+    
+    # Garante que o menu seja cancelado ao sair.
+    menu_task.cancel()
     try:
-        # Tenta iniciar o servidor escutando em todos os endereços IPv6 (e consequentemente IPv4)
+        await menu_task
+    except asyncio.CancelledError:
+        pass
+
+# Função que inicia o servidor de proxy em uma porta específica.
+async def start_proxy_server(port: int) -> None:
+    try:
+        # Tenta iniciar o servidor escutando em todos os endereços IPv6 (e consequentemente IPv4).
         server = await asyncio.start_server(handle_client, '::', port, family=asyncio.socket.AF_INET6)
-        print(f"Serviço iniciado com sucesso na porta: {port}")
-        
+        # Imprime uma mensagem indicando que o serviço está iniciando.
+        print(f"Iniciando serviço na porta: {port}")
         async with server:
             await server.serve_forever()
     except OSError as e:
-        print(f"Erro ao iniciar o servidor na porta {port}: {e}. A porta pode já estar em uso.")
-    except asyncio.CancelledError:
-        # Isso é esperado quando o servidor é cancelado, não precisa de log
-        pass
+        # Imprime erro se falhar ao iniciar (ex: porta em uso).
+        print(f"Erro ao iniciar o servidor na porta {port}: {e}")
     except Exception as e:
+        # Imprime erro inesperado.
         print(f"Um erro inesperado ocorreu no servidor da porta {port}: {e}")
     finally:
-        # Garante que o servidor seja removido da lista de ativos se parar
+        # Garante que o servidor seja removido da lista de ativos se parar.
         if port in active_servers:
             del active_servers[port]
             print(f"Servidor na porta {port} foi encerrado e removido da lista de ativos.")
 
-
-async def handle_client(reader: StreamReader, writer: StreamWriter) -> None:
-    """Lida com as conexões de clientes, a lógica do proxy permanece a mesma."""
+# Função que lida com uma conexão de cliente individual.
+# Ela envia respostas HTTP, detecta o tipo de tráfego e redireciona para o proxy apropriado.
+async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
+        # Obtém o status personalizado dos argumentos.
         status = get_status()
-        # A lógica original do seu proxy
-        await writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
+        # Envia uma resposta HTTP 101 com o status.
+        writer.write(f"HTTP/1.1 101 {status}\r\n\r\n".encode())
         await writer.drain()
+        # Cria um buffer para ler dados do cliente.
         buffer = bytearray(1024)
+        # Lê dados do cliente (possivelmente para ignorar ou processar).
         await reader.readinto(buffer)
-        await writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
+        # Envia uma resposta HTTP 200 com o status.
+        writer.write(f"HTTP/1.1 200 {status}\r\n\r\n".encode())
         await writer.drain()
 
-        # Endereços de proxy padrão (usando localhost)
-        addr_proxy_ssh = "127.0.0.1:22"
-        addr_proxy_ovpn = "127.0.0.1:1194"
-        addr_proxy = addr_proxy_ssh # Padrão para SSH
-
+        # Define o endereço padrão do proxy (SSH na porta 22).
+        addr_proxy = "0.0.0.0:22"
         try:
-            # Espia o stream para decidir para onde encaminhar
+            # Espia o stream com timeout de 1 segundo para decidir para onde encaminhar.
             data = await asyncio.wait_for(peek_stream(reader), timeout=1.0)
-            if "SSH" not in data and data:
-                 addr_proxy = addr_proxy_ovpn
+            # Se contém "SSH" ou está vazio, mantém SSH; caso contrário, usa OpenVPN.
+            if not (data and "SSH" not in data):
+                addr_proxy = "0.0.0.0:22"
+            else:
+                addr_proxy = "0.0.0.0:1194"
         except asyncio.TimeoutError:
-            pass # Mantém o padrão SSH se houver timeout
+            # Em caso de timeout, mantém padrão SSH.
+            pass
         except Exception as e:
+            # Imprime erro no peek para verbosidade, mantém SSH.
             print(f"Erro no peek: {e}")
-        
-        try:
-            # Conecta-se ao serviço de destino
-            server_reader, server_writer = await asyncio.open_connection(*addr_proxy.split(':'))
-        except Exception as e:
-            print(f"Erro ao conectar ao destino ({addr_proxy}): {e}")
-            return
-        
-        # Cria tarefas para transferir dados bidirecionalmente
+            addr_proxy = "0.0.0.0:22"
+
+        # Conecta-se ao serviço de destino.
+        server_reader, server_writer = await asyncio.open_connection(*addr_proxy.split(':'))
+
+        # Inicia transferências de dados em ambas as direções.
         client_to_server = asyncio.create_task(transfer_data(reader, server_writer))
         server_to_client = asyncio.create_task(transfer_data(server_reader, writer))
 
-        # Aguarda a conclusão de ambas as tarefas
+        # Aguarda ambas as transferências completarem.
         await asyncio.gather(client_to_server, server_to_client)
 
-    except Exception:
-        # Silencioso para erros comuns de conexão (ex: reset de conexão)
-        pass
+    except Exception as e:
+        # Imprime erro no processamento do cliente.
+        print(f"Erro ao processar cliente: {e}")
     finally:
+        # Fecha o writer do cliente.
         writer.close()
         await writer.wait_closed()
 
-
-async def transfer_data(reader: StreamReader, writer: StreamWriter) -> None:
-    """Transfere dados de um leitor para um escritor até que a conexão seja fechada."""
+# Função que transfere dados de um leitor para um escritor até que a conexão seja fechada.
+async def transfer_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
+        # Buffer para leitura de dados.
         while not reader.at_eof():
             data = await reader.read(8192)
             if not data:
                 break
             writer.write(data)
             await writer.drain()
-    except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
-        pass # Erros esperados quando uma das conexões é fechada
+    except Exception as e:
+        # Imprime erros na transferência (ex: ConnectionResetError).
+        print(f"Erro na transferência de dados: {e}")
     finally:
+        # Fecha graciosamente: Sinaliza EOF e drena antes de close.
+        try:
+            writer.write_eof()
+            await writer.drain()
+        except Exception:
+            pass
         writer.close()
         await writer.wait_closed()
 
-
-async def peek_stream(reader: StreamReader) -> str:
-    """Espia os dados iniciais no stream sem consumi-los."""
+# Função que espiar (peek) os dados do stream sem consumi-los.
+# Retorna os dados como string.
+async def peek_stream(reader: asyncio.StreamReader) -> str:
+    # Espia os bytes disponíveis.
     data = await reader.peek(8192)
+    # Converte para string, permitindo perda de dados UTF-8 inválidos.
     return data.decode(errors='replace')
 
-
+# Função que obtém a porta dos argumentos de comando.
+# Default para 80 se não especificado.
 def get_port() -> int:
-    """Obtém a porta inicial a partir dos argumentos da linha de comando."""
+    # Coleta argumentos da linha de comando.
     args = sys.argv[1:]
     port = 80
     i = 0
@@ -122,9 +161,10 @@ def get_port() -> int:
         i += 1
     return port
 
-
+# Função que obtém o status dos argumentos de comando.
+# Default para "@RustyManager" se não especificado.
 def get_status() -> str:
-    """Obtém a mensagem de status a partir dos argumentos da linha de comando."""
+    # Coleta argumentos da linha de comando.
     args = sys.argv[1:]
     status = "@RustyManager"
     i = 0
@@ -138,8 +178,8 @@ def get_status() -> str:
 
 # --- Seção do Menu Interativo ---
 
+# Função para abrir uma nova porta para o proxy.
 async def open_port():
-    """Abre uma nova porta para o proxy."""
     try:
         port_str = await asyncio.to_thread(input, "Digite a porta que deseja abrir: ")
         port = int(port_str)
@@ -157,9 +197,8 @@ async def open_port():
     except Exception as e:
         print(f"Erro ao abrir a porta: {e}")
 
-
+# Função para fechar (remover) uma porta específica do proxy.
 async def remove_port():
-    """Fecha (remove) uma porta específica do proxy."""
     if not active_servers:
         print("Nenhum proxy para remover.")
         return
@@ -178,9 +217,8 @@ async def remove_port():
     except ValueError:
         print("Entrada inválida. Por favor, digite um número de porta válido.")
 
-
+# Função para desativar todos os proxies ativos e sinalizar o encerramento do programa.
 async def deactivate_all():
-    """Desativa todos os proxies ativos e sinaliza o encerramento do programa."""
     if not active_servers:
         print("Nenhum proxy para desativar.")
         return
@@ -193,16 +231,14 @@ async def deactivate_all():
         try:
             await task
         except asyncio.CancelledError:
-            # Apenas confirma que a tarefa foi cancelada
             pass
     print("Todos os proxies foram desativados. Encerrando o programa.")
-    shutdown_event.set() # Sinaliza para a função main que o programa pode encerrar
+    shutdown_event.set()  # Sinaliza para a função main que o programa pode encerrar
 
-
+# Função que exibe e gerencia o menu interativo.
 async def interactive_menu():
-    """Exibe e gerencia o menu interativo."""
     while not shutdown_event.is_set():
-        # Exibe o status atualizado antes das opções
+        # Exibe o status atualizado antes das opções.
         if not active_servers:
             status_line = "Status => Desativado"
         else:
@@ -219,7 +255,7 @@ async def interactive_menu():
         
         try:
             choice = await asyncio.to_thread(input, "Escolha uma opção: ")
-        except EOFError: # Lida com o caso de entrada ser fechada
+        except EOFError:  # Lida com o caso de entrada ser fechada.
             break
 
         if choice == '1':
@@ -233,34 +269,6 @@ async def interactive_menu():
             break
         else:
             print("Opção inválida. Tente novamente.")
-
-
-async def main() -> None:
-    """Função principal que inicia o proxy, o menu e aguarda o sinal de encerramento."""
-    
-    # Configura o manipulador de sinal para ignorar o Ctrl+C
-    loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGINT, handle_interrupt_signal)
-
-    initial_port = get_port()
-    
-    # Inicia o servidor na porta inicial
-    server_task = asyncio.create_task(start_proxy_server(initial_port))
-    active_servers[initial_port] = server_task
-    
-    # Inicia o menu interativo
-    menu_task = asyncio.create_task(interactive_menu())
-    
-    # Aguarda o evento de encerramento ser disparado pela opção 3 do menu
-    await shutdown_event.wait()
-    
-    # Garante que o menu seja cancelado ao sair
-    menu_task.cancel()
-    try:
-        await menu_task
-    except asyncio.CancelledError:
-        pass
-
 
 if __name__ == "__main__":
     asyncio.run(main())
