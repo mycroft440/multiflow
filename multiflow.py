@@ -765,7 +765,7 @@ def atualizar_multiflow():
                 return
             TerminalManager.leave_alt_screen()  # Sai
             try:
-                subprocess.run(['sudo', sys.executable, update_script_path], check=True)  # Executa atualização
+                subprocess.run(['sudo', sys.executable, update_script_path, '--update'], check=True)  # Executa atualização
                 print("\nAtualizado com sucesso. Reinicie com: multiflow\n")  # Sucesso
                 time.sleep(1.0)  # Pausa
                 sys.exit(0)  # Sai
