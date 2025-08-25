@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import asyncio
 import subprocess
 import os
@@ -34,7 +35,7 @@ def add_proxy_port(port: int, status: Optional[str] = None) -> None:
         return
 
     status_str = status or "@RustyProxy"
-    command = f"/opt/rustyproxy/proxy --port {port} --status {status_str}"
+    command = f"/opt/multiflow/conexoes/rustyproxy --port {port} --status {status_str}"
     service_file_path = f"/etc/systemd/system/proxy{port}.service"
     service_file_content = f"""
     [Unit]
