@@ -1,202 +1,316 @@
 #!/usr/bin/env python3
+"""
+Menu interativo para um proxy com encaminhamento direto para SSH.
+
+Versão final e definitiva que utiliza a event loop de baixo nível do asyncio
+para manipular sockets diretamente. Esta abordagem replica o comportamento de
+alta performance do Rust (Tokio), resolvendo problemas de timing com o
+handshake SSH e garantindo uma conexão estável.
+"""
+
+import argparse
 import asyncio
-import subprocess
 import os
-from pathlib import Path
+import sys
+import threading
+import time
 import socket
+import logging
 from typing import Optional
 
-PORTS_FILE = "/conexoes/ports"
+# ==== Configuração dos Logs ====
+LOG_FILE = "/tmp/proxy.log"
+if not logging.getLogger(__name__).handlers:
+    logging.basicConfig(
+        level=logging.INFO, # Use INFO para produção, DEBUG para depuração intensa
+        format='%(asctime)s - %(levelname)s - %(threadName)s - [%(funcName)s] - %(message)s',
+        filename=LOG_FILE,
+        filemode='a'
+    )
+logger = logging.getLogger(__name__)
+
+# ==== Parâmetros ====
+DEFAULT_STATUS = "@RustyManager"
+DEFAULT_PORT = 80
+BUF_SIZE = 8192
+PRECONSUME = 1024
+UPSTREAM_SSH = ("127.0.0.1", 22)
 
 
-def is_port_in_use(port: int) -> bool:
-    port_str = str(port)
-
-    try:
-        netstat_output = subprocess.check_output(["netstat", "-tuln"]).decode("utf-8")
-        if f"::{port_str}\\b" in netstat_output or f"0.0.0.0:{port_str}\\b" in netstat_output:
-            return True
-    except subprocess.CalledProcessError:
-        pass
-
-    try:
-        ss_output = subprocess.check_output(["ss", "-tuln"]).decode("utf-8")
-        if f"::{port_str}\\b" in ss_output or f"0.0.0.0:{port_str}\\b" in ss_output:
-            return True
-    except subprocess.CalledProcessError:
-        pass
-
-    return False
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(add_help=True)
+    p.add_argument("--status", default=DEFAULT_STATUS, help="Texto do status a enviar nas respostas 101/200")
+    args, _ = p.parse_known_args()
+    return args
 
 
-def add_proxy_port(port: int, status: Optional[str] = None) -> None:
-    if is_port_in_use(port):
-        print(f"A porta {port} já está em uso.")
-        return
+class AsyncProxy:
+    def __init__(self, port: int, status: str):
+        self.port = port
+        self.status = status
+        self.server: Optional[asyncio.AbstractServer] = None
+        self.running = False
 
-    status_str = status or "@RustyProxy"
-    command = f"/opt/multiflow/conexoes/rustyproxy --port {port} --status {status_str}"
-    service_file_path = f"/etc/systemd/system/proxy{port}.service"
-    service_file_content = f"""
-    [Unit]
-    Description=RustyProxy{port}
-    After=network.target
-
-    [Service]
-    LimitNOFILE=infinity
-    LimitNPROC=infinity
-    LimitMEMLOCK=infinity
-    LimitSTACK=infinity
-    LimitCORE=0
-    LimitAS=infinity
-    LimitRSS=infinity
-    LimitCPU=infinity
-    LimitFSIZE=infinity
-    Type=simple
-    ExecStart={command}
-    Restart=always
-
-    [Install]
-    WantedBy=multi-user.target
-    """
-
-    # Write service file
-    with open(service_file_path, 'w') as f:
-        f.write(service_file_content)
-
-    subprocess.run(["sudo", "systemctl", "daemon-reload"])
-    subprocess.run(["sudo", "systemctl", "enable", f"proxy{port}.service"])
-    subprocess.run(["sudo", "systemctl", "start", f"proxy{port}.service"])
-
-    # Save port to file
-    with open(PORTS_FILE, "a") as f:
-        f.write(f"{port}\n")
-
-    print(f"Porta {port} aberta com sucesso.")
-
-
-def del_proxy_port(port: int) -> None:
-    subprocess.run(["sudo", "systemctl", "disable", f"proxy{port}.service"])
-    subprocess.run(["sudo", "systemctl", "stop", f"proxy{port}.service"])
-    subprocess.run(["sudo", "rm", "-f", f"/etc/systemd/system/proxy{port}.service"])
-    subprocess.run(["sudo", "systemctl", "daemon-reload"])
-
-    # Remove port from file
-    with open(PORTS_FILE, "r") as f:
-        ports_content = f.readlines()
-
-    new_ports_content = [line for line in ports_content if line.strip() != str(port)]
-
-    with open(PORTS_FILE, "w") as f:
-        f.writelines(new_ports_content)
-
-    print(f"Porta {port} fechada com sucesso.")
-
-
-async def start_http(listener: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    while True:
-        data = await listener.read(1024)
-        if not data:
-            break
-
-        # Handle client connection and proxy transfer
-        addr_proxy = "0.0.0.0:22"  # Default
-
-        if "SSH" in data.decode() or not data:
-            addr_proxy = "0.0.0.0:22"
-        else:
-            addr_proxy = "0.0.0.0:1194"
-
-        server_stream = await asyncio.open_connection(addr_proxy.split(":")[0], int(addr_proxy.split(":")[1]))
-        server_reader, server_writer = server_stream
-
-        # Transfer data between client and server
-        await asyncio.gather(
-            transfer_data(listener, server_writer),
-            transfer_data(server_reader, writer),
+    async def start(self):
+        """Inicia o servidor proxy"""
+        self.server = await asyncio.start_server(
+            self.handle_client,
+            '0.0.0.0',
+            self.port
         )
+        self.running = True
+        logger.info(f"Servidor iniciado e a escutar na porta {self.port}")
+
+    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """Manipula o cliente usando sockets de baixo nível para a transferência de dados."""
+        client_addr = writer.get_extra_info('peername')
+        logger.info(f"Nova conexão de {client_addr}")
+
+        client_sock = writer.get_extra_info('socket')
+        loop = asyncio.get_running_loop()
+
+        upstream_sock = None
+        upstream_writer = None # Mantemos para fechar corretamente
+        try:
+            # 1) Handshake HTTP (usando streams, que é seguro para esta parte)
+            logger.debug(f"[{client_addr}] A realizar handshake HTTP.")
+            writer.write(f"HTTP/1.1 101 {self.status}\r\n\r\n".encode())
+            await writer.drain()
+            # Usar readexactly para garantir que lemos o payload esperado
+            await reader.readexactly(PRECONSUME)
+            writer.write(f"HTTP/1.1 200 {self.status}\r\n\r\n".encode())
+            await writer.drain()
+            logger.info(f"[{client_addr}] Handshake concluído.")
+
+            # 2) Conexão com o destino (upstream)
+            logger.debug(f"[{client_addr}] A conectar ao upstream em {UPSTREAM_SSH}")
+            upstream_reader, upstream_writer = await asyncio.open_connection(
+                UPSTREAM_SSH[0], UPSTREAM_SSH[1]
+            )
+            upstream_sock = upstream_writer.get_extra_info('socket')
+            logger.info(f"[{client_addr}] Conexão com upstream estabelecida.")
+
+            # 3) Transferência bidirecional de baixo nível
+            logger.debug(f"[{client_addr}] A iniciar transferência de dados de baixo nível.")
+            task1 = asyncio.create_task(self.transfer_low_level(loop, client_sock, upstream_sock, f"{client_addr} -> UPSTREAM"))
+            task2 = asyncio.create_task(self.transfer_low_level(loop, upstream_sock, client_sock, f"UPSTREAM -> {client_addr}"))
+
+            await asyncio.gather(task1, task2)
+            logger.debug(f"[{client_addr}] Transferência de dados concluída.")
+
+        except asyncio.IncompleteReadError:
+            logger.warning(f"[{client_addr}] O cliente fechou a conexão durante o handshake (payload incompleto).")
+        except ConnectionRefusedError:
+            logger.error(f"[{client_addr}] Falha ao conectar: Conexão recusada. O serviço SSH está a correr em {UPSTREAM_SSH}?")
+        except Exception as e:
+            logger.error(f"[{client_addr}] Erro inesperado: {e}", exc_info=False) # Mude para True para ver o traceback completo
+        finally:
+            logger.info(f"[{client_addr}] A encerrar todas as conexões.")
+            # Encerra os writers de alto nível primeiro para libertar os recursos
+            if writer and not writer.is_closing():
+                writer.close()
+            if upstream_writer and not upstream_writer.is_closing():
+                upstream_writer.close()
+            # Encerra os sockets de baixo nível
+            if client_sock:
+                client_sock.close()
+            if upstream_sock:
+                upstream_sock.close()
 
 
-async def transfer_data(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    buffer = bytearray(8192)
+    async def transfer_low_level(self, loop: asyncio.AbstractEventLoop, r_sock: socket.socket, w_sock: socket.socket, direction: str):
+        """Transfere dados entre sockets usando a event loop."""
+        try:
+            while True:
+                data = await loop.sock_recv(r_sock, BUF_SIZE)
+                if not data:
+                    logger.info(f"[{direction}] Fim do stream (EOF).")
+                    break
+                await loop.sock_sendall(w_sock, data)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            logger.warning(f"[{direction}] Conexão de transferência redefinida.")
+        except Exception as e:
+            logger.error(f"[{direction}] Erro na transferência de baixo nível: {e}", exc_info=False)
+        finally:
+            try:
+                # Notifica o outro lado que não enviaremos mais dados
+                if w_sock:
+                    w_sock.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass # Ignora o erro se o socket já estiver fechado
+
+    async def stop(self):
+        """Para o servidor"""
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
+        logger.info("Servidor parado.")
+        self.running = False
+
+
+class ProxyController:
+    """Controla o proxy numa thread separada para não bloquear o menu"""
+    def __init__(self, status: str):
+        self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._proxy: Optional[AsyncProxy] = None
+        self.port: Optional[int] = None
+        self.status: str = status
+        self.error_message: Optional[str] = None
+        self._started_event = threading.Event()
+
+    def start(self, port: int) -> bool:
+        if self.is_running(): return True
+        self.port = port
+        self.error_message = None
+        self._started_event.clear()
+        result = {"success": False}
+        def run_proxy():
+            threading.current_thread().name = "ProxyThread"
+            try:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                self._proxy = AsyncProxy(port, self.status)
+                async def run_server():
+                    try:
+                        await self._proxy.start()
+                        result["success"] = True
+                    except Exception as e:
+                        self.error_message = str(e)
+                        logger.critical(f"Falha crítica ao iniciar o servidor: {e}", exc_info=True)
+                    finally:
+                        self._started_event.set()
+                    if result["success"] and self._proxy.server:
+                        await self._proxy.server.serve_forever()
+                self._loop.run_until_complete(run_server())
+            except Exception as e:
+                self.error_message = str(e)
+                logger.critical(f"Falha não tratada na thread do proxy: {e}", exc_info=True)
+                result["success"] = False
+                if not self._started_event.is_set(): self._started_event.set()
+        self._thread = threading.Thread(target=run_proxy, daemon=True)
+        self._thread.start()
+        started = self._started_event.wait(timeout=5.0)
+        if not started and not self.error_message:
+            self.error_message = "Falha ao iniciar o servidor (timeout)"
+            logger.error(self.error_message)
+        return result["success"]
+
+    def stop(self) -> None:
+        if not self.is_running() or not self._loop: return
+        logger.info("A parar o proxy...")
+        async def do_stop():
+            if self._proxy: await self._proxy.stop()
+            if self._loop.is_running(): self._loop.stop()
+        future = asyncio.run_coroutine_threadsafe(do_stop(), self._loop)
+        try:
+            future.result(timeout=3.0)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("Timeout ao parar o proxy.")
+        if self._thread: self._thread.join(timeout=3.0)
+        self._thread, self._loop, self._proxy, self.port, self.error_message = None, None, None, None, None
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive() and self._proxy is not None and self._proxy.running
+
+def ask_port(default: int) -> Optional[int]:
+    C_CYAN, C_YELLOW, C_RESET = "\033[96m", "\033[93m", "\033[0m"
+    val = input(f"  {C_CYAN}› Digite a porta para abrir [{default}]: {C_RESET}").strip()
+    if not val: return default
+    try:
+        p = int(val)
+        if not (1 <= p <= 65535): raise ValueError
+        return p
+    except ValueError:
+        print(f"  {C_YELLOW}⚠️ Porta inválida. Tente um número entre 1 e 65535.{C_RESET}")
+        time.sleep(2)
+        return None
+
+def run_menu(status: str) -> None:
+    ctrl = ProxyController(status=status)
+    default_port = DEFAULT_PORT
+    C_RESET, C_BOLD, C_GREEN, C_RED, C_YELLOW, C_BLUE, C_CYAN, C_WHITE = "\033[0m", "\033[1m", "\033[92m", "\033[91m", "\033[93m", "\033[94m", "\033[96m", "\033[97m"
+    def clear_screen(): os.system('cls' if sys.platform == 'win32' else 'clear')
     while True:
-        n = await reader.readinto(buffer)
-        if n == 0:
-            break
-        writer.write(buffer[:n])
-        await writer.drain()
-
-
-def get_port() -> int:
-    import sys
-    port = 80
-    if "--port" in sys.argv:
-        port_index = sys.argv.index("--port") + 1
-        if port_index < len(sys.argv):
-            port = int(sys.argv[port_index])
-    return port
-
-
-def get_status() -> str:
-    import sys
-    status = "@RustyManager"
-    if "--status" in sys.argv:
-        status_index = sys.argv.index("--status") + 1
-        if status_index < len(sys.argv):
-            status = sys.argv[status_index]
-    return status
-
-
-async def show_menu():
-    if not Path(PORTS_FILE).exists():
-        subprocess.run(["sudo", "touch", PORTS_FILE])
-
-    while True:
-        os.system("clear")
-        print("================= @RustyManager ================")
-        print("------------------------------------------------")
-        print("|                  RUSTY PROXY                 |")
-        print("------------------------------------------------")
-
-        active_ports = ""
-        with open(PORTS_FILE, "r") as f:
-            active_ports = f.read().strip()
-        print(f"| Portas(s): {'nenhuma' if not active_ports else active_ports:<34}|")
-
-        print("------------------------------------------------")
-        print("| 1 - Abrir Porta                              |")
-        print("| 2 - Fechar Porta                             |")
-        print("| 0 - Voltar ao menu                           |")
-        print("------------------------------------------------")
-
-        option = input("--> Selecione uma opção: ")
-
-        if option == "1":
-            port = int(input("Digite a porta: "))
-            status = input("Digite o status de conexão (deixe vazio para o padrão): ") or None
-            add_proxy_port(port, status)
-        elif option == "2":
-            port = int(input("Digite a porta: "))
-            del_proxy_port(port)
-        elif option == "0":
-            break
+        clear_screen()
+        print(f"{C_BLUE}{C_BOLD}╔═══════════════════════════════════════════════╗")
+        print(f"║     Gerenciador de Proxy (SSH Direto) {status}     ║")
+        print(f"╚═══════════════════════════════════════════════╝{C_RESET}\n")
+        if ctrl.is_running() and ctrl.port is not None:
+            print(f"  {C_BOLD}Status:{C_RESET} {C_GREEN}ATIVO ✅{C_RESET}")
+            print(f"  {C_BOLD}Porta:{C_RESET} {C_WHITE}{ctrl.port}{C_RESET}")
         else:
-            print("Opção inválida. Pressione qualquer tecla para voltar ao menu.")
-            input()
-
-
-async def main():
-    import sys
-
-    if "--menu" in sys.argv:
-        await show_menu()
-    else:
-        port = get_port()
-        server = await asyncio.start_server(start_http, "0.0.0.0", port)
-        print(f"Iniciando serviço na porta: {port}")
-        async with server:
-            await server.serve_forever()
-
+            print(f"  {C_BOLD}Status:{C_RESET} {C_RED}INATIVO ❌{C_RESET}")
+        if ctrl.error_message: print(f"  {C_BOLD}Erro:{C_RESET} {C_RED}{ctrl.error_message}{C_RESET}")
+        print("\n" + "="*47 + "\n")
+        print(f"  {C_YELLOW}[1]{C_RESET} - Iniciar Proxy")
+        print(f"  {C_YELLOW}[2]{C_RESET} - Parar Proxy")
+        print(f"  {C_YELLOW}[3]{C_RESET} - Ver Logs")
+        print(f"  {C_YELLOW}[4]{C_RESET} - Limpar Logs")
+        print(f"  {C_RED}[5]{C_RESET} - Remover Script")
+        print(f"  {C_YELLOW}[0]{C_RESET} - Sair\n")
+        choice = input(f"  {C_CYAN}› Selecione uma opção: {C_RESET}").strip()
+        if choice == "1":
+            if ctrl.is_running(): print(f"\n  {C_YELLOW}💡 O proxy já está ativo.{C_RESET}"); time.sleep(2); continue
+            port = ask_port(default_port)
+            if port is None: continue
+            print(f"\n  {C_WHITE}A iniciar o proxy na porta {port}...{C_RESET}");
+            ok = ctrl.start(port)
+            if ok: print(f"  {C_GREEN}✔ Proxy iniciado com sucesso.{C_RESET}"); default_port = port; time.sleep(2.5)
+            else:
+                print(f"  {C_RED}✘ Falha ao iniciar o proxy.{C_RESET}")
+                if ctrl.error_message: print(f"    {C_RED}Motivo: {ctrl.error_message}{C_RESET}")
+                time.sleep(4)
+        elif choice == "2":
+            if not ctrl.is_running(): print(f"\n  {C_YELLOW}💡 O proxy já está inativo.{C_RESET}")
+            else: print(f"\n  {C_WHITE}A parar o proxy...{C_RESET}"); ctrl.stop(); print(f"  {C_GREEN}✔ Proxy interrompido.{C_RESET}")
+            time.sleep(2)
+        elif choice == "3":
+            clear_screen()
+            print(f"{C_BLUE}--- Logs de {LOG_FILE} ---{C_RESET}\n")
+            try:
+                with open(LOG_FILE, 'r') as f:
+                    print(f.read())
+            except FileNotFoundError:
+                print(f"{C_YELLOW}Ficheiro de log ainda não foi criado.{C_RESET}")
+            print(f"\n{C_BLUE}--- Fim dos Logs ---{C_RESET}")
+            input(f"\n{C_CYAN}Pressione Enter para voltar ao menu...{C_RESET}")
+        elif choice == "4":
+            try:
+                with open(LOG_FILE, 'w') as f:
+                    f.write('')
+                logger.info("Ficheiro de log limpo pelo utilizador.")
+                print(f"\n  {C_GREEN}✔ Ficheiro de log ({LOG_FILE}) limpo com sucesso.{C_RESET}")
+            except Exception as e:
+                print(f"\n  {C_RED}✘ Erro ao limpar o ficheiro de log: {e}{C_RESET}")
+            time.sleep(2)
+        elif choice == "5":
+            print(f"\n  {C_RED}{C_BOLD}ATENÇÃO: Ação irreversível.{C_RESET}")
+            if input(f"  {C_CYAN}› Deseja realmente remover o script? (s/N): {C_RESET}").strip().lower() == 's':
+                if ctrl.is_running(): print(f"\n  {C_WHITE}A parar o proxy...{C_RESET}"); ctrl.stop(); time.sleep(1)
+                try:
+                    script_path = os.path.abspath(__file__);
+                    print(f"  {C_WHITE}A remover: {script_path}{C_RESET}"); os.remove(script_path)
+                    print(f"  {C_GREEN}✔ Script removido. A sair...{C_RESET}"); time.sleep(2); break
+                except Exception as e:
+                    print(f"\n  {C_RED}✘ Erro ao remover: {e}{C_RESET}"); time.sleep(4); break
+            else:
+                print(f"\n  {C_YELLOW}💡 Remoção cancelada.{C_RESET}"); time.sleep(2)
+        elif choice == "0":
+            if ctrl.is_running(): print(f"\n  {C_WHITE}A parar o proxy...{C_RESET}"); ctrl.stop()
+            print(f"\n  {C_BLUE}👋 Até logo!{C_RESET}"); break
+        else:
+            print(f"\n  {C_RED}✘ Opção inválida.{C_RESET}"); time.sleep(1.5)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    threading.current_thread().name = "MainThread"
+    logger.info("="*20 + " Script do Menu Iniciado " + "="*20)
+    args = parse_args()
+    try:
+        run_menu(status=args.status)
+    except KeyboardInterrupt:
+        logger.info("Script terminado pelo utilizador (Ctrl+C)")
+        print("\n\nEncerrado pelo utilizador.")
+    except Exception as e:
+        logger.critical(f"Erro fatal na thread principal: {e}", exc_info=True)
+        print(f"\n\nOcorreu um erro fatal. Verifique {LOG_FILE} para detalhes.")
