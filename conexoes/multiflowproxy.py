@@ -18,6 +18,7 @@ DEFAULT_HOST = "127.0.0.1:22"
 # --- Respostas personalizadas para cada tipo de conexão ---
 RESPONSE_WS = ('HTTP/1.1 101 '+str(COR)+str(MSG)+str(FTAG)+' \r\n\r\n').encode('utf-8')
 RESPONSE_HTTP = ("HTTP/1.1 200 " + str(COR) + str(MSG) + str(FTAG) + "\r\n\r\n").encode('utf-8')
+RESPONSE_ERROR = b'HTTP/1.1 502 Bad Gateway\r\n\r\n'
 
 # --- Gerenciador de Servidores Ativos ---
 active_servers = {}
@@ -128,6 +129,9 @@ class ConnectionHandler(threading.Thread):
     def run(self):
         try:
             peek_buffer = self.client.recv(1024, socket.MSG_PEEK)
+            if not peek_buffer:
+                return # Cliente desconectou antes de enviar dados
+
             is_websocket = b'upgrade: websocket' in peek_buffer.lower()
 
             if is_websocket:
@@ -140,7 +144,7 @@ class ConnectionHandler(threading.Thread):
                 self.process_request(is_websocket=False)
 
         except Exception as e:
-            pass
+            self.server.printLog("Erro no handler para {}: {}".format(self.log, str(e)))
         finally:
             self.close()
             self.server.removeConn(self)
@@ -158,7 +162,6 @@ class ConnectionHandler(threading.Thread):
         if hostPort != b'':
             passwd = self.findHeader(self.client_buffer, b'X-Pass')
             
-            # Decodifica hostPort para a verificação startswith
             hostPort_str = hostPort.decode('utf-8', errors='ignore')
 
             if len(PASS) != 0 and passwd.decode('utf-8', errors='ignore') == PASS:
@@ -182,26 +185,33 @@ class ConnectionHandler(threading.Thread):
         return head[:aux]
 
     def connect_target(self, host):
-        i = host.find(':')
-        if i != -1:
-            port = int(host[i+1:])
-            host = host[:i]
-        else:
-            port = 80
-        
-        (soc_family, soc_type, proto, _, address) = socket.getaddrinfo(host, port)[0]
-        self.target = socket.socket(soc_family, soc_type, proto)
-        self.targetClosed = False
-        self.target.connect(address)
+        try:
+            i = host.find(':')
+            if i != -1:
+                port = int(host[i+1:])
+                host = host[:i]
+            else:
+                port = 80
+            
+            (soc_family, soc_type, proto, _, address) = socket.getaddrinfo(host, port)[0]
+            self.target = socket.socket(soc_family, soc_type, proto)
+            self.targetClosed = False
+            self.target.connect(address)
+            return True
+        except Exception as e:
+            self.server.printLog("Erro ao conectar ao destino {} - {}".format(host, str(e)))
+            return False
 
     def method_CONNECT(self, path, send_200_ok):
         self.log += ' - CONNECT ' + path
-        self.connect_target(path)
-        if send_200_ok:
-            self.client.sendall(RESPONSE_HTTP)
-        self.client_buffer = b''
-        self.server.printLog(self.log)
-        self.doCONNECT()
+        if self.connect_target(path):
+            if send_200_ok:
+                self.client.sendall(RESPONSE_HTTP)
+            self.client_buffer = b''
+            self.server.printLog(self.log)
+            self.doCONNECT()
+        else:
+            self.client.sendall(RESPONSE_ERROR)
 
     def doCONNECT(self):
         socs = [self.client, self.target]
@@ -236,18 +246,25 @@ def clear_screen():
 
 def display_menu():
     clear_screen()
+    
+    # Exibe o status dinâmico acima do menu
+    if not active_servers:
+        print("\033[1;37mStatus: \033[1;31mInativo\033[0m\n")
+    else:
+        ports = ", ".join(str(p) for p in sorted(active_servers.keys()))
+        print("\033[1;37mStatus: \033[1;32mAtivo. Portas: \033[1;33m{}\033[0m\n".format(ports))
+
     print("\033[1;34m")
-    print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-    print("┃      \033[1;32mPAINEL DE CONTROLE PROXY HÍBRIDO\033[1;34m      ┃")
-    print("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
-    print("┃                                      ┃")
-    print("┃   \033[1;36m[1]\033[0m \033[1;37mAbrir Porta\033[1;34m                       ┃")
-    print("┃   \033[1;36m[2]\033[0m \033[1;37mFechar Porta\033[1;34m                      ┃")
-    print("┃   \033[1;36m[3]\033[0m \033[1;37mStatus das Portas\033[1;34m                 ┃")
-    print("┃                                      ┃")
-    print("┃   \033[1;31m[0]\033[0m \033[1;37mSair do Painel\033[1;34m                    ┃")
-    print("┃                                      ┃")
-    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    print("┃ \033[1;32mPAINEL DE CONTROLE PROXY HÍBRIDO\033[1;34m     ┃")
+    print("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
+    print("┃                                                          ┃")
+    print("┃   \033[1;36m[1]\033[0m \033[1;37mAbrir Porta\033[1;34m   ┃")
+    print("┃   \033[1;36m[2]\033[0m \033[1;37mFechar Porta\033[1;34m  ┃")
+    print("┃                                                          ┃")
+    print("┃   \033[1;31m[0]\033[0m \033[1;37mSair do Painel\033[1;34m┃")
+    print("┃                                                          ┃")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
     print("\033[0m")
 
 def start_proxy():
@@ -260,7 +277,6 @@ def start_proxy():
         else:
             server = Server(LISTENING_ADDR, port)
             server.start()
-            # Pequena espera para verificar se a thread iniciou com sucesso
             time.sleep(0.1)
             if server.running:
                 active_servers[port] = server
@@ -285,25 +301,6 @@ def stop_proxy():
         print("\n\033[1;31mErro: Por favor, digite um número de porta válido.\033[0m")
     input("\n\033[1;37mPressione Enter para voltar ao menu...\033[0m")
 
-def show_status():
-    clear_screen()
-    print("\033[1;34m")
-    print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-    print("┃   \033[1;32mSTATUS DAS PORTAS ATIVAS\033[1;34m   ┃")
-    print("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
-    if not active_servers:
-        print("┃    \033[1;31mNenhuma porta ativa no\033[1;34m    ┃")
-        print("┃         \033[1;31mmomento.\033[1;34m           ┃")
-    else:
-        for port in sorted(active_servers.keys()):
-            status_line = "┃ Porta: \033[1;33m{:<5}\033[0m -> \033[1;32mATIVA\033[1;34m".format(port)
-            padding = 30 - len(status_line) + 13
-            print(status_line + ' ' * padding + '┃')
-    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
-    print("\033[0m")
-    input("\n\033[1;37mPressione Enter para voltar ao menu...\033[0m")
-
-
 def main():
     while True:
         display_menu()
@@ -312,8 +309,6 @@ def main():
             start_proxy()
         elif choice == '2':
             stop_proxy()
-        elif choice == '3':
-            show_status()
         elif choice == '0':
             if active_servers:
                 print("\n\033[1;31mErro: É necessário fechar todas as portas ativas antes de sair.\033[0m")
