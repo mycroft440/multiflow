@@ -245,10 +245,12 @@ def save_state():
 
 def load_state_and_start_proxies():
     try:
-        if os.path.exists(STATE_FILE):
+        # O ficheiro de estado só é lido se o serviço estiver instalado
+        service_path = f"/etc/systemd/system/{SERVICE_NAME}"
+        if os.path.exists(service_path) and os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r') as f:
                 ports = json.load(f)
-            print("\033[1;32m✓ Restaurando sessão anterior...\033[0m")
+            print("\033[1;32m✓ Restaurando sessão anterior do serviço...\033[0m")
             for port in ports:
                 if isinstance(port, int) and 0 < port < 65536:
                      server = Server(LISTENING_ADDR, port)
@@ -266,14 +268,15 @@ def load_state_and_start_proxies():
 def display_menu():
     clear_screen()
     
-    # Título e cabeçalho
+    service_path = f"/etc/systemd/system/{SERVICE_NAME}"
+    is_installed = os.path.exists(service_path)
+
     print("\033[1;36m" + "═" * 65)
     print("║" + " " * 63 + "║")
     print("║" + "\033[1;97m🚀 MULTIFLOW PROXY - PAINEL DE GESTÃO 🚀\033[1;36m".center(75) + "║")
     print("║" + " " * 63 + "║")
     print("╠" + "═" * 63 + "╣")
     
-    # Status do sistema
     if active_servers:
         ports = ", ".join(str(p) for p in sorted(active_servers.keys()))
         status_icon = "🟢"
@@ -289,14 +292,18 @@ def display_menu():
     print("╠" + "═" * 63 + "╣")
     print("║" + " " * 63 + "║")
     
-    # Menu de opções
     print("║  \033[1;97m📋 OPÇÕES DISPONÍVEIS:\033[1;36m" + " " * 32 + "║")
     print("║" + " " * 63 + "║")
-    print("║    \033[1;92m[1]\033[1;37m ▶️  Iniciar Proxy numa Porta\033[1;36m" + " " * 23 + "║")
-    print("║    \033[1;91m[2]\033[1;37m ⏹️  Parar Proxy numa Porta\033[1;36m" + " " * 25 + "║")
+    
+    if is_installed:
+        print("║    \033[1;91m[1]\033[1;37m ⚙️  Remover Serviço do Proxy\033[1;36m" + " " * 22 + "║")
+    else:
+        print("║    \033[1;92m[1]\033[1;37m ⚙️  Instalar Serviço do Proxy (Recomendado)\033[1;36m" + " " * 5 + "║")
+
+    print("║    \033[1;92m[2]\033[1;37m ▶️  Abrir Porta\033[1;36m" + " " * 42 + "║")
+    print("║    \033[1;91m[3]\033[1;37m ⏹️  Fechar Porta\033[1;36m" + " " * 41 + "║")
     print("║" + " " * 63 + "║")
-    print("║    \033[1;93m[0]\033[1;37m 🔽 Minimizar Painel (Manter Proxies Ativos)\033[1;36m" + " " * 8 + "║")
-    print("║    \033[1;31m[q]\033[1;37m ❌ Encerrar TUDO (Parar Todos os Proxies)\033[1;36m" + " " * 11 + "║")
+    print("║    \033[1;90m[0]\033[1;37m 🔽 Voltar (Minimizar Painel)\033[1;36m" + " " * 22 + "║")
     print("║" + " " * 63 + "║")
     print("╚" + "═" * 63 + "╝\033[0m")
     print()
@@ -355,25 +362,43 @@ def stop_proxy_port():
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-# --- Lógica Principal e Gestão do Serviço ---
+# --- Lógica de Gestão do Serviço ---
 
-def display_help():
+def manage_service():
+    service_path = f"/etc/systemd/system/{SERVICE_NAME}"
+    is_installed = os.path.exists(service_path)
+    
+    clear_screen()
     print("\033[1;96m" + "═" * 60)
-    print("║" + "\033[1;97m🔧 MULTIFLOW PROXY - AJUDA\033[1;96m".center(70) + "║")
+    print("║" + "\033[1;97m🔧 GESTÃO DO SERVIÇO DO PROXY\033[1;96m".center(70) + "║")
     print("╠" + "═" * 58 + "╣")
-    print("║ \033[1;37mUso: python3 multiflowproxy.py [opção]\033[1;96m" + " " * 17 + "║")
-    print("║" + " " * 58 + "║")
-    print("║ \033[1;97mOpções:\033[1;96m" + " " * 49 + "║")
-    print("║   \033[1;92m(nenhuma)\033[1;37m             Painel interativo\033[1;96m" + " " * 17 + "║")
-    print("║   \033[1;93m--install-service\033[1;37m   Instalar como serviço\033[1;96m" + " " * 16 + "║")
-    print("║   \033[1;91m--uninstall-service\033[1;37m Remover serviço\033[1;96m" + " " * 21 + "║")
-    print("║   \033[1;90m--service\033[1;37m             Modo serviço (interno)\033[1;96m" + " " * 14 + "║")
-    print("║   \033[1;94m--help\033[1;37m                Esta mensagem\033[1;96m" + " " * 20 + "║")
-    print("╚" + "═" * 58 + "╝\033[0m")
+
+    if is_installed:
+        print("║ \033[1;32m   O serviço do proxy já está instalado.\033[1;96m" + " " * 15 + "║")
+        print("║ \033[1;37m   Isto garante que os proxies iniciam com o sistema.\033[1;96m" + " " * 5 + "║")
+        print("╚" + "═" * 58 + "╝\033[0m")
+        choice = input("\n\033[1;91mDeseja desinstalar o serviço? (s/N): \033[0m").lower().strip()
+        if choice == 's':
+            uninstall_service()
+        else:
+            print("\n\033[1;37mNenhuma alteração foi feita.\033[0m")
+    else:
+        print("║ \033[1;93m   O serviço do proxy não está instalado.\033[1;96m" + " " * 16 + "║")
+        print("║ \033[1;37m   Instalar o serviço torna o proxy permanente.\033[1;96m" + " " * 7 + "║")
+        print("╚" + "═" * 58 + "╝\033[0m")
+        choice = input("\n\033[1;92mDeseja instalar o serviço agora? (S/n): \033[0m").lower().strip()
+        if choice == '' or choice == 's':
+            install_service()
+        else:
+            print("\n\033[1;37mNenhuma alteração foi feita.\033[0m")
+            
+    input("\n\033[1;90mPressione Enter para voltar ao menu principal...\033[0m")
+
 
 def install_service():
     if os.geteuid() != 0:
-        print("\033[1;31m❌ Erro: A instalação do serviço requer privilégios de root. Use 'sudo'.\033[0m")
+        print("\n\033[1;31m❌ Erro: A instalação do serviço requer privilégios de root.\033[0m")
+        print(f"\033[1;37mPor favor, execute novamente com 'sudo': \033[1;33msudo python3 {os.path.basename(__file__)}\033[0m")
         sys.exit(1)
     
     print("\033[1;96m🔧 Iniciando a instalação do serviço...\033[0m")
@@ -385,7 +410,6 @@ def install_service():
     service_content = f"""[Unit]
 Description=Serviço de Proxy Híbrido (Python)
 After=network.target
-
 [Service]
 Type=simple
 User=root
@@ -393,33 +417,24 @@ WorkingDirectory={INSTALL_DIR}
 ExecStart=/usr/bin/python3 {install_path} --service
 Restart=always
 RestartSec=3
-
 [Install]
 WantedBy=multi-user.target
 """
     try:
         print(f"\033[1;93m➤ Criando diretório: {INSTALL_DIR}\033[0m")
         os.makedirs(INSTALL_DIR, exist_ok=True)
-        
         print(f"\033[1;93m➤ Copiando script: {install_path}\033[0m")
         shutil.copy(script_path, install_path)
-        
         print(f"\033[1;93m➤ Criando serviço: {service_path}\033[0m")
-        with open(service_path, "w") as f:
-            f.write(service_content)
-            
+        with open(service_path, "w") as f: f.write(service_content)
         print("\033[1;93m➤ Recarregando systemd...\033[0m")
         os.system("systemctl daemon-reload")
-        
         print("\033[1;93m➤ Habilitando para boot...\033[0m")
         os.system(f"systemctl enable {SERVICE_NAME}")
-        
         print("\033[1;93m➤ Iniciando serviço...\033[0m")
         os.system(f"systemctl start {SERVICE_NAME}")
-        
         print(f"\n\033[1;32m✅ Serviço instalado e iniciado com sucesso! 🎉\033[0m")
         print(f"\033[1;37mUse 'sudo systemctl status {SERVICE_NAME}' para verificar.\033[0m")
-        
     except Exception as e:
         print(f"\n\033[1;31m❌ Erro durante a instalação: {e}\033[0m")
         uninstall_service(feedback=False)
@@ -427,7 +442,8 @@ WantedBy=multi-user.target
 
 def uninstall_service(feedback=True):
     if os.geteuid() != 0:
-        print("\033[1;31m❌ Erro: A desinstalação requer privilégios de root. Use 'sudo'.\033[0m")
+        print("\n\033[1;31m❌ Erro: A desinstalação requer privilégios de root. Use 'sudo'.\033[0m")
+        print(f"\033[1;37mPor favor, execute novamente com 'sudo': \033[1;33msudo python3 {os.path.basename(__file__)}\033[0m")
         sys.exit(1)
 
     if feedback: print("\033[1;91m🗑️  Iniciando a desinstalação do serviço...\033[0m")
@@ -437,23 +453,17 @@ def uninstall_service(feedback=True):
     try:
         print("\033[1;93m➤ Parando serviço...\033[0m")
         os.system(f"systemctl stop {SERVICE_NAME}")
-        
         print("\033[1;93m➤ Desabilitando serviço...\033[0m")
         os.system(f"systemctl disable {SERVICE_NAME}")
-        
         if os.path.exists(service_path):
             print(f"\033[1;93m➤ Removendo: {service_path}\033[0m")
             os.remove(service_path)
-            
         print("\033[1;93m➤ Recarregando systemd...\033[0m")
         os.system("systemctl daemon-reload")
-        
         if os.path.isdir(INSTALL_DIR):
             print(f"\033[1;93m➤ Removendo: {INSTALL_DIR}\033[0m")
             shutil.rmtree(INSTALL_DIR)
-        
         if feedback: print("\n\033[1;32m✅ Serviço desinstalado com sucesso! 🗑️\033[0m")
-        
     except Exception as e:
         if feedback: print(f"\n\033[1;31m❌ Erro durante a desinstalação: {e}\033[0m")
         sys.exit(1)
@@ -487,13 +497,12 @@ def main_panel():
         display_menu()
         choice = input("\033[1;96m❯ \033[1;37mEscolha uma opção: \033[1;33m").lower().strip()
         
-        if choice == '1':   start_proxy_port()
-        elif choice == '2': stop_proxy_port()
+        if choice == '1':   manage_service()
+        elif choice == '2': start_proxy_port()
+        elif choice == '3': stop_proxy_port()
         elif choice == '0':
             main_loop_active.clear()
             break
-        elif choice == 'q' or choice == 'quit':
-            cleanup_and_exit()
         else:
             print("\n\033[1;31m❌ Opção inválida. Tente novamente.\033[0m")
             time.sleep(1)
@@ -508,8 +517,6 @@ def main_panel():
         print("║" + " " * 58 + "║")
         print("║  \033[1;37m💡 Os proxies continuarão funcionando em segundo plano\033[1;96m ║")
         print("║  \033[1;37m🔄 Execute novamente para voltar ao painel de controle\033[1;96m ║")
-        print("║" + " " * 58 + "║")
-        print("║  \033[1;31m⚠️  Para encerrar TUDO use a opção [q] no painel\033[1;96m" + " " * 7 + "║")
         print("╚" + "═" * 58 + "╝\033[0m")
         
         try:
@@ -539,57 +546,27 @@ def main_service():
         signal_handler(signal.SIGINT, None)
 
 if __name__ == '__main__':
-    # Bloco principal de execução
+    # Trata argumentos de linha de comando que não iniciam o painel
     if '--install-service' in sys.argv:
         install_service()
     elif '--uninstall-service' in sys.argv:
         uninstall_service()
     elif '--help' in sys.argv:
         display_help()
-    else:
+    elif '--service' in sys.argv:
         try:
-            if '--service' in sys.argv:
-                main_service()
-            else:
-                # Lógica para o painel interativo e instalação automática
-                service_path = f"/etc/systemd/system/{SERVICE_NAME}"
-                script_is_in_install_dir = os.path.abspath(__file__) == os.path.join(INSTALL_DIR, SCRIPT_NAME)
-
-                if not os.path.exists(service_path) and not script_is_in_install_dir:
-                    clear_screen()
-                    print("\033[1;93m" + "═" * 60)
-                    print("  Bem-vindo ao MULTIFLOW PROXY!".center(60))
-                    print("\033[1;93m" + "═" * 60 + "\033[0m")
-                    print("\n\033[1;37mParece ser a primeira vez que executa este script.")
-                    print("Para que os proxies funcionem de forma permanente (mesmo após reiniciar o servidor),")
-                    print("é recomendado instalá-lo como um serviço de sistema.\n")
-                    print("\033[1;32mBenefícios da Instalação:\033[0m")
-                    print("  - O proxy inicia automaticamente com o servidor.")
-                    print("  - Continua a funcionar mesmo se fechar a sua sessão SSH.")
-                    print("  - Gestão simplificada através deste painel.\n")
-                    
-                    choice = input("\033[1;96mDeseja instalar o serviço agora? (S/n): \033[0m").lower().strip()
-                    
-                    if choice == '' or choice == 's':
-                        if os.geteuid() != 0:
-                            print("\n\033[1;31m❌ Erro: A instalação requer privilégios de root.\033[0m")
-                            print("\033[1;37mPor favor, execute o script novamente com 'sudo':\033[0m")
-                            print(f"  \033[1;33msudo python3 {os.path.basename(__file__)}\033[0m")
-                            sys.exit(1)
-                        
-                        install_service()
-                        print("\n\033[1;32mInstalação concluída. O painel será agora encerrado.\033[0m")
-                        print("\033[1;37mPara gerir os proxies, pode executar o script novamente sem sudo.\033[0m")
-                        sys.exit(0)
-                    else:
-                        print("\n\033[1;31mA executar em modo temporário. Os proxies serão encerrados ao fechar a sessão.\033[0m")
-                        input("\033[1;90mPressione Enter para continuar...\033[0m")
-                
-                main_panel()
-
+            main_service()
+        except KeyboardInterrupt:
+            signal_handler(signal.SIGINT, None)
+    else:
+        # Bloco para o painel interativo
+        try:
+            main_panel()
         except SystemExit:
-            pass # Permite a saída limpa de cleanup_and_exit()
+            pass # Permite a saída limpa
+        except KeyboardInterrupt:
+            signal_handler(signal.SIGINT, None)
         except Exception as e:
-            print(f"\n\033[1;31m❌ Erro inesperado: {e}\033[0m")
+            print(f"\n\033[1;31m❌ Erro inesperado no fluxo principal: {e}\033[0m")
             cleanup_and_exit()
 
