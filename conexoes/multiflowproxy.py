@@ -251,21 +251,26 @@ def display_menu():
         print("\033[1;37mStatus: \033[1;32mAtivo. Portas: \033[1;33m{}\033[0m\n".format(ports))
 
     print("\033[1;34m")
-    print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
     print("┃      \033[1;32mPAINEL DE CONTROLE PROXY HÍBRIDO\033[1;34m      ┃")
-    print("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
-    print("┃                                                                ┃")
-    print("┃   \033[1;36m[1]\033[0m \033[1;37mAbrir Porta\033[1;34m         ┃")
-    print("┃   \033[1;36m[2]\033[0m \033[1;37mFechar Porta\033[1;34m        ┃")
-    print("┃                                                                ┃")
-    print("┃   \033[1;31m[0]\033[0m \033[1;37mSair do Painel\033[1;34m      ┃")
-    print("┃                                                                ┃")
-    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    print("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
+    print("┃                                      ┃")
+    print("┃   \033[1;36m[1]\033[0m \033[1;37mAbrir Porta\033[1;34m                       ┃")
+    print("┃   \033[1;36m[2]\033[0m \033[1;37mFechar Porta\033[1;34m                      ┃")
+    print("┃                                      ┃")
+    print("┃   \033[1;31m[0]\033[0m \033[1;37mSair do Painel\033[1;34m                    ┃")
+    print("┃                                      ┃")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
     print("\033[0m")
 
 def start_proxy():
     try:
-        port = int(input("\n\033[1;33mDigite a porta que deseja abrir: \033[0m"))
+        # Adicionada opção para voltar ao menu
+        user_input = input("\n\033[1;33mDigite a porta para abrir (ou 'voltar' para cancelar): \033[0m").lower()
+        if user_input in ['voltar', 'v', 'cancelar', 'c']:
+            return
+
+        port = int(user_input)
         if port in active_servers:
             print("\n\033[1;31mErro: A porta {} já está em uso.\033[0m".format(port))
         elif not 0 < port < 65536:
@@ -281,11 +286,19 @@ def start_proxy():
                 print("\n\033[1;31mFalha ao iniciar o proxy na porta {}. Verifique as permissões ou se a porta já está ocupada por outro processo.\033[0m".format(port))
     except ValueError:
         print("\n\033[1;31mErro: Por favor, digite um número de porta válido.\033[0m")
-    input("\n\033[1;37mPressione Enter para voltar ao menu...\033[0m")
+    
+    # Pausa apenas se o usuário não decidiu voltar
+    if user_input not in ['voltar', 'v', 'cancelar', 'c']:
+        input("\n\033[1;37mPressione Enter para voltar ao menu...\033[0m")
 
 def stop_proxy():
     try:
-        port = int(input("\n\033[1;33mDigite a porta que deseja fechar: \033[0m"))
+        # Adicionada opção para voltar ao menu
+        user_input = input("\n\033[1;33mDigite a porta para fechar (ou 'voltar' para cancelar): \033[0m").lower()
+        if user_input in ['voltar', 'v', 'cancelar', 'c']:
+            return
+
+        port = int(user_input)
         if port in active_servers:
             server = active_servers.pop(port)
             server.close()
@@ -295,7 +308,10 @@ def stop_proxy():
             print("\n\033[1;31mErro: Não há nenhum proxy ativo na porta {}.\033[0m".format(port))
     except ValueError:
         print("\n\033[1;31mErro: Por favor, digite um número de porta válido.\033[0m")
-    input("\n\033[1;37mPressione Enter para voltar ao menu...\033[0m")
+
+    # Pausa apenas se o usuário não decidiu voltar
+    if user_input not in ['voltar', 'v', 'cancelar', 'c']:
+        input("\n\033[1;37mPressione Enter para voltar ao menu...\033[0m")
 
 def main():
     while True:
@@ -325,4 +341,3 @@ if __name__ == '__main__':
             server = active_servers.pop(port)
             server.close()
         print("\033[0m")
-
