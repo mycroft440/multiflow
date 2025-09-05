@@ -6,18 +6,15 @@
 import socket, threading, select, sys, time, os
 
 # --- Configurações ---
-MSG = '@TMYCOMNECTVPN'
-COR = '<font color="null">'
-FTAG = '</font>'
 PASS = ''
 LISTENING_ADDR = '0.0.0.0'
 BUFLEN = 8196 * 8
 TIMEOUT = 60
 DEFAULT_HOST = "127.0.0.1:22"
 
-# --- Respostas personalizadas para cada tipo de conexão ---
-RESPONSE_WS = ('HTTP/1.1 101 '+str(COR)+str(MSG)+str(FTAG)+' \r\n\r\n').encode('utf-8')
-RESPONSE_HTTP = ("HTTP/1.1 200 " + str(COR) + str(MSG) + str(FTAG) + "\r\n\r\n").encode('utf-8')
+# --- Respostas Padrão do Protocolo HTTP ---
+RESPONSE_WS = b'HTTP/1.1 101 Switching Protocols\r\n\r\n'
+RESPONSE_HTTP = b'HTTP/1.1 200 Connection established\r\n\r\n'
 RESPONSE_ERROR = b'HTTP/1.1 502 Bad Gateway\r\n\r\n'
 
 # --- Gerenciador de Servidores Ativos ---
@@ -247,7 +244,6 @@ def clear_screen():
 def display_menu():
     clear_screen()
     
-    # Exibe o status dinâmico acima do menu
     if not active_servers:
         print("\033[1;37mStatus: \033[1;31mInativo\033[0m\n")
     else:
@@ -255,16 +251,16 @@ def display_menu():
         print("\033[1;37mStatus: \033[1;32mAtivo. Portas: \033[1;33m{}\033[0m\n".format(ports))
 
     print("\033[1;34m")
-    print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-    print("┃ \033[1;32mPAINEL DE CONTROLE PROXY HÍBRIDO\033[1;34m     ┃")
-    print("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
-    print("┃                                                          ┃")
-    print("┃   \033[1;36m[1]\033[0m \033[1;37mAbrir Porta\033[1;34m   ┃")
-    print("┃   \033[1;36m[2]\033[0m \033[1;37mFechar Porta\033[1;34m  ┃")
-    print("┃                                                          ┃")
-    print("┃   \033[1;31m[0]\033[0m \033[1;37mSair do Painel\033[1;34m┃")
-    print("┃                                                          ┃")
-    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    print("┃      \033[1;32mPAINEL DE CONTROLE PROXY HÍBRIDO\033[1;34m      ┃")
+    print("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫")
+    print("┃                                                                ┃")
+    print("┃   \033[1;36m[1]\033[0m \033[1;37mAbrir Porta\033[1;34m         ┃")
+    print("┃   \033[1;36m[2]\033[0m \033[1;37mFechar Porta\033[1;34m        ┃")
+    print("┃                                                                ┃")
+    print("┃   \033[1;31m[0]\033[0m \033[1;37mSair do Painel\033[1;34m      ┃")
+    print("┃                                                                ┃")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
     print("\033[0m")
 
 def start_proxy():
