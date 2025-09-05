@@ -3,7 +3,7 @@
 # PAINEL DE GESTÃO PARA PROXY HÍBRIDO
 # Unifica WebSocket (101) e HTTP/Socks (200 OK) com autoinstalação de serviço.
 # ATUALIZADO PARA PYTHON 3
-import socket, threading, select, sys, time, os, re, json, shutil
+import socket, threading, select, sys, time, os, re, json, shutil, signal
 
 # --- Configurações ---
 PASS = ''
@@ -13,7 +13,6 @@ TIMEOUT = 60
 DEFAULT_HOST = "127.0.0.1:22"
 
 # --- Configurações do Serviço ---
-# ATENÇÃO: Altere estes caminhos se desejar instalar o proxy noutro local.
 INSTALL_DIR = "/opt/proxy"
 SCRIPT_NAME = "wsproxy.py"
 SERVICE_NAME = "proxy.service"
@@ -26,10 +25,12 @@ RESPONSE_ERROR = b'HTTP/1.1 502 Bad Gateway\r\n\r\n'
 
 # --- Gerenciador de Servidores Ativos ---
 active_servers = {}
+shutdown_requested = False
 
 class Server(threading.Thread):
     def __init__(self, host, port):
         threading.Thread.__init__(self)
+        self.daemon = True
         self.running = False
         self.host = host
         self.port = port
@@ -52,7 +53,7 @@ class Server(threading.Thread):
             return
 
         try:
-            while self.running:
+            while self.running and not shutdown_requested:
                 try:
                     c, addr = self.soc.accept()
                     c.setblocking(1)
@@ -77,7 +78,7 @@ class Server(threading.Thread):
                 print("\r" + " " * 80 + "\r", end="")
                 print(log)
                 if main_loop_active.is_set():
-                    print("\n\033[1;33mEscolha uma opção: \033[0m", end="", flush=True)
+                    print("\n\033[1;96m❯ \033[1;37mEscolha uma opção: \033[0m", end="", flush=True)
 
     def addConn(self, conn):
         with self.threadsLock:
@@ -110,6 +111,7 @@ class Server(threading.Thread):
 class ConnectionHandler(threading.Thread):
     def __init__(self, socClient, server, addr):
         threading.Thread.__init__(self)
+        self.daemon = True
         self.clientClosed = False
         self.targetClosed = True
         self.client = socClient
@@ -212,7 +214,7 @@ class ConnectionHandler(threading.Thread):
         socs = [self.client, self.target]
         count = 0
         error = False
-        while not error:
+        while not error and not shutdown_requested:
             count += 1
             (recv, _, err) = select.select(socs, [], socs, 3)
             if err: error = True
@@ -246,16 +248,16 @@ def load_state_and_start_proxies():
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r') as f:
                 ports = json.load(f)
-            print("\033[1;32mRestaurando sessão anterior...\033[0m")
+            print("\033[1;32m✓ Restaurando sessão anterior...\033[0m")
             for port in ports:
                 if isinstance(port, int) and 0 < port < 65536:
                      server = Server(LISTENING_ADDR, port)
                      server.start()
                      if server.running:
                          active_servers[port] = server
-                         print(f"\033[1;32m  -> Proxy reativado na porta {port}.\033[0m")
+                         print(f"\033[1;32m  ➤ Proxy reativado na porta {port}.\033[0m")
     except Exception:
-        print("\033[1;31mFicheiro de estado corrompido ou ilegível.\033[0m")
+        print("\033[1;31m✗ Ficheiro de estado corrompido ou ilegível.\033[0m")
     
     if '--service' not in sys.argv: time.sleep(2)
 
@@ -263,68 +265,92 @@ def load_state_and_start_proxies():
 
 def display_menu():
     clear_screen()
-    status_line = "\033[1;37mStatus: \033[1;31mInativo\033[0m"
+    
+    # Título e cabeçalho
+    print("\033[1;36m" + "═" * 65)
+    print("║" + " " * 63 + "║")
+    print("║" + "\033[1;97m🚀 MULTIFLOW PROXY - PAINEL DE GESTÃO 🚀\033[1;36m".center(75) + "║")
+    print("║" + " " * 63 + "║")
+    print("╠" + "═" * 63 + "╣")
+    
+    # Status do sistema
     if active_servers:
         ports = ", ".join(str(p) for p in sorted(active_servers.keys()))
-        status_line = f"\033[1;37mStatus: \033[1;32mAtivo\033[0m  \033[1;37mPortas: \033[1;33m{ports}\033[0m"
+        status_icon = "🟢"
+        status_text = f"\033[1;32m{status_icon} ATIVO\033[1;36m"
+        ports_text = f"\033[1;33mPortas: {ports}\033[1;36m"
+        print(f"║  \033[1;37mStatus:\033[1;36m {status_text:<20} {ports_text:<30} ║")
+    else:
+        status_icon = "🔴"
+        status_text = f"\033[1;31m{status_icon} INATIVO\033[1;36m"
+        print(f"║  \033[1;37mStatus:\033[1;36m {status_text:<35} ║")
     
-    total_width = 50
-    visible_len = len(re.sub(r'\033\[[0-9;]*m', '', status_line))
-    padding = " " * ((total_width - visible_len) // 2)
+    print("║" + " " * 63 + "║")
+    print("╠" + "═" * 63 + "╣")
+    print("║" + " " * 63 + "║")
     
-    print("\033[1;34m  ╭" + "─" * total_width + "╮")
-    print(f"  │\033[1;32m{'PAINEL DE GESTÃO DO PROXY HÍBRIDO'.center(total_width)}\033[1;34m│")
-    print("  ├" + "─" * total_width + "┤")
-    print(f"  │{padding}{status_line}{padding}{' ' if (total_width - visible_len) % 2 != 0 else ''}│")
-    print("  ├" + "─" * total_width + "┤")
-    print("  │" + " " * total_width + "│")
-    print("  │   \033[1;36m[1]\033[0m \033[1;37mIniciar Proxy numa Porta" + " " * (total_width - 30) + "│")
-    print("  │   \033[1;36m[2]\033[0m \033[1;37mParar Proxy numa Porta" + " " * (total_width - 28) + "│")
-    print("  │" + " " * total_width + "│")
-    print("  │   \033[1;31m[0]\033[0m \033[1;37mMinimizar Painel (Manter Ativo)" + " " * (total_width - 35) + "│")
-    print("  │" + " " * total_width + "│")
-    print("  ╰" + "─" * total_width + "╯\033[0m")
+    # Menu de opções
+    print("║  \033[1;97m📋 OPÇÕES DISPONÍVEIS:\033[1;36m" + " " * 32 + "║")
+    print("║" + " " * 63 + "║")
+    print("║    \033[1;92m[1]\033[1;37m ▶️  Iniciar Proxy numa Porta\033[1;36m" + " " * 23 + "║")
+    print("║    \033[1;91m[2]\033[1;37m ⏹️  Parar Proxy numa Porta\033[1;36m" + " " * 25 + "║")
+    print("║" + " " * 63 + "║")
+    print("║    \033[1;93m[0]\033[1;37m 🔽 Minimizar Painel (Manter Proxies Ativos)\033[1;36m" + " " * 8 + "║")
+    print("║    \033[1;31m[q]\033[1;37m ❌ Encerrar TUDO (Parar Todos os Proxies)\033[1;36m" + " " * 11 + "║")
+    print("║" + " " * 63 + "║")
+    print("╚" + "═" * 63 + "╝\033[0m")
+    print()
 
 def start_proxy_port():
     try:
-        user_input = input("\n\033[1;33m  Digite a porta para abrir (ou 'voltar'): \033[0m").lower()
+        print("\033[1;96m┌─────────────────────────────────────┐")
+        print("│       \033[1;97m🚀 INICIAR PROXY\033[1;96m         │")
+        print("└─────────────────────────────────────┘\033[0m")
+        print()
+        user_input = input("\033[1;97m➤ \033[1;37mDigite a porta para abrir \033[1;90m(ou 'voltar')\033[1;37m: \033[1;33m").lower()
         if user_input.startswith('v'): return
 
         port = int(user_input)
         if port in active_servers:
-            print(f"\n\033[1;31m  Erro: A porta {port} já está em uso.\033[0m")
+            print(f"\n\033[1;31m❌ Erro: A porta {port} já está em uso.\033[0m")
         elif not 0 < port < 65536:
-            print("\n\033[1;31m  Erro: Porta inválida.\033[0m")
+            print("\n\033[1;31m❌ Erro: Porta inválida (1-65535).\033[0m")
         else:
+            print(f"\n\033[1;93m⏳ Iniciando proxy na porta {port}...\033[0m")
             server = Server(LISTENING_ADDR, port)
             server.start()
             if server.running:
                 active_servers[port] = server
                 save_state()
-                print(f"\n\033[1;32m  Proxy iniciado com sucesso na porta {port}.\033[0m")
+                print(f"\n\033[1;32m✅ Proxy iniciado com sucesso na porta {port}! 🎉\033[0m")
     except ValueError:
-        print("\n\033[1;31m  Erro: Entrada inválida.\033[0m")
+        print("\n\033[1;31m❌ Erro: Entrada inválida. Digite apenas números.\033[0m")
     
     if not user_input.startswith('v'):
-        input("\n\033[1;37m  Pressione Enter para voltar...\033[0m")
+        input("\n\033[1;96m📱 Pressione Enter para voltar ao menu...\033[0m")
 
 def stop_proxy_port():
     try:
-        user_input = input("\n\033[1;33m  Digite a porta para fechar (ou 'voltar'): \033[0m").lower()
+        print("\033[1;91m┌─────────────────────────────────────┐")
+        print("│        \033[1;97m⏹️  PARAR PROXY\033[1;91m         │")
+        print("└─────────────────────────────────────┘\033[0m")
+        print()
+        user_input = input("\033[1;97m➤ \033[1;37mDigite a porta para fechar \033[1;90m(ou 'voltar')\033[1;37m: \033[1;33m").lower()
         if user_input.startswith('v'): return
 
         port = int(user_input)
         if port in active_servers:
+            print(f"\n\033[1;93m⏳ Encerrando proxy na porta {port}...\033[0m")
             active_servers.pop(port).close()
             save_state()
-            print(f"\n\033[1;32m  Proxy na porta {port} fechado com sucesso.\033[0m")
+            print(f"\n\033[1;32m✅ Proxy na porta {port} encerrado com sucesso! 🛑\033[0m")
         else:
-            print(f"\n\033[1;31m  Erro: Não há proxy ativo na porta {port}.\033[0m")
+            print(f"\n\033[1;31m❌ Erro: Não há proxy ativo na porta {port}.\033[0m")
     except ValueError:
-        print("\n\033[1;31m  Erro: Entrada inválida.\033[0m")
+        print("\n\033[1;31m❌ Erro: Entrada inválida. Digite apenas números.\033[0m")
 
     if not user_input.startswith('v'):
-        input("\n\033[1;37m  Pressione Enter para voltar...\033[0m")
+        input("\n\033[1;96m📱 Pressione Enter para voltar ao menu...\033[0m")
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -332,21 +358,25 @@ def clear_screen():
 # --- Lógica Principal e Gestão do Serviço ---
 
 def display_help():
-    print("\033[1;32mProxy Híbrido com Gestão de Serviço\033[0m")
-    print("Uso: python3 wsproxy.py [opção]")
-    print("\nOpções:")
-    print("  (nenhuma)            Inicia o painel de controlo interativo.")
-    print("  --install-service    Instala o proxy como um serviço systemd (requer sudo).")
-    print("  --uninstall-service  Remove o serviço systemd do sistema (requer sudo).")
-    print("  --service            (Uso interno) Executa o script como um serviço.")
-    print("  --help               Mostra esta mensagem de ajuda.")
+    print("\033[1;96m" + "═" * 60)
+    print("║" + "\033[1;97m🔧 MULTIFLOW PROXY - AJUDA\033[1;96m".center(70) + "║")
+    print("╠" + "═" * 58 + "╣")
+    print("║ \033[1;37mUso: python3 multiflowproxy.py [opção]\033[1;96m" + " " * 17 + "║")
+    print("║" + " " * 58 + "║")
+    print("║ \033[1;97mOpções:\033[1;96m" + " " * 49 + "║")
+    print("║   \033[1;92m(nenhuma)\033[1;37m             Painel interativo\033[1;96m" + " " * 17 + "║")
+    print("║   \033[1;93m--install-service\033[1;37m   Instalar como serviço\033[1;96m" + " " * 16 + "║")
+    print("║   \033[1;91m--uninstall-service\033[1;37m Remover serviço\033[1;96m" + " " * 21 + "║")
+    print("║   \033[1;90m--service\033[1;37m             Modo serviço (interno)\033[1;96m" + " " * 14 + "║")
+    print("║   \033[1;94m--help\033[1;37m                Esta mensagem\033[1;96m" + " " * 20 + "║")
+    print("╚" + "═" * 58 + "╝\033[0m")
 
 def install_service():
     if os.geteuid() != 0:
-        print("\033[1;31mErro: A instalação do serviço requer privilégios de root. Use 'sudo'.\033[0m")
+        print("\033[1;31m❌ Erro: A instalação do serviço requer privilégios de root. Use 'sudo'.\033[0m")
         sys.exit(1)
     
-    print("\033[1;33mIniciando a instalação do serviço...\033[0m")
+    print("\033[1;96m🔧 Iniciando a instalação do serviço...\033[0m")
     
     script_path = os.path.abspath(__file__)
     install_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
@@ -368,65 +398,81 @@ RestartSec=3
 WantedBy=multi-user.target
 """
     try:
-        print(f" -> Criando diretório de instalação: {INSTALL_DIR}")
+        print(f"\033[1;93m➤ Criando diretório: {INSTALL_DIR}\033[0m")
         os.makedirs(INSTALL_DIR, exist_ok=True)
         
-        print(f" -> Copiando script para {install_path}")
+        print(f"\033[1;93m➤ Copiando script: {install_path}\033[0m")
         shutil.copy(script_path, install_path)
         
-        print(f" -> Criando ficheiro de serviço: {service_path}")
+        print(f"\033[1;93m➤ Criando serviço: {service_path}\033[0m")
         with open(service_path, "w") as f:
             f.write(service_content)
             
-        print(" -> Recarregando o daemon do systemd...")
+        print("\033[1;93m➤ Recarregando systemd...\033[0m")
         os.system("systemctl daemon-reload")
         
-        print(" -> Habilitando o serviço para iniciar no boot...")
+        print("\033[1;93m➤ Habilitando para boot...\033[0m")
         os.system(f"systemctl enable {SERVICE_NAME}")
         
-        print(" -> Iniciando o serviço agora...")
+        print("\033[1;93m➤ Iniciando serviço...\033[0m")
         os.system(f"systemctl start {SERVICE_NAME}")
         
-        print("\n\033[1;32mServiço instalado e iniciado com sucesso!\033[0m")
-        print(f"Use 'sudo systemctl status {SERVICE_NAME}' para verificar.")
+        print(f"\n\033[1;32m✅ Serviço instalado e iniciado com sucesso! 🎉\033[0m")
+        print(f"\033[1;37mUse 'sudo systemctl status {SERVICE_NAME}' para verificar.\033[0m")
         
     except Exception as e:
-        print(f"\n\033[1;31mOcorreu um erro durante a instalação: {e}\033[0m")
-        uninstall_service(feedback=False) # Tenta reverter
+        print(f"\n\033[1;31m❌ Erro durante a instalação: {e}\033[0m")
+        uninstall_service(feedback=False)
         sys.exit(1)
 
 def uninstall_service(feedback=True):
     if os.geteuid() != 0:
-        print("\033[1;31mErro: A desinstalação do serviço requer privilégios de root. Use 'sudo'.\033[0m")
+        print("\033[1;31m❌ Erro: A desinstalação requer privilégios de root. Use 'sudo'.\033[0m")
         sys.exit(1)
 
-    if feedback: print("\033[1;33mIniciando a desinstalação do serviço...\033[0m")
+    if feedback: print("\033[1;91m🗑️  Iniciando a desinstalação do serviço...\033[0m")
     
     service_path = f"/etc/systemd/system/{SERVICE_NAME}"
     
     try:
-        print(" -> Parando o serviço...")
+        print("\033[1;93m➤ Parando serviço...\033[0m")
         os.system(f"systemctl stop {SERVICE_NAME}")
         
-        print(" -> Desabilitando o serviço...")
+        print("\033[1;93m➤ Desabilitando serviço...\033[0m")
         os.system(f"systemctl disable {SERVICE_NAME}")
         
         if os.path.exists(service_path):
-            print(f" -> Removendo ficheiro de serviço: {service_path}")
+            print(f"\033[1;93m➤ Removendo: {service_path}\033[0m")
             os.remove(service_path)
             
-        print(" -> Recarregando o daemon do systemd...")
+        print("\033[1;93m➤ Recarregando systemd...\033[0m")
         os.system("systemctl daemon-reload")
         
         if os.path.isdir(INSTALL_DIR):
-            print(f" -> Removendo diretório de instalação: {INSTALL_DIR}")
+            print(f"\033[1;93m➤ Removendo: {INSTALL_DIR}\033[0m")
             shutil.rmtree(INSTALL_DIR)
         
-        if feedback: print("\n\033[1;32mServiço desinstalado com sucesso!\033[0m")
+        if feedback: print("\n\033[1;32m✅ Serviço desinstalado com sucesso! 🗑️\033[0m")
         
     except Exception as e:
-        if feedback: print(f"\n\033[1;31mOcorreu um erro durante a desinstalação: {e}\033[0m")
+        if feedback: print(f"\n\033[1;31m❌ Erro durante a desinstalação: {e}\033[0m")
         sys.exit(1)
+
+def signal_handler(signum, frame):
+    global shutdown_requested
+    if not shutdown_requested:
+        shutdown_requested = True
+        print("\n\033[1;31m⚠️  Sinal de encerramento recebido...\033[0m")
+        cleanup_and_exit()
+        
+def cleanup_and_exit():
+    global shutdown_requested
+    shutdown_requested = True
+    print("\n\033[1;93m🔄 Fechando todas as conexões ativas...\033[0m")
+    for port in list(active_servers.keys()):
+        active_servers.pop(port).close()
+    print("\033[1;32m✅ Todos os proxies foram encerrados com sucesso! 👋\033[0m")
+    sys.exit(0)
 
 main_loop_active = threading.Event()
 
@@ -434,35 +480,66 @@ def main_panel():
     main_loop_active.set()
     load_state_and_start_proxies()
 
-    while True:
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    while not shutdown_requested:
         display_menu()
-        choice = input("\n\033[1;33mEscolha uma opção: \033[0m")
-        if choice == '1': start_proxy_port()
+        choice = input("\033[1;96m❯ \033[1;37mEscolha uma opção: \033[1;33m").lower().strip()
+        
+        if choice == '1':   start_proxy_port()
         elif choice == '2': stop_proxy_port()
         elif choice == '0':
             main_loop_active.clear()
             break
+        elif choice == 'q' or choice == 'quit':
+            cleanup_and_exit()
         else:
-            print("\n\033[1;31mOpção inválida.\033[0m"); time.sleep(1)
+            print("\n\033[1;31m❌ Opção inválida. Tente novamente.\033[0m")
+            time.sleep(1)
 
     clear_screen()
     if active_servers:
         ports = ", ".join(str(p) for p in sorted(active_servers.keys()))
-        print(f"\n\033[1;32m  Painel minimizado.\033[0m\n\033[1;37m  Proxies ativos em: \033[1;33m{ports}\033[0m")
-        print("\n\033[1;31m  Pressione Ctrl+C para PARAR TUDO.\033[0m")
+        print("\033[1;96m" + "═" * 60)
+        print("║" + "\033[1;97m📱 PAINEL MINIMIZADO - PROXIES ATIVOS\033[1;96m".center(70) + "║")
+        print("╠" + "═" * 58 + "╣")
+        print(f"║  \033[1;32m🟢 Proxies em execução: \033[1;33m{ports}\033[1;96m" + " " * (32 - len(ports)) + "║")
+        print("║" + " " * 58 + "║")
+        print("║  \033[1;37m💡 Os proxies continuarão funcionando em segundo plano\033[1;96m ║")
+        print("║  \033[1;37m🔄 Execute novamente para voltar ao painel de controle\033[1;96m ║")
+        print("║" + " " * 58 + "║")
+        print("║  \033[1;31m⚠️  Para encerrar TUDO use a opção [q] no painel\033[1;96m" + " " * 7 + "║")
+        print("╚" + "═" * 58 + "╝\033[0m")
+        
+        try:
+            print("\n\033[1;90m(Pressione Ctrl+C para encerrar todos os proxies)\033[0m")
+            while not shutdown_requested:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            signal_handler(signal.SIGINT, None)
     else:
-        print("\n\033[1;32mSaindo do painel. Nenhum proxy ativo.\033[0m")
+        print("\n\033[1;32m👋 Saindo do painel. Nenhum proxy ativo.\033[0m")
 
 def main_service():
-    print("Iniciando proxy em modo de serviço...")
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    print("🚀 Iniciando proxy em modo de serviço...")
     load_state_and_start_proxies()
     if not active_servers:
-        print("Nenhuma porta configurada. A sair.")
+        print("❌ Nenhuma porta configurada. A sair.")
         return
-    print(f"Proxy ativo em: {', '.join(str(p) for p in sorted(active_servers.keys()))}")
-    while True: time.sleep(3600)
+    print(f"✅ Proxy ativo em: {', '.join(str(p) for p in sorted(active_servers.keys()))}")
+    
+    try:
+        while not shutdown_requested:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        signal_handler(signal.SIGINT, None)
 
 if __name__ == '__main__':
+    # Bloco principal de execução
     if '--install-service' in sys.argv:
         install_service()
     elif '--uninstall-service' in sys.argv:
@@ -474,12 +551,45 @@ if __name__ == '__main__':
             if '--service' in sys.argv:
                 main_service()
             else:
+                # Lógica para o painel interativo e instalação automática
+                service_path = f"/etc/systemd/system/{SERVICE_NAME}"
+                script_is_in_install_dir = os.path.abspath(__file__) == os.path.join(INSTALL_DIR, SCRIPT_NAME)
+
+                if not os.path.exists(service_path) and not script_is_in_install_dir:
+                    clear_screen()
+                    print("\033[1;93m" + "═" * 60)
+                    print("  Bem-vindo ao MULTIFLOW PROXY!".center(60))
+                    print("\033[1;93m" + "═" * 60 + "\033[0m")
+                    print("\n\033[1;37mParece ser a primeira vez que executa este script.")
+                    print("Para que os proxies funcionem de forma permanente (mesmo após reiniciar o servidor),")
+                    print("é recomendado instalá-lo como um serviço de sistema.\n")
+                    print("\033[1;32mBenefícios da Instalação:\033[0m")
+                    print("  - O proxy inicia automaticamente com o servidor.")
+                    print("  - Continua a funcionar mesmo se fechar a sua sessão SSH.")
+                    print("  - Gestão simplificada através deste painel.\n")
+                    
+                    choice = input("\033[1;96mDeseja instalar o serviço agora? (S/n): \033[0m").lower().strip()
+                    
+                    if choice == '' or choice == 's':
+                        if os.geteuid() != 0:
+                            print("\n\033[1;31m❌ Erro: A instalação requer privilégios de root.\033[0m")
+                            print("\033[1;37mPor favor, execute o script novamente com 'sudo':\033[0m")
+                            print(f"  \033[1;33msudo python3 {os.path.basename(__file__)}\033[0m")
+                            sys.exit(1)
+                        
+                        install_service()
+                        print("\n\033[1;32mInstalação concluída. O painel será agora encerrado.\033[0m")
+                        print("\033[1;37mPara gerir os proxies, pode executar o script novamente sem sudo.\033[0m")
+                        sys.exit(0)
+                    else:
+                        print("\n\033[1;31mA executar em modo temporário. Os proxies serão encerrados ao fechar a sessão.\033[0m")
+                        input("\033[1;90mPressione Enter para continuar...\033[0m")
+                
                 main_panel()
-        except KeyboardInterrupt:
-            print("\n\033[1;31mSinal de interrupção recebido.\033[0m")
-        finally:
-            print("\n\033[1;31mFechando todas as conexões ativas...\033[0m")
-            for port in list(active_servers.keys()):
-                active_servers.pop(port).close()
-            print("\033[1;32mTodos os proxies foram encerrados.\033[0m")
+
+        except SystemExit:
+            pass # Permite a saída limpa de cleanup_and_exit()
+        except Exception as e:
+            print(f"\n\033[1;31m❌ Erro inesperado: {e}\033[0m")
+            cleanup_and_exit()
 
