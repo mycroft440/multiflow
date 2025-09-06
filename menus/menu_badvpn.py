@@ -6,6 +6,7 @@ import sys
 import subprocess
 import re
 import time
+import shutil
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -26,10 +27,13 @@ class BadVPNManager:
         self.base_dir = Path(__file__).parent.parent
         self.install_script = self.base_dir / 'conexoes' / 'badvpn.sh'
         self.service_file = Path("/etc/systemd/system/badvpn-udpgw.service")
-    
+        self.optimizations_file = Path("/etc/sysctl.d/99-badvpn-optimizations.conf")
+        self.binary_path = Path("/usr/local/bin/badvpn-udpgw")
+        self.build_dir = self.base_dir / 'badvpn'
+
     def is_installed(self):
         return self.service_file.exists()
-    
+
     def get_status(self):
         """Retorna status formatado do BadVPN"""
         if not self.is_installed():
@@ -67,6 +71,63 @@ class BadVPNManager:
         else:
             return f"{MC.YELLOW_GRADIENT}{Icons.INACTIVE} BBR Inativo ({bbr}){MC.RESET}"
 
+    def uninstall(self):
+        """Desinstala o BadVPN completamente do sistema."""
+        try:
+            print("--- [Iniciando a remoção do Badvpn-udpgw] ---")
+
+            # Parar e desabilitar o serviço
+            print("--> Parando e desabilitando o serviço systemd...")
+            subprocess.run(['systemctl', 'stop', 'badvpn-udpgw.service'], capture_output=True, text=True)
+            subprocess.run(['systemctl', 'disable', 'badvpn-udpgw.service'], capture_output=True, text=True)
+
+            # Remover o arquivo de serviço
+            if self.service_file.exists():
+                print("--> Removendo o arquivo de serviço...")
+                self.service_file.unlink()
+                subprocess.run(['systemctl', 'daemon-reload'], check=True)
+                subprocess.run(['systemctl', 'reset-failed'], check=True)
+            else:
+                print("--> Arquivo de serviço não encontrado.")
+
+            # Remover o binário
+            if self.binary_path.exists():
+                print("--> Removendo o binário...")
+                self.binary_path.unlink()
+            else:
+                print("--> Binário não encontrado.")
+
+            # Remover o diretório de compilação
+            if self.build_dir.exists() and self.build_dir.is_dir():
+                print(f"--> Removendo o diretório de compilação '{self.build_dir}'...")
+                shutil.rmtree(self.build_dir, ignore_errors=True)
+            else:
+                print(f"--> Diretório de compilação '{self.build_dir}' não encontrado.")
+
+            # Remover o arquivo de otimização do kernel
+            if self.optimizations_file.exists():
+                print("--> Removendo otimizações de kernel...")
+                self.optimizations_file.unlink()
+                subprocess.run(['sysctl', '--system'], check=True)
+            else:
+                print("--> Arquivo de otimizações de kernel não encontrado.")
+
+            # Remover o usuário do sistema
+            try:
+                subprocess.run(['id', 'badvpn'], check=True, capture_output=True)
+                print("--> Removendo o usuário 'badvpn'...")
+                subprocess.run(['userdel', 'badvpn'], check=True)
+            except subprocess.CalledProcessError:
+                print("--> Usuário 'badvpn' não encontrado.")
+
+            print("\n--- [ Remoção Concluída! ] ---")
+            return True, "BadVPN removido com sucesso!"
+
+        except Exception as e:
+            print(f"\n--- [ Erro na Remoção ] ---")
+            print(str(e))
+            return False, f"Erro na remoção: {e}"
+
 # ==================== FRAMES ====================
 def build_main_frame(manager, status_msg=""):
     """Frame principal do BadVPN"""
@@ -95,6 +156,7 @@ def build_main_frame(manager, status_msg=""):
         s.append(menu_option("2", "Iniciar Serviço", Icons.ACTIVE, MC.GREEN_GRADIENT))
         s.append(menu_option("3", "Parar Serviço", Icons.INACTIVE, MC.RED_GRADIENT))
         s.append(menu_option("4", "Reiniciar Serviço", Icons.UPDATE, MC.YELLOW_GRADIENT))
+        s.append(menu_option("6", "Remover BadVPN", Icons.TRASH, MC.RED_GRADIENT, badge="PERIGO"))
     else:
         s.append(menu_option("1", "Instalar BadVPN", Icons.DOWNLOAD, MC.GREEN_GRADIENT, badge="NECESSÁRIO"))
     
@@ -149,6 +211,11 @@ def build_operation_frame(operation, port=None):
         icon = Icons.EDIT
         color = MC.CYAN_GRADIENT
         msg = f"Mudando para porta {port}..."
+    elif operation == "uninstall":
+        title = "Removendo BadVPN"
+        icon = Icons.TRASH
+        color = MC.RED_GRADIENT
+        msg = "Desinstalando o serviço e removendo arquivos..."
     else:
         title = "Processando"
         icon = Icons.SETTINGS
@@ -192,7 +259,6 @@ def main_menu():
                     TerminalManager.leave_alt_screen()
                     
                     try:
-                        # Removido 'sudo' pois já é root
                         subprocess.run(['bash', str(manager.install_script), port], check=True)
                         status = f"Porta configurada: {port}"
                     except Exception as e:
@@ -252,6 +318,24 @@ def main_menu():
                 
                 status = "Configuração BBR atualizada"
             
+            elif choice == "6" and manager.is_installed():
+                TerminalManager.before_input()
+                confirm = input(f"\n{MC.RED_GRADIENT}{Icons.WARNING} Tem certeza que deseja remover o BadVPN? (s/N): {MC.RESET}").strip().lower()
+                TerminalManager.after_input()
+
+                if confirm == 's':
+                    TerminalManager.render(build_operation_frame("uninstall"))
+                    TerminalManager.leave_alt_screen()
+                    
+                    success, message = manager.uninstall()
+                    status = message
+                    
+                    input("\nPressione Enter para voltar ao menu...")
+                    
+                    TerminalManager.enter_alt_screen()
+                else:
+                    status = "Remoção cancelada."
+
             elif choice == "0":
                 break
             else:
