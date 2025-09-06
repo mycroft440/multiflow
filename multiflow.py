@@ -684,10 +684,12 @@ if True:
             subprocess.run([sys.executable, usuarios_online_path], check=True)  
             # Executa
         except Exception as e:
-            print(f"Erro ao executar Monitor Online: {e}")  # Erro
-        finally:
-            TerminalManager.enter_alt_screen()  # Volta
-
+            # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+            # sem encerrar o loop principal.
+            status = f"Erro: {e}"
+            TerminalManager.render(build_main_frame(status))
+            time.sleep(1.0)
+            continue
     # Menu de conexões
     def conexoes_menu():
         status = ""  # Mensagem de status
@@ -714,10 +716,12 @@ if True:
                     subprocess.run([sys.executable, slowdns_path], check=True)  
                     # Executa SlowDNS
                 except Exception as e:
-                    print(f"Erro ao executar SlowDNS: {e}")
-                finally:
-                    TerminalManager.enter_alt_screen()
-                status = "SlowDNS: operação concluída."
+                    # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                    # sem encerrar o loop principal.
+                    status = f"Erro: {e}"
+                    TerminalManager.render(build_main_frame(status))
+                    time.sleep(1.0)
+                    continue
             elif choice == "3":
                 TerminalManager.leave_alt_screen()
                 try:
@@ -727,10 +731,12 @@ if True:
                     subprocess.run([sys.executable, hysteria_path], check=True)
                     # Executa Hysteria
                 except Exception as e:
-                    print(f"Erro ao executar Hysteria: {e}")
-                finally:
-                    TerminalManager.enter_alt_screen()
-                status = "Hysteria: operação concluída."
+                    # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                    # sem encerrar o loop principal.
+                    status = f"Erro: {e}"
+                    TerminalManager.render(build_main_frame(status))
+                    time.sleep(1.0)
+                    continue
             elif choice == "4":
                 TerminalManager.leave_alt_screen()
                 try:
@@ -739,10 +745,12 @@ if True:
                     subprocess.run([sys.executable, v2ray_path], check=True)  # 
                     # Executa V2ray
                 except Exception as e:
-                    print(f"Erro ao executar V2ray: {e}")
-                finally:
-                    TerminalManager.enter_alt_screen()
-                status = "V2ray: operação concluída."
+                    # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                    # sem encerrar o loop principal.
+                    status = f"Erro: {e}"
+                    TerminalManager.render(build_main_frame(status))
+                    time.sleep(1.0)
+                    continue
             elif choice == "5":
                 TerminalManager.leave_alt_screen()
                 try:
@@ -751,10 +759,12 @@ if True:
                     subprocess.run([sys.executable, xray_path], check=True)  
                     # Executa Xray
                 except Exception as e:
-                    print(f"Erro ao executar Xray: {e}")
-                finally:
-                    TerminalManager.enter_alt_screen()
-                status = "Xray: operação concluída."
+                    # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                    # sem encerrar o loop principal.
+                    status = f"Erro: {e}"
+                    TerminalManager.render(build_main_frame(status))
+                    time.sleep(1.0)
+                    continue
             elif choice == "7":
                 # Multi-Flow Proxy: chama o script Python com flag --menu para 
                 # mostrar o menu interativo.
@@ -767,10 +777,12 @@ if True:
                     subprocess.run([sys.executable, multiflowproxy_path, 
                     '--menu'], check=True)  # Executa Multi-Flow Proxy com menu
                 except Exception as e:
-                    print(f"Erro ao executar Multi-Flow Proxy: {e}")
-                finally:
-                    TerminalManager.enter_alt_screen()
-                status = "Multi-Flow Proxy: operação concluída."
+                    # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                    # sem encerrar o loop principal.
+                    status = f"Erro: {e}"
+                    TerminalManager.render(build_main_frame(status))
+                    time.sleep(1.0)
+                    continue
             elif choice == "6":
                 # Rusty Proxy: tenta localizar o binário em vários locais, 
                 # incluindo o diretório de conexões e o PATH do sistema.
@@ -801,10 +813,12 @@ if True:
                     # Executa o binário selecionado.
                     subprocess.run([bin_path], check=True)
                 except Exception as e:
-                    print(f"Erro ao executar Rusty Proxy: {e}")
-                finally:
-                    # Sempre retorna à tela alternativa independentemente do 
-                    # sucesso da execução
+                    # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                    # sem encerrar o loop principal.
+                    status = f"Erro: {e}"
+                    TerminalManager.render(build_main_frame(status))
+                    time.sleep(1.0)
+                    continue
                     TerminalManager.enter_alt_screen()
                 status = "Rusty Proxy: operação concluída."
             elif choice == "0":
@@ -824,10 +838,12 @@ if True:
             subprocess.run([sys.executable, otimizador_path], check=True)  # 
             # Executa
         except Exception as e:
-            print(f"\033[91mErro ao executar o otimizador: {e}\033[0m")  # Erro
-        finally:
-            input("Pressione Enter para continuar...")  # Pausa
-            TerminalManager.enter_alt_screen()  # Volta
+            # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+            # sem encerrar o loop principal.
+            status = f"Erro: {e}"
+            TerminalManager.render(build_main_frame(status))
+            time.sleep(1.0)
+            continue
 
     # Menu de ferramentas
     def ferramentas_menu():
@@ -896,10 +912,12 @@ if True:
                 # Erro
                 time.sleep(2.0)
             except Exception as e:
-                TerminalManager.enter_alt_screen()
-                TerminalManager.render(build_updater_frame() + 
-                f"\n{MC.RED_GRADIENT}{Icons.CROSS} Erro inesperado: {e}{MC.RESET}\n")  # 
-                # Erro
+                # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                # sem encerrar o loop principal.
+                status = f"Erro: {e}"
+                TerminalManager.render(build_main_frame(status))
+                time.sleep(1.0)
+                continue
                 time.sleep(2.0)
         else:
             TerminalManager.render(build_updater_frame() + 
@@ -968,10 +986,12 @@ if True:
                 time.sleep(0.5)
                 break
             except Exception as e:
-                TerminalManager.render(build_main_frame(f"Erro: {e}"))  # Erro 
-                # geral
+                # Em caso de erro inesperado, exibe a mensagem e continua no menu,
+                # sem encerrar o loop principal.
+                status = f"Erro: {e}"
+                TerminalManager.render(build_main_frame(status))
                 time.sleep(1.0)
-                break
+                continue
 
         TerminalManager.leave_alt_screen()  # Sai da tela alt
 
@@ -980,3 +1000,4 @@ if True:
 
     if __name__ == "__main__":
         main_menu()  # Chama menu principal
+
