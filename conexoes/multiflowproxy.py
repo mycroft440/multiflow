@@ -46,11 +46,48 @@ import sys
 # Buffer length for socket reads
 BUFLEN = 8192
 
-# Default inactivity timeout (number of select cycles) before closing
-TIMEOUT = 60
+# Default inactivity timeout (number of select cycles) before closing.
+# The timeout controls how long an idle connection is kept open.  HTTP Injector
+# may take a few seconds to negotiate an SSH handshake, so you can increase
+# this value via the `MF_TIMEOUT` environment variable if connections are
+# being closed too early.  The value is expressed in select cycles of 3
+# seconds each (a value of 60 equates to roughly 3 minutes of idle time).
+import os
+try:
+    TIMEOUT = int(os.environ.get("MF_TIMEOUT", "60"))
+except ValueError:
+    TIMEOUT = 60
 
-# Default upstream host:port if none is provided in the request
-DEFAULT_HOST = "127.0.0.1:22"
+# Determine a sensible default upstream host.  When no host header or CONNECT
+# line is provided, the proxy will connect to this address.  By default we
+# attempt to determine the server's primary IP address and use port 22.
+def _detect_local_ip() -> str:
+    """Attempt to determine the primary outbound IP address.
+
+    This function creates a UDP socket to a well‑known public address
+    (8.8.8.8) in order to determine the local interface used for outbound
+    traffic.  It does not send any data over the network.  If detection
+    fails, '127.0.0.1' is returned.
+    """
+    try:
+        test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # The IP and port here are arbitrary; no packets are actually sent
+        test_sock.connect(("8.8.8.8", 80))
+        local_ip = test_sock.getsockname()[0]
+        test_sock.close()
+        return local_ip
+    except Exception:
+        return "127.0.0.1"
+
+# Default upstream host:port if none is provided in the request.  Uses the
+# detected local IP so that the proxy can forward to the machine's SSH server
+# rather than the loopback address.  You can override this via the
+# MF_DEFAULT_HOST environment variable (format ip:port).
+_env_default = os.environ.get("MF_DEFAULT_HOST")
+if _env_default:
+    DEFAULT_HOST = _env_default
+else:
+    DEFAULT_HOST = f"{_detect_local_ip()}:22"
 
 # Optional password for clients.  Leave empty to disable authentication.
 PASS = b""
@@ -136,20 +173,35 @@ class ConnectionHandler(threading.Thread):
             return b""
 
     def process_request(self) -> None:
-        """Parse the HTTP headers from the client and establish a tunnel."""
+        """Parse the request line and headers, then establish a tunnel."""
         data = self.client_buffer
-        # Determine destination host:port by scanning known header names
-        host_port = b""
-        for name in self.host_headers:
-            host_port = self.find_header(data, name)
-            if host_port:
-                break
-        if not host_port:
-            # Fallback to default host
-            host_port_str = DEFAULT_HOST
-        else:
-            host_port_str = parse_header_value(host_port)
-        # If the host does not specify a port, default to 80
+        host_port_str: str = ""
+        # Examine the request line for a CONNECT directive.  The CONNECT method
+        # typically appears as 'CONNECT host:port HTTP/1.1'.  If present,
+        # prefer this over header based detection because some clients omit
+        # Host headers in CONNECT requests.
+        try:
+            line_end = data.find(b"\r\n")
+            if line_end != -1:
+                request_line = data[:line_end]
+                parts = request_line.split()
+                if parts and parts[0].lower() == b"connect" and len(parts) >= 2:
+                    host_port_str = parse_header_value(parts[1])
+        except Exception:
+            # Fall back to header scanning if parsing fails
+            host_port_str = ""
+        # If no CONNECT directive provided a host, search for host headers
+        if not host_port_str:
+            host_port = b""
+            for name in self.host_headers:
+                host_port = self.find_header(data, name)
+                if host_port:
+                    break
+            if not host_port:
+                host_port_str = DEFAULT_HOST
+            else:
+                host_port_str = parse_header_value(host_port)
+        # Ensure a port is specified; default to 80 for HTTP if absent
         if ":" not in host_port_str:
             host_port_str += ":80"
         # Check for split payload headers and discard the next chunk if needed
@@ -160,7 +212,9 @@ class ConnectionHandler(threading.Thread):
                 except Exception:
                     pass
                 break
-        # Evaluate keep‑alive directives
+        # Evaluate keep‑alive directives (case‑insensitive).  Consider both
+        # Connection and Proxy‑Connection headers.  If either header
+        # equals 'keep-alive', enable persistent connections.
         conn_hdr = parse_header_value(self.find_header(data, b"connection")).lower()
         proxy_conn_hdr = parse_header_value(self.find_header(data, b"proxy-connection")).lower()
         if conn_hdr == "keep-alive" or proxy_conn_hdr == "keep-alive":
@@ -168,7 +222,6 @@ class ConnectionHandler(threading.Thread):
         # Parse Keep-Alive header for timeout value
         ka_hdr = parse_header_value(self.find_header(data, b"keep-alive"))
         if ka_hdr:
-            # Split by commas and look for timeout=n
             for part in ka_hdr.split(','):
                 part = part.strip()
                 if part.lower().startswith('timeout='):
@@ -180,7 +233,6 @@ class ConnectionHandler(threading.Thread):
         if PASS:
             passwd = self.find_header(data, b"x-pass")
             if not passwd or passwd.strip() != PASS:
-                # Invalid password: return 403 response and close
                 try:
                     self.client.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 finally:
