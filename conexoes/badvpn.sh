@@ -22,6 +22,12 @@ LISTEN_PORT=${1:-7300}
 SERVICE_FILE="/etc/systemd/system/badvpn-udpgw.service"
 BINARY="/usr/local/bin/badvpn-udpgw"
 
+# Determina se systemd está disponível. Caso contrário, será utilizado um método de fallback
+USE_SYSTEMD=false
+if command -v systemctl &>/dev/null; then
+    USE_SYSTEMD=true
+fi
+
 echo "--- [Revisão do instalador do BadVPN] ---"
 
 # Função utilitária para logar e abortar em caso de erro
@@ -33,15 +39,38 @@ abort() {
 # Se o serviço já existe, apenas atualize a porta e reinicie
 if [ -f "$SERVICE_FILE" ]; then
     echo "-- Serviço existente detectado. Atualizando porta para ${LISTEN_PORT}..."
-    # Atualiza a linha --listen-addr mantendo o endereço 0.0.0.0
-    if grep -q "--listen-addr" "$SERVICE_FILE"; then
-        sed -i -E "s/--listen-addr [^:]+:[0-9]+/--listen-addr 0.0.0.0:${LISTEN_PORT}/" "$SERVICE_FILE"
+    if [ "$USE_SYSTEMD" = true ]; then
+        # Atualiza a linha --listen-addr mantendo o endereço 0.0.0.0
+        if grep -q "--listen-addr" "$SERVICE_FILE"; then
+            sed -i -E "s/--listen-addr [^:]+:[0-9]+/--listen-addr 0.0.0.0:${LISTEN_PORT}/" "$SERVICE_FILE"
+        else
+            abort "Não foi possível encontrar parâmetro --listen-addr em $SERVICE_FILE"
+        fi
+        systemctl daemon-reload || abort "Falha ao recarregar o systemd"
+        systemctl restart badvpn-udpgw.service || abort "Falha ao reiniciar o serviço BadVPN"
+        echo "Porta atualizada para ${LISTEN_PORT}."
     else
-        abort "Não foi possível encontrar parâmetro --listen-addr em $SERVICE_FILE"
+        # Fallback: mata processo em execução (se houver) e reinicia com nova porta
+        PIDFILE="/var/run/badvpn-udpgw.pid"
+        if [ -f "$PIDFILE" ]; then
+            pid=$(cat "$PIDFILE")
+            if ps -p "$pid" &>/dev/null; then
+                echo "-- Encerrando processo BadVPN atual (PID $pid) para atualizar porta..."
+                kill "$pid" || true
+                # Aguarda processo terminar
+                sleep 2
+            fi
+        fi
+        echo "-- Iniciando badvpn-udpgw em segundo plano na porta ${LISTEN_PORT} (modo sem systemd)..."
+        # Ajusta limite de descritores antes de iniciar
+        ulimit -n "$FILE_DESCRIPTOR_LIMIT" 2>/dev/null || true
+        nohup "$BINARY" --listen-addr 0.0.0.0:${LISTEN_PORT} \
+          --max-clients ${MAX_CLIENTS} \
+          --max-connections-for-client ${MAX_CONN_PER_CLIENT} \
+          > /var/log/badvpn-udpgw.log 2>&1 &
+        echo $! > "$PIDFILE"
+        echo "Porta atualizada para ${LISTEN_PORT}."
     fi
-    systemctl daemon-reload || abort "Falha ao recarregar o systemd"
-    systemctl restart badvpn-udpgw.service || abort "Falha ao reiniciar o serviço BadVPN"
-    echo "Porta atualizada para ${LISTEN_PORT}."
     exit 0
 fi
 
@@ -60,7 +89,8 @@ fi
 # Atualiza pacotes e instala dependências necessárias
 if command -v apt-get &>/dev/null; then
     apt-get update -y || abort "apt-get update falhou"
-    apt-get install -y cmake build-essential libnss3-dev libssl-dev git || abort "Falha na instalação de dependências"
+    # Instala dependências, incluindo pacotes adicionais necessários para compilação
+    apt-get install -y cmake build-essential libnss3-dev libssl-dev git pkg-config zlib1g-dev || abort "Falha na instalação de dependências"
 else
     abort "Sistema baseado em APT necessário para instalar dependências."
 fi
@@ -73,7 +103,8 @@ if [ ! -x "$BINARY" ]; then
     git clone --depth 1 https://github.com/ambrop72/badvpn.git "$tmpdir/badvpn" || abort "Falha ao clonar repositório badvpn"
     mkdir -p "$tmpdir/badvpn/build"
     cd "$tmpdir/badvpn/build"
-    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 > /dev/null
+    # Compila UDPGW e TUN2SOCKS para atender requisitos adicionais
+    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 -DBUILD_TUN2SOCKS=1 > /dev/null
     make -j"$(nproc)" > /dev/null
     make install > /dev/null || abort "Falha ao instalar badvpn-udpgw"
     cd - >/dev/null
@@ -86,8 +117,9 @@ if ! id badvpn &>/dev/null; then
     useradd -r -s /bin/false badvpn || abort "Falha ao criar usuário 'badvpn'"
 fi
 
-# Cria arquivo de serviço systemd
-cat > "$SERVICE_FILE" <<SERVICE_EOF
+if [ "$USE_SYSTEMD" = true ]; then
+    # Cria arquivo de serviço systemd
+    cat > "$SERVICE_FILE" <<SERVICE_EOF
 [Unit]
 Description=BadVPN UDP Gateway
 After=network.target
@@ -106,8 +138,8 @@ LimitNOFILE=${FILE_DESCRIPTOR_LIMIT}
 [Install]
 WantedBy=multi-user.target
 SERVICE_EOF
-
-echo "-- Serviço systemd criado em ${SERVICE_FILE}."
+    echo "-- Serviço systemd criado em ${SERVICE_FILE}."
+fi
 
 # Aplica otimizações de rede usando sysctl.d
 cat > /etc/sysctl.d/99-badvpn-optimizations.conf <<SYSCTL_EOF
@@ -125,11 +157,26 @@ SYSCTL_EOF
 # Recarrega parâmetros de kernel
 sysctl --system > /dev/null || echo "Aviso: não foi possível recarregar todos os parâmetros sysctl"
 
-# Habilita e inicia o serviço
-systemctl daemon-reload || abort "Falha ao recarregar systemd"
-systemctl enable badvpn-udpgw.service || abort "Falha ao habilitar o serviço badvpn-udpgw"
-systemctl restart badvpn-udpgw.service || abort "Falha ao iniciar o serviço badvpn-udpgw"
+if [ "$USE_SYSTEMD" = true ]; then
+    # Habilita e inicia o serviço via systemd
+    systemctl daemon-reload || abort "Falha ao recarregar systemd"
+    systemctl enable badvpn-udpgw.service || abort "Falha ao habilitar o serviço badvpn-udpgw"
+    systemctl restart badvpn-udpgw.service || abort "Falha ao iniciar o serviço badvpn-udpgw"
+    echo "--- [Instalação Concluída] ---"
+    echo "O serviço badvpn-udpgw foi instalado e iniciado na porta ${LISTEN_PORT}."
+    echo "Use 'systemctl status badvpn-udpgw' para verificar o status."
+else
+    # Inicia o serviço em segundo plano sem systemd
+    echo "-- systemd não está disponível. Iniciando badvpn-udpgw em segundo plano..."
+    # Ajusta limite de descritores
+    ulimit -n "$FILE_DESCRIPTOR_LIMIT" 2>/dev/null || true
+    nohup "$BINARY" --listen-addr 0.0.0.0:${LISTEN_PORT} \
+      --max-clients ${MAX_CLIENTS} \
+      --max-connections-for-client ${MAX_CONN_PER_CLIENT} \
+      > /var/log/badvpn-udpgw.log 2>&1 &
+    echo $! > /var/run/badvpn-udpgw.pid
+    echo "--- [Instalação Concluída] ---"
+    echo "badvpn-udpgw foi iniciado na porta ${LISTEN_PORT} em modo de background."
+    echo "PID salvo em /var/run/badvpn-udpgw.pid. Logs em /var/log/badvpn-udpgw.log."
+fi
 
-echo "--- [Instalação Concluída] ---"
-echo "O serviço badvpn-udpgw foi instalado e iniciado na porta ${LISTEN_PORT}."
-echo "Use 'systemctl status badvpn-udpgw' para verificar o status."
