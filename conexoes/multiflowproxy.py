@@ -112,6 +112,20 @@ class ConnectionHandler(threading.Thread):
         b"x-forwarded-host",
         b"x-online-host",
         b"host",
+        b"x-forwarded-for",
+        b"x-originating-ip",
+        b"x-remote-ip",
+        b"x-remote-addr",
+        b"x-client-ip",
+        b"true-client-ip",
+        b"x-real-ip",
+        b"cf-connecting-ip",
+        b"x-cluster-client-ip",
+        b"forwarded",
+        b"x-original-url",
+        b"x-forwarded-url",
+        b"x-forwarded-path",
+        b"x-forwarded-scheme",
     ]
 
     #: Header names that indicate split payloads.  If present, the proxy will
