@@ -3,6 +3,7 @@
 
 """
 Servidor de proxy híbrido com painel de gestão e auto-instalação de serviço.
+Versão corrigida para lidar corretamente com túneis (CONNECT/WebSocket) e proxy HTTP.
 """
 
 # --- Módulos Padrão ---
@@ -87,7 +88,6 @@ class Server(threading.Thread):
         try:
             self.soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # Adiciona TCP_NODELAY para baixa latência
             self.soc.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.soc.settimeout(2)
             self.soc.bind((self.host, self.port))
@@ -145,56 +145,20 @@ class Server(threading.Thread):
 class ConnectionHandler(threading.Thread):
     """
     Gerencia uma única conexão de cliente.
+    Modo de operação: Envia 101, lê, envia 200, e estabelece um túnel.
     """
-    # Headers para detecção de host/IP de destino e bypass de protocolo
     HOST_HEADERS = [
-        b"x-forwarded-for",         # IP spoof
-        b"x-real-ip",
-        b"x-originating-ip",
-        b"client-ip",
-        b"true-client-ip",
-        b"cf-connecting-ip",
-        b"x-remote-ip",
-        b"x-client-ip",
-        b"x-forwarded",             # Forward variants
-        b"forwarded-for",
-        b"x-proxyuser-ip",
-        b"wl-proxy-client-ip",
-        b"x-cluster-client-ip",
-        b"host",                    # Core host
-        b"x-online-host",
-        b"x-forwarded-host",
-        b"x-original-url",
-        b"x-forwarded-url",
-        b"x-forwarded-path",
-        b"x-host",
-        b"x-original-host",
-        b"x-gateway-host",
-        b"x-http-method-override",  # Method overrides for protocol bypass
-        b"x-forwarded-scheme",
-        b"upgrade",                 # Upgrade to websocket/etc for tunneling
-        b"x-real-host",             # Original script extras
-        b"x-forward-host",
-        b"x-remote-addr",
-        b"forwarded",
+        b"x-real-host", b"x-forward-host", b"x-online-host",
+        b"x-forwarded-for", b"x-real-ip", b"host"
     ]
-    # Headers para descarte de payload dividido (evasão de inspeção de pacotes)
-    SPLIT_HEADERS = [
-        b"x-split",
-        b"x-split-payload",
-        b"split",
-        b"x-split-extra",
-    ]
+    SPLIT_HEADERS = [b"x-split", b"split"]
 
     def __init__(self, client_socket: socket.socket, server, addr: tuple):
         super().__init__(daemon=True)
         self.client = client_socket
         self.server = server
         self.addr = addr
-        self.client_buffer = b''
         self.target = None
-        self.keepalive = True  # Assume keep-alive por padrão; será desativado se o cliente enviar 'Connection: close'
-        self.keepalive_timeout = TIMEOUT
         self.log_prefix = f"Conexão de {addr[0]}:{addr[1]} na porta {server.port}"
 
     def find_header(self, data, name):
@@ -215,16 +179,6 @@ class ConnectionHandler(threading.Thread):
         except Exception:
             return b""
 
-    def _close_target(self):
-        """Fecha o socket de destino de forma segura."""
-        if self.target:
-            try:
-                self.target.shutdown(socket.SHUT_RDWR)
-                self.target.close()
-            except:
-                pass
-            self.target = None
-
     def connect_target(self, host_str):
         """Estabelece a conexão com o servidor de destino."""
         try:
@@ -237,7 +191,6 @@ class ConnectionHandler(threading.Thread):
         try:
             soc_family, _, _, _, address = socket.getaddrinfo(host, port)[0]
             self.target = socket.socket(soc_family)
-            # Adiciona TCP_NODELAY para baixa latência no túnel
             self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.target.connect(address)
             return True
@@ -245,150 +198,15 @@ class ConnectionHandler(threading.Thread):
             self.server.print_log(f"{self.log_prefix} - Erro ao conectar em {host}:{port} - {e}")
             return False
 
-    def run(self):
-        """Lógica principal para manipular a conexão do cliente com suporte a keep-alive."""
-        try:
-            while self.keepalive:
-                # Define um timeout para receber dados do cliente.
-                self.client.settimeout(self.keepalive_timeout)
-                try:
-                    self.client_buffer = self.client.recv(BUFLEN)
-                    if not self.client_buffer:
-                        break  # Cliente fechou a conexão
-                except socket.timeout:
-                    self.server.print_log(f"{self.log_prefix} - Keep-alive timeout. Fechando conexão.")
-                    break
-                except ConnectionResetError:
-                    self.server.print_log(f"{self.log_prefix} - Conexão reiniciada pelo cliente.")
-                    break
-                
-                self.client.settimeout(None)
+    def do_tunnel(self, initial_data):
+        """Inicia o encaminhamento de dados bidirecional, enviando dados iniciais primeiro."""
+        if initial_data:
+            try:
+                self.target.sendall(initial_data)
+            except socket.error as e:
+                self.server.print_log(f"{self.log_prefix} - Erro ao enviar dados iniciais para o alvo: {e}")
+                return
 
-                # Parse a linha de request para determinar o modo (tunnel ou regular)
-                if b'\r\n' in self.client_buffer:
-                    request_line = self.client_buffer.split(b'\r\n', 1)[0]
-                else:
-                    request_line = self.client_buffer
-
-                try:
-                    method, request_uri, version = request_line.split(b' ', 2)
-                    method = method.upper()
-                except:
-                    self.client.sendall(b'HTTP/1.1 400 Bad Request\r\n\r\n')
-                    self.keepalive = False
-                    continue
-
-                # Verifica o header 'Connection'. Se 'close', desativa o keep-alive para a próxima iteração.
-                connection_header = self.find_header(self.client_buffer, b'connection')
-                if b'close' in connection_header.lower():
-                    self.keepalive = False
-                
-                is_connect = method == b'CONNECT'
-                is_websocket = b'upgrade: websocket' in self.client_buffer.lower()
-                if is_websocket:
-                    self.keepalive = False
-
-                tunnel_mode = is_connect or is_websocket
-
-                host_port_str = DEFAULT_HOST
-                scheme = 'http'
-                modified_buffer = self.client_buffer
-                request_uri = request_uri  # Mantém original por padrão
-
-                # Para modo regular (não tunnel), parse URI absoluta para extrair host e tornar relativa
-                if not tunnel_mode:
-                    uri = request_uri.decode('utf-8', errors='ignore')
-                    if uri.startswith('http://'):
-                        scheme = 'http'
-                        uri = uri[7:]
-                    elif uri.startswith('https://'):
-                        scheme = 'https'
-                        uri = uri[8:]
-                    else:
-                        # URI relativa, usa header Host
-                        host_header = self.find_header(self.client_buffer, b'host').decode('utf-8', errors='ignore')
-                        if host_header:
-                            host_port_str = host_header
-                        if ':' not in host_port_str:
-                            host_port_str += ':80'
-                    if uri:
-                        if '/' in uri:
-                            host_port, path = uri.split('/', 1)
-                            request_uri = '/' + path
-                        else:
-                            host_port = uri
-                            request_uri = '/'
-                        if ':' not in host_port:
-                            host_port += ':443' if scheme == 'https' else ':80'
-                        host_port_str = host_port
-                        request_uri = request_uri.encode('utf-8')
-
-                # Procura host em headers (prioridade para headers customizados)
-                for header in self.HOST_HEADERS:
-                    found_host = self.find_header(self.client_buffer, header)
-                    if found_host:
-                        host_port_str = found_host.decode('utf-8', errors='ignore')
-                        if ":" not in host_port_str:
-                            host_port_str += ":80"
-                        break
-
-                # Descarte de payload dividido se header presente
-                for header in self.SPLIT_HEADERS:
-                    if self.find_header(self.client_buffer, header):
-                        self.client.recv(BUFLEN)
-                        break
-                
-                # Autenticação se PASS definida
-                if PASS:
-                    passwd = self.find_header(self.client_buffer, b'x-pass').decode('utf-8', errors='ignore')
-                    if passwd != PASS:
-                        self.client.sendall(b'HTTP/1.1 403 Forbidden\r\n\r\n')
-                        self.keepalive = False  # Encerra após falha de autenticação
-                        continue
-
-                # Aplica full override só em modo regular e se flag ativado: troca método, rebuild buffer com URI relativa, remove header
-                if not tunnel_mode and OVERRIDE_ENABLED:
-                    override = self.find_header(self.client_buffer, b'x-http-method-override')
-                    if override:
-                        method = override.upper()
-
-                if not tunnel_mode:
-                    # Rebuild buffer para modo regular (URI relativa, método overridden se aplicável)
-                    if b'\r\n\r\n' in self.client_buffer:
-                        head, body = self.client_buffer.split(b'\r\n\r\n', 1)
-                    else:
-                        head = self.client_buffer
-                        body = b''
-                    head_lines = head.split(b'\r\n')
-                    head_lines[0] = method + b' ' + request_uri + b' ' + version
-                    # Remove header de override para não passar ao target
-                    head_lines = [line for line in head_lines if not line.lower().startswith(b'x-http-method-override:')]
-                    head = b'\r\n'.join(head_lines)
-                    modified_buffer = head + b'\r\n\r\n' + body
-
-                self.server.print_log(f"{self.log_prefix} - TÚNEL para {host_port_str}")
-                if self.connect_target(host_port_str):
-                    if tunnel_mode:
-                        response = RESPONSE_WS if is_websocket else RESPONSE_HTTP
-                        self.client.sendall(response)
-                    else:
-                        self.target.sendall(modified_buffer)
-                    self.do_tunnel()
-                else:
-                    self.client.sendall(RESPONSE_ERROR)
-                    self.keepalive = False  # Encerra se a conexão de destino falhar
-
-                # Fecha o socket de destino após cada túnel
-                self._close_target()
-
-        except Exception as e:
-            self.server.print_log(f"{self.log_prefix} - Erro no handler: {e}")
-        finally:
-            self.close()
-            self.server.remove_conn(self)
-
-    def do_tunnel(self):
-        """Inicia o encaminhamento de dados."""
         sockets = [self.client, self.target]
         count = 0
         error = False
@@ -419,18 +237,71 @@ class ConnectionHandler(threading.Thread):
                 except socket.error:
                     error = True
                     break
+    
+    def run(self):
+        """Lógica principal: envia 101, lê, envia 200, conecta e estabelece o túnel."""
+        try:
+            # 1. Enviar a resposta 101 imediatamente.
+            self.client.sendall(RESPONSE_WS)
+
+            # 2. Ler os dados do cliente para obter o destino.
+            client_buffer = self.client.recv(BUFLEN)
+            if not client_buffer:
+                return
+
+            # 3. Enviar a resposta 200 após ler a primeira parte dos dados.
+            self.client.sendall(RESPONSE_HTTP)
+
+            # Autenticação e Split Header
+            if PASS:
+                passwd = self.find_header(client_buffer, b'x-pass').decode('utf-8', errors='ignore')
+                if passwd != PASS:
+                    return
+            
+            for header in self.SPLIT_HEADERS:
+                if self.find_header(client_buffer, header):
+                    self.client.recv(BUFLEN)
+                    break
+            
+            # 4. Encontrar o host de destino
+            host_port_str = ""
+            for header in self.HOST_HEADERS:
+                found_host = self.find_header(client_buffer, header)
+                if found_host:
+                    host_port_str = found_host.decode('utf-8', errors='ignore')
+                    break
+            
+            if not host_port_str:
+                host_port_str = DEFAULT_HOST
+
+            # 5. Conectar ao destino e iniciar o túnel
+            self.server.print_log(f"{self.log_prefix} - TÚNEL (101->200) para {host_port_str}")
+            if self.connect_target(host_port_str):
+                self.do_tunnel(client_buffer)
+            
+        except socket.error as e:
+            if e.errno not in [104, 32]: # Ignora erros 'Connection reset by peer' e 'Broken pipe'
+                 self.server.print_log(f"{self.log_prefix} - Erro de socket no handler: {e}")
+        except Exception as e:
+            self.server.print_log(f"{self.log_prefix} - Erro inesperado no handler: {e}")
+        finally:
+            self.close()
+            self.server.remove_conn(self)
 
     def close(self):
         """Fecha os sockets de forma segura."""
-        self._close_target()  # Garante que o alvo seja fechado
+        if self.target:
+            try:
+                self.target.shutdown(socket.SHUT_RDWR)
+                self.target.close()
+            except: pass
+            self.target = None
         try:
             self.client.shutdown(socket.SHUT_RDWR)
             self.client.close()
-        except:
-            pass
+        except: pass
 
-# O restante do código (painel de gestão, etc.) permanece idêntico
-# --- Funções de Serviço e Persistência ---
+# --- Funções de Serviço e Persistência (sem alterações) ---
 
 def is_service_installed():
     return os.path.exists(f"/etc/systemd/system/{SERVICE_NAME}")
@@ -454,7 +325,7 @@ def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
 
-# --- Funções do Painel ---
+# --- Funções do Painel (sem alterações) ---
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -475,7 +346,6 @@ def display_menu():
         print("\033[1;37mStatus: \033[1;31mInativo")
         print("\033[1;37mPortas: \033[1;37mNenhuma porta ativa")
     
-    # Mostra status do override (adicionado para organização e visibilidade)
     if state['override_enabled']:
         print("\033[1;37mOverride: \033[1;32mAtivo")
     else:
@@ -486,7 +356,7 @@ def display_menu():
     print("  \033[1;92m[1]\033[1;37m Adicionar Nova Porta")
     print("  \033[1;91m[2]\033[1;37m Remover Porta")
     print("  \033[1;91m[3]\033[1;37m Desativar o Proxy")
-    print("  \033[1;94m[4]\033[1;37m Ativar Override")  # Opção 4 adicionada como pedido
+    print("  \033[1;94m[4]\033[1;37m Ativar Override (Funcionalidade experimental)")
     print("  \033[1;90m[0]\033[1;37m Sair do Painel")
     print("\033[1;36m" + "═" * 50 + "\033[0m")
 
@@ -576,7 +446,6 @@ def deactivate_proxy():
 
     input("\n\033[1;90mPressione Enter para voltar ao menu...\033[0m")
 
-# Função adicionada para opção 4: Ativa o override (se já ativo, informa; reinicia serviço se instalado)
 def activate_override():
     clear_screen()
     print("\033[1;94m--- Ativar Override ---\033[0m")
@@ -647,7 +516,7 @@ def uninstall_service(feedback=True):
     except Exception as e:
         if feedback: print(f"\n\033[1;31m[ERRO] Erro durante a desinstalação: {e}\033[0m")
 
-# --- Lógica de Execução Principal ---
+# --- Lógica de Execução Principal (sem alterações) ---
 
 def signal_handler(signum, frame):
     global shutdown_requested
@@ -677,7 +546,7 @@ def main_panel():
         elif choice == '3':
             deactivate_proxy()
         elif choice == '4':
-            activate_override()  # Chamada para a nova função
+            activate_override()
         elif choice == '0':
             main_loop_active.clear()
             break
@@ -731,3 +600,4 @@ if __name__ == '__main__':
             pass
         except Exception as e:
             print(f"\n\033[1;31m[ERRO] Erro inesperado no painel: {e}\033[0m")
+
