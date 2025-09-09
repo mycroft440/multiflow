@@ -145,7 +145,7 @@ class Server(threading.Thread):
 class ConnectionHandler(threading.Thread):
     """
     Gerencia uma única conexão de cliente.
-    Modo de operação: Envia 101, lê, envia 200, e estabelece um túnel.
+    Lógica de handshake duplo: envia 101, lê, envia 200, conecta e estabelece o túnel.
     """
     HOST_HEADERS = [
         b"x-real-host", b"x-forward-host", b"x-online-host",
@@ -239,7 +239,7 @@ class ConnectionHandler(threading.Thread):
                     break
     
     def run(self):
-        """Lógica principal: envia 101, lê, envia 200, conecta e estabelece o túnel."""
+        """Lógica principal: imita o RustyProxy (envia 101, lê, envia 200, conecta, túnel)."""
         try:
             # 1. Enviar a resposta 101 imediatamente.
             self.client.sendall(RESPONSE_WS)
@@ -256,7 +256,7 @@ class ConnectionHandler(threading.Thread):
             if PASS:
                 passwd = self.find_header(client_buffer, b'x-pass').decode('utf-8', errors='ignore')
                 if passwd != PASS:
-                    return
+                    return # Apenas fecha a ligação
             
             for header in self.SPLIT_HEADERS:
                 if self.find_header(client_buffer, header):
@@ -278,6 +278,8 @@ class ConnectionHandler(threading.Thread):
             self.server.print_log(f"{self.log_prefix} - TÚNEL (101->200) para {host_port_str}")
             if self.connect_target(host_port_str):
                 self.do_tunnel(client_buffer)
+            else:
+                self.server.print_log(f"{self.log_prefix} - Falha ao ligar ao destino {host_port_str}.")
             
         except socket.error as e:
             if e.errno not in [104, 32]: # Ignora erros 'Connection reset by peer' e 'Broken pipe'
