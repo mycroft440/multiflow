@@ -54,6 +54,7 @@ RESPONSE_ERROR = b'HTTP/1.1 502 Bad Gateway\r\n\r\n'
 active_servers = {}
 shutdown_requested = False
 main_loop_active = threading.Event()
+OVERRIDE_ENABLED = False  # Flag global para ativar o full method override (ativado via opção 4)
 
 class Server(threading.Thread):
     """
@@ -263,16 +264,66 @@ class ConnectionHandler(threading.Thread):
                 
                 self.client.settimeout(None)
 
+                # Parse a linha de request para determinar o modo (tunnel ou regular)
+                if b'\r\n' in self.client_buffer:
+                    request_line = self.client_buffer.split(b'\r\n', 1)[0]
+                else:
+                    request_line = self.client_buffer
+
+                try:
+                    method, request_uri, version = request_line.split(b' ', 2)
+                    method = method.upper()
+                except:
+                    self.client.sendall(b'HTTP/1.1 400 Bad Request\r\n\r\n')
+                    self.keepalive = False
+                    continue
+
                 # Verifica o header 'Connection'. Se 'close', desativa o keep-alive para a próxima iteração.
                 connection_header = self.find_header(self.client_buffer, b'connection')
                 if b'close' in connection_header.lower():
                     self.keepalive = False
                 
+                is_connect = method == b'CONNECT'
                 is_websocket = b'upgrade: websocket' in self.client_buffer.lower()
                 if is_websocket:
                     self.keepalive = False
 
+                tunnel_mode = is_connect or is_websocket
+
                 host_port_str = DEFAULT_HOST
+                scheme = 'http'
+                modified_buffer = self.client_buffer
+                request_uri = request_uri  # Mantém original por padrão
+
+                # Para modo regular (não tunnel), parse URI absoluta para extrair host e tornar relativa
+                if not tunnel_mode:
+                    uri = request_uri.decode('utf-8', errors='ignore')
+                    if uri.startswith('http://'):
+                        scheme = 'http'
+                        uri = uri[7:]
+                    elif uri.startswith('https://'):
+                        scheme = 'https'
+                        uri = uri[8:]
+                    else:
+                        # URI relativa, usa header Host
+                        host_header = self.find_header(self.client_buffer, b'host').decode('utf-8', errors='ignore')
+                        if host_header:
+                            host_port_str = host_header
+                        if ':' not in host_port_str:
+                            host_port_str += ':80'
+                    if uri:
+                        if '/' in uri:
+                            host_port, path = uri.split('/', 1)
+                            request_uri = '/' + path
+                        else:
+                            host_port = uri
+                            request_uri = '/'
+                        if ':' not in host_port:
+                            host_port += ':443' if scheme == 'https' else ':80'
+                        host_port_str = host_port
+                        request_uri = request_uri.encode('utf-8')
+
+                # Procura host em headers (prioridade para headers customizados)
                 for header in self.HOST_HEADERS:
                     found_host = self.find_header(self.client_buffer, header)
                     if found_host:
@@ -281,11 +332,13 @@ class ConnectionHandler(threading.Thread):
                             host_port_str += ":80"
                         break
 
+                # Descarte de payload dividido se header presente
                 for header in self.SPLIT_HEADERS:
                     if self.find_header(self.client_buffer, header):
                         self.client.recv(BUFLEN)
                         break
                 
+                # Autenticação se PASS definida
                 if PASS:
                     passwd = self.find_header(self.client_buffer, b'x-pass').decode('utf-8', errors='ignore')
                     if passwd != PASS:
@@ -293,10 +346,33 @@ class ConnectionHandler(threading.Thread):
                         self.keepalive = False  # Encerra após falha de autenticação
                         continue
 
+                # Aplica full override só em modo regular e se flag ativado: troca método, rebuild buffer com URI relativa, remove header
+                if not tunnel_mode and OVERRIDE_ENABLED:
+                    override = self.find_header(self.client_buffer, b'x-http-method-override')
+                    if override:
+                        method = override.upper()
+
+                if not tunnel_mode:
+                    # Rebuild buffer para modo regular (URI relativa, método overridden se aplicável)
+                    if b'\r\n\r\n' in self.client_buffer:
+                        head, body = self.client_buffer.split(b'\r\n\r\n', 1)
+                    else:
+                        head = self.client_buffer
+                        body = b''
+                    head_lines = head.split(b'\r\n')
+                    head_lines[0] = method + b' ' + request_uri + b' ' + version
+                    # Remove header de override para não passar ao target
+                    head_lines = [line for line in head_lines if not line.lower().startswith(b'x-http-method-override:')]
+                    head = b'\r\n'.join(head_lines)
+                    modified_buffer = head + b'\r\n\r\n' + body
+
                 self.server.print_log(f"{self.log_prefix} - TÚNEL para {host_port_str}")
                 if self.connect_target(host_port_str):
-                    response = RESPONSE_WS if is_websocket else RESPONSE_HTTP
-                    self.client.sendall(response)
+                    if tunnel_mode:
+                        response = RESPONSE_WS if is_websocket else RESPONSE_HTTP
+                        self.client.sendall(response)
+                    else:
+                        self.target.sendall(modified_buffer)
                     self.do_tunnel()
                 else:
                     self.client.sendall(RESPONSE_ERROR)
@@ -359,19 +435,24 @@ class ConnectionHandler(threading.Thread):
 def is_service_installed():
     return os.path.exists(f"/etc/systemd/system/{SERVICE_NAME}")
 
-def get_ports_from_state():
+def get_state():
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r') as f:
-                return json.load(f)
+                state = json.load(f)
+                if 'ports' not in state:
+                    state['ports'] = []
+                if 'override_enabled' not in state:
+                    state['override_enabled'] = False
+                return state
     except (json.JSONDecodeError, IOError):
-        return []
-    return []
+        pass
+    return {'ports': [], 'override_enabled': False}
 
-def save_ports_to_state(ports):
+def save_state(state):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, 'w') as f:
-        json.dump(ports, f)
+        json.dump(state, f)
 
 # --- Funções do Painel ---
 
@@ -380,7 +461,8 @@ def clear_screen():
 
 def display_menu():
     clear_screen()
-    display_ports = sorted(get_ports_from_state())
+    state = get_state()
+    display_ports = sorted(state['ports'])
 
     print("\033[1;36m" + "═" * 50)
     print(" PAINEL DE GESTÃO - PROXY HÍBRIDO")
@@ -393,11 +475,18 @@ def display_menu():
         print("\033[1;37mStatus: \033[1;31mInativo")
         print("\033[1;37mPortas: \033[1;37mNenhuma porta ativa")
     
+    # Mostra status do override (adicionado para organização e visibilidade)
+    if state['override_enabled']:
+        print("\033[1;37mOverride: \033[1;32mAtivo")
+    else:
+        print("\033[1;37mOverride: \033[1;31mInativo")
+    
     print("\033[1;36m" + "─" * 50)
     print("\033[1;97mOPÇÕES:")
     print("  \033[1;92m[1]\033[1;37m Adicionar Nova Porta")
     print("  \033[1;91m[2]\033[1;37m Remover Porta")
     print("  \033[1;91m[3]\033[1;37m Desativar o Proxy")
+    print("  \033[1;94m[4]\033[1;37m Ativar Override")  # Opção 4 adicionada como pedido
     print("  \033[1;90m[0]\033[1;37m Sair do Painel")
     print("\033[1;36m" + "═" * 50 + "\033[0m")
 
@@ -417,7 +506,8 @@ def manage_port(action):
             return
 
     clear_screen()
-    ports = get_ports_from_state()
+    state = get_state()
+    ports = state['ports']
     
     if action == 'add':
         print("\033[1;92m--- Adicionar Nova Porta ---\033[0m")
@@ -443,7 +533,8 @@ def manage_port(action):
                 print(f"\n\033[1;31m[ERRO] A porta {port} já está ativa.\033[0m")
             else:
                 ports.append(port)
-                save_ports_to_state(ports)
+                state['ports'] = ports
+                save_state(state)
                 print(f"\n\033[1;93m[INFO] Reiniciando serviço para adicionar a porta {port}...\033[0m")
                 os.system(f"systemctl restart {SERVICE_NAME}")
                 print(f"\n\033[1;32m[OK] Porta {port} adicionada com sucesso!\033[0m")
@@ -452,7 +543,8 @@ def manage_port(action):
                 print(f"\n\033[1;31m[ERRO] A porta {port} não está na lista de portas ativas.\033[0m")
             else:
                 ports.remove(port)
-                save_ports_to_state(ports)
+                state['ports'] = ports
+                save_state(state)
                 
                 if not ports:
                     print(f"\n\033[1;33m[INFO] Última porta removida. Desinstalando o serviço...\033[0m")
@@ -483,6 +575,22 @@ def deactivate_proxy():
         print("\n\033[1;37mOperação cancelada.\033[0m")
 
     input("\n\033[1;90mPressione Enter para voltar ao menu...\033[0m")
+
+# Função adicionada para opção 4: Ativa o override (se já ativo, informa; reinicia serviço se instalado)
+def activate_override():
+    clear_screen()
+    print("\033[1;94m--- Ativar Override ---\033[0m")
+    state = get_state()
+    if state['override_enabled']:
+        print("\n\033[1;33m[INFO] Override já está ativado.\033[0m")
+    else:
+        state['override_enabled'] = True
+        save_state(state)
+        print("\n\033[1;32m[OK] Override ativado com sucesso!\033[0m")
+        if is_service_installed():
+            print("\n\033[1;93m[INFO] Reiniciando serviço para aplicar mudanças...\033[0m")
+            os.system(f"systemctl restart {SERVICE_NAME}")
+    input("\n\033[1;90mPressione Enter para voltar...\033[0m")
 
 def install_service():
     if os.geteuid() != 0:
@@ -568,6 +676,8 @@ def main_panel():
             manage_port('remove')
         elif choice == '3':
             deactivate_proxy()
+        elif choice == '4':
+            activate_override()  # Chamada para a nova função
         elif choice == '0':
             main_loop_active.clear()
             break
@@ -582,7 +692,10 @@ def main_panel():
 
 def main_service():
     print("[INFO] Iniciando proxy em modo de serviço...")
-    ports = get_ports_from_state()
+    state = get_state()
+    ports = state['ports']
+    global OVERRIDE_ENABLED
+    OVERRIDE_ENABLED = state['override_enabled']
     if not ports:
         print("[AVISO] Nenhuma porta configurada no ficheiro de estado. Serviço em espera.")
     
