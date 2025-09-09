@@ -145,16 +145,55 @@ class ConnectionHandler(threading.Thread):
     """
     Gerencia uma única conexão de cliente.
     """
-    HOST_HEADERS = [b"x-real-host", b"x-host", b"x-forward-host", b"x-forwarded-host", b"x-online-host", b"host"]
-    SPLIT_HEADERS = [b"x-split", b"x-split-payload", b"split"]
+    # Headers para detecção de host/IP de destino e bypass de protocolo
+    HOST_HEADERS = [
+        b"x-forwarded-for",         # IP spoof
+        b"x-real-ip",
+        b"x-originating-ip",
+        b"client-ip",
+        b"true-client-ip",
+        b"cf-connecting-ip",
+        b"x-remote-ip",
+        b"x-client-ip",
+        b"x-forwarded",             # Forward variants
+        b"forwarded-for",
+        b"x-proxyuser-ip",
+        b"wl-proxy-client-ip",
+        b"x-cluster-client-ip",
+        b"host",                    # Core host
+        b"x-online-host",
+        b"x-forwarded-host",
+        b"x-original-url",
+        b"x-forwarded-url",
+        b"x-forwarded-path",
+        b"x-host",
+        b"x-original-host",
+        b"x-gateway-host",
+        b"x-http-method-override",  # Method overrides for protocol bypass
+        b"x-forwarded-scheme",
+        b"upgrade",                 # Upgrade to websocket/etc for tunneling
+        b"x-real-host",             # Original script extras
+        b"x-forward-host",
+        b"x-remote-addr",
+        b"forwarded",
+    ]
+    # Headers para descarte de payload dividido (evasão de inspeção de pacotes)
+    SPLIT_HEADERS = [
+        b"x-split",
+        b"x-split-payload",
+        b"split",
+        b"x-split-extra",
+    ]
 
-    def __init__(self, client_socket, server, addr):
+    def __init__(self, client_socket: socket.socket, server, addr: tuple):
         super().__init__(daemon=True)
         self.client = client_socket
         self.server = server
         self.addr = addr
         self.client_buffer = b''
         self.target = None
+        self.keepalive = True  # Assume keep-alive por padrão; será desativado se o cliente enviar 'Connection: close'
+        self.keepalive_timeout = TIMEOUT
         self.log_prefix = f"Conexão de {addr[0]}:{addr[1]} na porta {server.port}"
 
     def find_header(self, data, name):
@@ -174,6 +213,16 @@ class ConnectionHandler(threading.Thread):
             return data[start:end].strip()
         except Exception:
             return b""
+
+    def _close_target(self):
+        """Fecha o socket de destino de forma segura."""
+        if self.target:
+            try:
+                self.target.shutdown(socket.SHUT_RDWR)
+                self.target.close()
+            except:
+                pass
+            self.target = None
 
     def connect_target(self, host_str):
         """Estabelece a conexão com o servidor de destino."""
@@ -196,41 +245,65 @@ class ConnectionHandler(threading.Thread):
             return False
 
     def run(self):
-        """Lógica principal para manipular a conexão do cliente."""
+        """Lógica principal para manipular a conexão do cliente com suporte a keep-alive."""
         try:
-            self.client_buffer = self.client.recv(BUFLEN)
-            if not self.client_buffer:
-                return
-
-            is_websocket = b'upgrade: websocket' in self.client_buffer.lower()
-
-            host_port_str = DEFAULT_HOST
-            for header in self.HOST_HEADERS:
-                found_host = self.find_header(self.client_buffer, header)
-                if found_host:
-                    host_port_str = found_host.decode('utf-8', errors='ignore')
-                    if ":" not in host_port_str:
-                         host_port_str += ":80"
+            while self.keepalive:
+                # Define um timeout para receber dados do cliente.
+                self.client.settimeout(self.keepalive_timeout)
+                try:
+                    self.client_buffer = self.client.recv(BUFLEN)
+                    if not self.client_buffer:
+                        break  # Cliente fechou a conexão
+                except socket.timeout:
+                    self.server.print_log(f"{self.log_prefix} - Keep-alive timeout. Fechando conexão.")
                     break
-
-            for header in self.SPLIT_HEADERS:
-                if self.find_header(self.client_buffer, header):
-                    self.client.recv(BUFLEN)
+                except ConnectionResetError:
+                    self.server.print_log(f"{self.log_prefix} - Conexão reiniciada pelo cliente.")
                     break
-            
-            if PASS:
-                passwd = self.find_header(self.client_buffer, b'x-pass').decode('utf-8', errors='ignore')
-                if passwd != PASS:
-                    self.client.sendall(b'HTTP/1.1 403 Forbidden\r\n\r\n')
-                    return
+                
+                self.client.settimeout(None)
 
-            self.server.print_log(f"{self.log_prefix} - TÚNEL para {host_port_str}")
-            if self.connect_target(host_port_str):
-                response = RESPONSE_WS if is_websocket else RESPONSE_HTTP
-                self.client.sendall(response)
-                self.do_tunnel()
-            else:
-                self.client.sendall(RESPONSE_ERROR)
+                # Verifica o header 'Connection'. Se 'close', desativa o keep-alive para a próxima iteração.
+                connection_header = self.find_header(self.client_buffer, b'connection')
+                if b'close' in connection_header.lower():
+                    self.keepalive = False
+                
+                is_websocket = b'upgrade: websocket' in self.client_buffer.lower()
+                if is_websocket:
+                    self.keepalive = False
+
+                host_port_str = DEFAULT_HOST
+                for header in self.HOST_HEADERS:
+                    found_host = self.find_header(self.client_buffer, header)
+                    if found_host:
+                        host_port_str = found_host.decode('utf-8', errors='ignore')
+                        if ":" not in host_port_str:
+                            host_port_str += ":80"
+                        break
+
+                for header in self.SPLIT_HEADERS:
+                    if self.find_header(self.client_buffer, header):
+                        self.client.recv(BUFLEN)
+                        break
+                
+                if PASS:
+                    passwd = self.find_header(self.client_buffer, b'x-pass').decode('utf-8', errors='ignore')
+                    if passwd != PASS:
+                        self.client.sendall(b'HTTP/1.1 403 Forbidden\r\n\r\n')
+                        self.keepalive = False  # Encerra após falha de autenticação
+                        continue
+
+                self.server.print_log(f"{self.log_prefix} - TÚNEL para {host_port_str}")
+                if self.connect_target(host_port_str):
+                    response = RESPONSE_WS if is_websocket else RESPONSE_HTTP
+                    self.client.sendall(response)
+                    self.do_tunnel()
+                else:
+                    self.client.sendall(RESPONSE_ERROR)
+                    self.keepalive = False  # Encerra se a conexão de destino falhar
+
+                # Fecha o socket de destino após cada túnel
+                self._close_target()
 
         except Exception as e:
             self.server.print_log(f"{self.log_prefix} - Erro no handler: {e}")
@@ -273,17 +346,12 @@ class ConnectionHandler(threading.Thread):
 
     def close(self):
         """Fecha os sockets de forma segura."""
+        self._close_target()  # Garante que o alvo seja fechado
         try:
             self.client.shutdown(socket.SHUT_RDWR)
             self.client.close()
         except:
             pass
-        if self.target:
-            try:
-                self.target.shutdown(socket.SHUT_RDWR)
-                self.target.close()
-            except:
-                pass
 
 # O restante do código (painel de gestão, etc.) permanece idêntico
 # --- Funções de Serviço e Persistência ---
@@ -550,3 +618,4 @@ if __name__ == '__main__':
             pass
         except Exception as e:
             print(f"\n\033[1;31m[ERRO] Erro inesperado no painel: {e}\033[0m")
+
