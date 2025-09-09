@@ -618,4 +618,3 @@ if __name__ == '__main__':
             pass
         except Exception as e:
             print(f"\n\033[1;31m[ERRO] Erro inesperado no painel: {e}\033[0m")
-
