@@ -47,7 +47,7 @@ SERVICE_NAME = "proxy.service"
 STATE_FILE = os.path.join(INSTALL_DIR, "proxy_state.json")
 
 # --- Respostas Padrão do Protocolo HTTP (em bytes) ---
-RESPONSE_WS = b'HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n'
+RESPONSE_WS = b'HTTP/1.1 101 Switching Protocols\r\n' + b'Connection: Upgrade\r\n' + b'Upgrade: websocket\r\n\r\n'
 RESPONSE_HTTP = b'HTTP/1.1 200 Connection established\r\n\r\n'
 RESPONSE_ERROR = b'HTTP/1.1 502 Bad Gateway\r\n\r\n'
 
@@ -198,7 +198,7 @@ class ConnectionHandler(threading.Thread):
             self.server.print_log(f"{self.log_prefix} - Erro ao conectar em {host}:{port} - {e}")
             return False
 
-    def do_tunnel(self, initial_data):
+    def do_tunnel(self, initial_data=b''):
         """Inicia o encaminhamento de dados bidirecional, enviando dados iniciais primeiro."""
         if initial_data:
             try:
@@ -237,14 +237,22 @@ class ConnectionHandler(threading.Thread):
                 except socket.error:
                     error = True
                     break
-    
+
+    # Nova função: Peek com timeout, similar ao Rust (usa MSG_PEEK para não consumir dados)
+    def peek_data(self, timeout_sec=1):
+        readable, _, _ = select.select([self.client], [], [], timeout_sec)
+        if readable:
+            data = self.client.recv(BUFLEN, socket.MSG_PEEK)
+            return data
+        return b''
+
     def run(self):
         """Lógica principal: imita o RustyProxy (envia 101, lê, envia 200, conecta, túnel)."""
         try:
             # 1. Enviar a resposta 101 imediatamente.
             self.client.sendall(RESPONSE_WS)
 
-            # 2. Ler os dados do cliente para obter o destino.
+            # 2. Ler os dados do cliente para obter o destino (mas descartar depois).
             client_buffer = self.client.recv(BUFLEN)
             if not client_buffer:
                 return
@@ -263,7 +271,7 @@ class ConnectionHandler(threading.Thread):
                     self.client.recv(BUFLEN)
                     break
             
-            # 4. Encontrar o host de destino
+            # 4. Encontrar o host de destino via headers
             host_port_str = ""
             for header in self.HOST_HEADERS:
                 found_host = self.find_header(client_buffer, header)
@@ -271,13 +279,18 @@ class ConnectionHandler(threading.Thread):
                     host_port_str = found_host.decode('utf-8', errors='ignore')
                     break
             
+            # Se não encontrou header, use detecção como no Rust (peek no payload pós-200)
             if not host_port_str:
-                host_port_str = DEFAULT_HOST
+                peek_buffer = self.peek_data()
+                if b'SSH' in peek_buffer or not peek_buffer:
+                    host_port_str = '0.0.0.0:22'  # SSH ou vazio/timeout
+                else:
+                    host_port_str = '0.0.0.0:1194'  # Outro protocolo (ex: OpenVPN)
 
-            # 5. Conectar ao destino e iniciar o túnel
+            # 5. Conectar ao destino e iniciar o túnel (sem enviar client_buffer!)
             self.server.print_log(f"{self.log_prefix} - TÚNEL (101->200) para {host_port_str}")
             if self.connect_target(host_port_str):
-                self.do_tunnel(client_buffer)
+                self.do_tunnel(b'')  # Correção: Não envie initial_data, descarte o handshake
             else:
                 self.server.print_log(f"{self.log_prefix} - Falha ao ligar ao destino {host_port_str}.")
             
@@ -602,4 +615,3 @@ if __name__ == '__main__':
             pass
         except Exception as e:
             print(f"\n\033[1;31m[ERRO] Erro inesperado no painel: {e}\033[0m")
-
