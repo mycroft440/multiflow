@@ -90,7 +90,7 @@ fi
 if command -v apt-get &>/dev/null; then
     apt-get update -y || abort "apt-get update falhou"
     # Instala dependências, incluindo pacotes adicionais necessários para compilação
-    apt-get install -y cmake build-essential libnss3-dev libssl-dev git pkg-config zlib1g-dev || abort "Falha na instalação de dependências"
+    apt-get install -y cmake build-essential libnss3-dev libnspr4-dev libssl-dev git pkg-config zlib1g-dev || abort "Falha na instalação de dependências"
 else
     abort "Sistema baseado em APT necessário para instalar dependências."
 fi
@@ -112,9 +112,12 @@ else
     echo "-- Binário badvpn-udpgw já existe em ${BINARY}, pulando compilação."
 fi
 
-# Cria usuário e grupo do badvpn se necessário
+# Cria grupo e usuário do badvpn se necessário
+if ! getent group badvpn &>/dev/null; then
+    groupadd -r badvpn || abort "Falha ao criar grupo 'badvpn'"
+fi
 if ! id badvpn &>/dev/null; then
-    useradd -r -s /bin/false badvpn || abort "Falha ao criar usuário 'badvpn'"
+    useradd -r -g badvpn -s /bin/false badvpn || abort "Falha ao criar usuário 'badvpn'"
 fi
 
 if [ "$USE_SYSTEMD" = true ]; then
@@ -150,9 +153,11 @@ net.core.rmem_max=8388608
 net.core.wmem_max=8388608
 net.core.netdev_max_backlog=250000
 net.core.somaxconn=4096
-net.ipv4.tcp_timestamps=0
 net.ipv4.tcp_sack=1
 SYSCTL_EOF
+
+# Carrega módulo BBR se necessário
+modprobe tcp_bbr || echo "Aviso: Módulo tcp_bbr não pôde ser carregado. Verifique se está disponível no kernel."
 
 # Recarrega parâmetros de kernel
 sysctl --system > /dev/null || echo "Aviso: não foi possível recarregar todos os parâmetros sysctl"
@@ -179,4 +184,3 @@ else
     echo "badvpn-udpgw foi iniciado na porta ${LISTEN_PORT} em modo de background."
     echo "PID salvo em /var/run/badvpn-udpgw.pid. Logs em /var/log/badvpn-udpgw.log."
 fi
-
