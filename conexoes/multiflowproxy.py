@@ -208,17 +208,11 @@ class ConnectionHandler(threading.Thread):
                 return
 
         sockets = [self.client, self.target]
-        count = 0
         error = False
         while not error and not shutdown_requested:
-            count += 1
-            readable, _, exceptional = select.select(sockets, [], sockets, 3)
+            readable, _, exceptional = select.select(sockets, [], sockets)  # Timeout None para bloquear até evento
             
             if exceptional:
-                error = True
-                break
-            
-            if not readable and count > (TIMEOUT / 3):
                 error = True
                 break
             
@@ -233,7 +227,6 @@ class ConnectionHandler(threading.Thread):
                         self.target.sendall(data)
                     else:
                         self.client.sendall(data)
-                    count = 0
                 except socket.error:
                     error = True
                     break
